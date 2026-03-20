@@ -617,9 +617,10 @@ app.post('/api/voice-clone', uploadVoiceClone.single('audio'), async (req, res) 
     // Build multipart body manually to avoid Node.js Blob/FormData issues on Windows
     const boundary = `----FormBoundary${Date.now().toString(16)}`;
     const CRLF = '\r\n';
+    // Smallest AI expects snake_case field names: display_name + file
     const bodyParts = [
       `--${boundary}${CRLF}`,
-      `Content-Disposition: form-data; name="displayName"${CRLF}${CRLF}`,
+      `Content-Disposition: form-data; name="display_name"${CRLF}${CRLF}`,
       `${name}${CRLF}`,
       `--${boundary}${CRLF}`,
       `Content-Disposition: form-data; name="file"; filename="${filename}"${CRLF}`,
@@ -661,11 +662,12 @@ app.post('/api/voice-clone', uploadVoiceClone.single('audio'), async (req, res) 
 
     if (!response.ok) {
       const message = await response.text();
-      console.error('[voice-clone] error body:', message);
-      let userMessage = 'Voice cloning failed.';
+      console.error('[voice-clone] error body (status', response.status, '):', message);
+      let userMessage = `Voice cloning failed (upstream ${response.status}).`;
       try {
         const parsed = JSON.parse(message);
         if (parsed.error_code === 'voice_clone_timeout') userMessage = 'Voice cloning timed out on the server. Please try again.';
+        else if (parsed.message) userMessage = parsed.message;
         else if (parsed.error) userMessage = parsed.error;
       } catch {}
       return res.status(500).json({ error: userMessage, details: message });

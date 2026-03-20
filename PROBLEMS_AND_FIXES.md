@@ -256,6 +256,134 @@ onError: (err) => {
 
 ---
 
+---
+
+## 15. Odyssey Video Stream Fails to Start — `AbortError: media was removed from the document`
+
+**Problem:** `video.play()` was failing with `AbortError: The play() request was interrupted because the media was removed from the document`, causing the Odyssey video stream to silently never appear on screen. Happened every time in development, intermittently in production.
+
+**Root Cause — three compounding issues, investigated iteratively:**
+
+**Issue 1 (found first):** The `onConnected` callback and a `useEffect([showLanding])` safety-net both independently called `video.play()` when the story view appeared. These raced each other — whichever resolved second aborted the first with `AbortError`, and neither retried.
+
+**Issue 2 (found second):** React 18 StrictMode intentionally double-invokes effects (mount → unmount → remount). This created two Odyssey service instances, each with its own `attach()` polling loop. Both loops would find the video element at roughly the same time and both call `video.play()` simultaneously — same race, same abort.
+
+**Issue 3 (root cause, found last):** The `<video>` element was inside a conditional render branch. The component had two separate `return` statements — one for the landing page (no `<video>`) and one for the story view (with `<video>`). Every time `showLanding` toggled, React unmounted and remounted the video element. If `play()` was pending during any such transition, the browser aborted it with the "media was removed from the document" error. This was the fundamental cause — the element's lifetime was tied to UI state.
+
+**Fix — applied in layers:**
+
+**Step 1:** Removed the competing `useEffect([showLanding])` that called `play()`. Made `attach()` the sole owner of play logic.
+
+**Step 2:** Added a staleness guard to `attach()` so stale closures (from StrictMode double-mount or reconnects) self-terminate when a newer stream takes over:
+
+```ts
+const attach = () => {
+  if (odysseyStreamRef.current !== stream) return; // stale — newer stream won
+  const video = videoRef.current;
+  if (!video) { setTimeout(attach, 100); return; }
+  if (video.srcObject !== stream) video.srcObject = stream;
+  video.play().catch((e: unknown) => {
+    const err = e as DOMException;
+    if (err.name === 'AbortError') setTimeout(attach, 150); // retry
+  });
+};
+```
+
+**Step 3 (decisive fix):** Merged the two `return` statements into one. The `<video>` element is now always in the DOM regardless of `showLanding`. It sits at a fixed child index inside `.video-layer` and is hidden via CSS class when not needed:
+
+```tsx
+// Single return — <video> is always mounted, never removed from the document
+return (
+  <div className="app">
+    <div className="video-layer">
+      <div className={`background-fallback${showLanding ? ' landing-bg' : ''}`} ... />
+      {/* stream-placeholder always rendered to keep <video> at a fixed DOM index */}
+      <div className={`stream-placeholder ${showLanding || streamState === 'streaming' ? 'hidden' : ''}`} ... />
+      {/* Always in DOM — play() can never be aborted by DOM removal */}
+      <video
+        ref={videoRef}
+        className={`video-element ${!showLanding && streamState === 'streaming' ? '' : 'is-hidden'}`}
+        autoPlay playsInline muted
+      />
+      <div className="video-overlay" />
+    </div>
+
+    {showLanding ? (
+      <div className="landing">...</div>
+    ) : (
+      <>
+        <div className="ui">...</div>
+        ...
+      </>
+    )}
+  </div>
+);
+```
+
+**Lesson:** Never conditionally render an `HTMLMediaElement` that has an in-flight `play()` call. The browser aborts any pending play when the element is removed from the DOM. The fix is structural — keep the element in the DOM always and control visibility with CSS. Patching the retry logic helps but doesn't address the root cause. Always fix the structure first.
+
+---
+
+## 16. Voice Cloning Returns 500 — Wrong Multipart Field Name
+
+**Problem:** The `/api/voice-clone` endpoint always returned HTTP 500. Voice cloning was completely broken — users could record or upload audio but the clone never completed.
+
+**Root Cause:** The multipart form body sent to Smallest AI's `add_voice` endpoint used `displayName` (camelCase) as the field name for the voice's display name. Smallest AI's API uses snake_case conventions and expects `display_name`. The mismatch caused Smallest AI to return a 4xx error, which our server converted to a 500 and returned to the client.
+
+A second compounding issue was that the client only read `err.error` from the 500 response and discarded `err.details` (the raw Smallest AI response body), so the actual upstream error was invisible in the browser.
+
+**Fix:**
+
+```js
+// server/index.js — changed field name in multipart body
+// Before:
+`Content-Disposition: form-data; name="displayName"${CRLF}${CRLF}`,
+
+// After:
+`Content-Disposition: form-data; name="display_name"${CRLF}${CRLF}`,
+```
+
+Also improved error visibility:
+- Server now includes the upstream HTTP status code in the error message: `Voice cloning failed (upstream 422).`
+- Client now logs `err.details` (raw Smallest AI response) to the browser console so future API errors are immediately visible without needing server logs.
+
+```ts
+// App.tsx — log raw upstream error for future debugging
+const err = await res.json() as { error?: string; details?: string };
+console.error('[voice-clone] server error:', err.error, '| raw Smallest AI response:', err.details);
+```
+
+**Lesson:** When proxying to a third-party REST API, always match their exact field name casing conventions. Log the raw upstream response body on error — without it, diagnosing API rejections requires server log access which is often unavailable in production. Always surface `details` to the browser console at minimum.
+
+---
+
+## 17. Odyssey `startStream` Never Called — Double `endStream()` on Navigation
+
+**Problem:** After adding eager `endStream()` calls to reduce stream startup latency, navigating to a new slide caused `startStream()` to never be called. The stream would silently stay blank after navigation.
+
+**Root Cause:** The optimization fired `endStream()` eagerly in `handleNext`/`handlePrev` at keydown time (before React's state update), then fired it a *second* time inside the `run()` async function via `Promise.all`. The Odyssey SDK received two concurrent `endStream()` calls in quick succession, which left it in a bad state and prevented `startStream()` from succeeding.
+
+A second mistake was also calling `endStream()` eagerly in `handleStartStory` on the very first load — when no stream had ever been started. Calling `endStream()` on a fresh connection with no active stream compounded the confusion.
+
+**Fix:** Introduced `eagerEndStreamRef` to hold the promise from the eager call. The `run()` function checks the ref first and reuses that promise instead of making a second call. Removed the eager `endStream()` from `handleStartStory` entirely since there is no stream to end on first load.
+
+```ts
+// handleNext / handlePrev — fire endStream eagerly, store the promise
+const handleNext = () => {
+  eagerEndStreamRef.current = serviceRef.current?.endStream().catch(() => undefined) ?? null;
+  setIndex((prev) => (prev + 1) % slideCount);
+};
+
+// run() — reuse the eager promise, never call endStream() twice
+const endStreamPromise = eagerEndStreamRef.current ?? service.endStream().catch(() => undefined);
+eagerEndStreamRef.current = null;
+const [file] = await Promise.all([filePromise, endStreamPromise]);
+```
+
+**Lesson:** When eagerly firing async SDK calls before a state update, store the resulting promise in a ref and consume it in the effect — never call the same SDK method twice in parallel. Calling `endStream()` on a connection with no active stream can also corrupt SDK state; guard against it.
+
+---
+
 ## Summary Table
 
 | # | Problem | Root Cause | Fix |
@@ -274,3 +402,6 @@ onError: (err) => {
 | 12 | Frontend can't reach API in dev | Port mismatch | Vite proxy config |
 | 13 | Port 8787 already in use | Process not cleaned up on Windows | `EADDRINUSE` handler + manual kill |
 | 14 | Moderation errors shown as bugs | No special-case handling | Filter `moderation_failed` from error UI |
+| 15 | Odyssey video stream `AbortError` on play() | `<video>` conditionally rendered — DOM removal aborted pending play(); compounded by racing play() calls from StrictMode double-mount | Keep `<video>` always in DOM; single render branch; staleness guard + retry in `attach()` |
+| 16 | Voice cloning always 500 | Wrong multipart field name: `displayName` instead of `display_name` (Smallest AI uses snake_case) | Fix field name; log raw upstream error body to browser console |
+| 17 | `startStream` never called after navigation | Double `endStream()` — eager call in handler + second call in `run()` corrupted SDK state | Store eager promise in `eagerEndStreamRef`; `run()` reuses it instead of calling again |

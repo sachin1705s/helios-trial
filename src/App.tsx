@@ -128,6 +128,7 @@ function App() {
   const imageCacheRef = useRef<Map<string, File>>(new Map());
   const pendingGestureRef = useRef<GestureLabel | null>(null);
   const retryStreamRef = useRef<(() => Promise<void>) | null>(null);
+  const eagerEndStreamRef = useRef<Promise<void> | null>(null);
   const moderationRetryCountRef = useRef(0);
   const pendingTimerRef = useRef<number | null>(null);
   const lastGeminiAtRef = useRef(0);
@@ -144,6 +145,8 @@ function App() {
   const isVoiceAgentSlideRef = useRef(false);
   const lastVoiceActionAtRef = useRef(0);
   const handleInteractRef = useRef<(promptOverride?: string) => void>(() => undefined);
+  const handleNextRef = useRef<() => void>(() => {});
+  const handlePrevRef = useRef<() => void>(() => {});
   const voiceAwaitTimerRef = useRef<number | null>(null);
   const ttsAudioCtxRef = useRef<AudioContext | null>(null);
   const [clonedVoiceId, setClonedVoiceId] = useState<string | null>(null);
@@ -244,12 +247,28 @@ function App() {
           console.log('[odyssey] onConnected — stream:', stream);
           odysseyStreamRef.current = stream;
           const attach = () => {
-            if (videoRef.current) {
-              videoRef.current.srcObject = stream;
-              videoRef.current.play().catch((e) => console.warn('[odyssey] video.play failed:', e));
-            } else {
-              setTimeout(attach, 100);
+            // Stop if a newer stream has taken over (e.g. React StrictMode double-mount
+            // creates two attach() closures; only the latest one should win).
+            if (odysseyStreamRef.current !== stream) {
+              return;
             }
+            const video = videoRef.current;
+            if (!video) {
+              setTimeout(attach, 100);
+              return;
+            }
+            if (video.srcObject !== stream) {
+              video.srcObject = stream;
+            }
+            video.play().catch((e: unknown) => {
+              const err = e as DOMException;
+              console.warn('[odyssey] video.play failed:', err.name, err.message);
+              if (err.name === 'AbortError') {
+                // play() was interrupted (element transitioning, or a concurrent
+                // play() call won the race) — wait and retry.
+                setTimeout(attach, 150);
+              }
+            });
           };
           attach();
         },
@@ -336,17 +355,25 @@ function App() {
     setError(null);
 
     const run = async () => {
-      await service.endStream().catch(() => undefined);
+      // Reuse the eager endStream promise fired from the nav handler, or start one now
+      const endStreamPromise = eagerEndStreamRef.current ?? service.endStream().catch(() => undefined);
+      eagerEndStreamRef.current = null;
+
       if (isUploadSlide) {
+        await endStreamPromise;
         retryStreamRef.current = null;
         setStreamState('idle');
         return;
       }
+      // Parallelize: end the current stream AND load the next image at the same time
       const cached = imageCacheRef.current.get(slide.id);
-      const file = cached ?? (await loadImageFile(slide.image, `${slide.id}.png`));
-      if (!cached) {
-        imageCacheRef.current.set(slide.id, file);
-      }
+      const filePromise = cached
+        ? Promise.resolve(cached)
+        : loadImageFile(slide.image, `${slide.id}.png`).then((f) => {
+            imageCacheRef.current.set(slide.id, f);
+            return f;
+          });
+      const [file] = await Promise.all([filePromise, endStreamPromise]);
       if (requestIdRef.current !== requestId) {
         return;
       }
@@ -368,11 +395,10 @@ function App() {
   }, [connectionStatus, showLanding, index, slide.id, slide.image, slide.prompt, isUploadSlide]);
 
 
+  // Eagerly preload all slide images on mount so navigation is always cache-hit
   useEffect(() => {
     const preload = async (target: Slide) => {
-      if (imageCacheRef.current.has(target.id)) {
-        return;
-      }
+      if (imageCacheRef.current.has(target.id)) return;
       try {
         const file = await loadImageFile(target.image, `${target.id}.png`);
         imageCacheRef.current.set(target.id, file);
@@ -380,12 +406,10 @@ function App() {
         // ignore preload errors
       }
     };
+    // Preload current slide first (highest priority), then the rest in parallel
     preload(slide);
-    const nextSlide = slides[(index + 1) % slideCount];
-    if (nextSlide) {
-      preload(nextSlide);
-    }
-  }, [index, slide, slideCount, slideImageUrl]);
+    slides.forEach((s) => { if (s.id !== slide.id) preload(s); });
+  }, [slides]);
 
   useEffect(() => {
     return () => {
@@ -424,34 +448,29 @@ function App() {
     }
   };
 
-  // If the Odyssey stream connected while the landing page was showing (video element
-  // didn't exist yet), attach the stream now that the story view is rendered.
-  useEffect(() => {
-    if (!showLanding && odysseyStreamRef.current && videoRef.current) {
-      if (!videoRef.current.srcObject) {
-        videoRef.current.srcObject = odysseyStreamRef.current;
-        videoRef.current.play().catch(() => undefined);
-      }
-    }
-  }, [showLanding]);
-
   const pttActiveRef = useRef(false);
   const pttStartRef = useRef<() => void>(() => {});
   const pttStopRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     const onKeyDown = (e: globalThis.KeyboardEvent) => {
-      if (e.code === 'Space' && e.ctrlKey && !pttActiveRef.current) {
+      if (e.code === 'Space' && (e.ctrlKey || e.metaKey) && !pttActiveRef.current) {
         e.preventDefault();
         e.stopPropagation();
         (document.activeElement as HTMLElement | null)?.blur();
         pttActiveRef.current = true;
         pttStartRef.current();
+      } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        handleNextRef.current();
+      } else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        handlePrevRef.current();
       }
     };
 
     const onKeyUp = (e: globalThis.KeyboardEvent) => {
-      if ((e.code === 'Space' || e.code === 'ControlLeft' || e.code === 'ControlRight') && pttActiveRef.current) {
+      if ((e.code === 'Space' || e.code === 'ControlLeft' || e.code === 'ControlRight' || e.code === 'MetaLeft' || e.code === 'MetaRight') && pttActiveRef.current) {
         e.preventDefault();
         pttActiveRef.current = false;
         pttStopRef.current();
@@ -467,12 +486,17 @@ function App() {
   }, []);
 
   const handlePrev = () => {
+    eagerEndStreamRef.current = serviceRef.current?.endStream().catch(() => undefined) ?? null;
     setIndex((prev) => (prev - 1 + slideCount) % slideCount);
   };
 
   const handleNext = () => {
+    eagerEndStreamRef.current = serviceRef.current?.endStream().catch(() => undefined) ?? null;
     setIndex((prev) => (prev + 1) % slideCount);
   };
+
+  handleNextRef.current = handleNext;
+  handlePrevRef.current = handlePrev;
 
   const handleInteract = (promptOverride?: string) => {
     if (!serviceRef.current || !isStreamingReady) {
@@ -892,7 +916,8 @@ function App() {
       formData.append('name', `my-voice-${Date.now()}`);
       const res = await fetch('/api/voice-clone', { method: 'POST', body: formData });
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Upload failed.' })) as { error?: string };
+        const err = await res.json().catch(() => ({ error: 'Upload failed.' })) as { error?: string; details?: string };
+        console.error('[voice-clone] server error:', err.error, '| raw Smallest AI response:', err.details);
         throw new Error(err.error ?? 'Voice clone failed.');
       }
       const data = await res.json() as { voiceId: string };
@@ -1474,14 +1499,22 @@ function App() {
 
   // Keep PTT refs pointing to latest function instances to avoid stale closures
   pttStartRef.current = () => {
-    setSpeechError(null);
-    startBackendRecording();
+    if (isCharacterSlide) {
+      startCharacterRecording();
+    } else {
+      setSpeechError(null);
+      startBackendRecording();
+    }
   };
   pttStopRef.current = () => {
-    recognitionRef.current?.stop();
-    setIsListeningBrowser(false);
-    if (mediaRecorderRef.current?.state === 'recording') {
-      mediaRecorderRef.current.stop();
+    if (isCharacterSlide) {
+      stopCharacterRecording();
+    } else {
+      recognitionRef.current?.stop();
+      setIsListeningBrowser(false);
+      if (mediaRecorderRef.current?.state === 'recording') {
+        mediaRecorderRef.current.stop();
+      }
     }
   };
 
@@ -1497,17 +1530,35 @@ function App() {
     setShowLanding(false);
   };
 
-  if (showLanding) {
-    return (
-      <div className="app">
-        <div className="video-layer">
-          <div
-            className="background-fallback landing-bg"
-            style={{ backgroundImage: `url("${landingPosterUrl}")` }}
-            aria-hidden
-          />
-          <div className="video-overlay" />
-        </div>
+  // Single return — video-layer is always rendered so <video> is never
+  // unmounted mid-play(). Conditionally switch landing vs story UI below.
+  return (
+    <div className="app">
+      <div className="video-layer">
+        <div
+          className={`background-fallback${showLanding ? ' landing-bg' : ''}`}
+          style={{ backgroundImage: `url("${showLanding ? landingPosterUrl : slideImageUrl}")` }}
+          aria-hidden
+        />
+        {/* stream-placeholder: always in DOM so <video> stays at a fixed child index */}
+        <div
+          className={`stream-placeholder ${showLanding || streamState === 'streaming' ? 'hidden' : ''}`}
+          style={{ backgroundImage: `url("${slideImageUrl}")` }}
+          aria-hidden
+        />
+        {/* video is always in the DOM — never unmounted — so play() is never aborted
+            by a DOM removal. Hidden on landing page via is-hidden. */}
+        <video
+          ref={videoRef}
+          className={`video-element ${!showLanding && streamState === 'streaming' ? '' : 'is-hidden'}`}
+          autoPlay
+          playsInline
+          muted
+        />
+        <div className="video-overlay" />
+      </div>
+
+      {showLanding ? (
         <div className="landing">
           <div className="landing-header">
             <p className="eyebrow">Story Archives</p>
@@ -1545,33 +1596,8 @@ function App() {
             <span className="search-label">Powered by Odyssey</span>
           </div>
         </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="app">
-      <div className="video-layer">
-        <div
-          className="background-fallback"
-          style={{ backgroundImage: `url("${slideImageUrl}")` }}
-          aria-hidden
-        />
-        <div
-          className={`stream-placeholder ${streamState === 'streaming' ? 'hidden' : ''}`}
-          style={{ backgroundImage: `url("${slideImageUrl}")` }}
-          aria-hidden
-        />
-        <video
-          ref={videoRef}
-          className={`video-element ${streamState === 'streaming' ? '' : 'is-hidden'}`}
-          autoPlay
-          playsInline
-          muted
-        />
-        <div className="video-overlay" />
-      </div>
-
+      ) : (
+      <>
       <div className="ui">
         <header className="top-bar">
           <button className="btn ghost back-to-landing" onClick={() => setShowLanding(true)}>
@@ -1638,80 +1664,6 @@ function App() {
 
         <main className="slide-shell" />
 
-        <footer className="story-bar">
-          <div className="story-text">
-            <span className="story-index">
-              {String(index + 1).padStart(2, '0')} / {String(slideCount).padStart(2, '0')}
-            </span>
-            <p>{slide.body}</p>
-            {speechText ? <div className="speech-preview">Heard: “{speechText}”</div> : null}
-            {speechError ? <div className="speech-preview speech-error">{speechError}</div> : null}
-            {gestureStatus ? <div className="speech-preview">{gestureStatus}</div> : null}
-            {gestureLatency !== null ? (
-              <div className="speech-preview">Gesture latency: {gestureLatency}ms + 600ms delay</div>
-            ) : null}
-            {objectStatus ? <div className="speech-preview">{objectStatus}</div> : null}
-            {objectLatency !== null ? (
-              <div className="speech-preview">Object latency: {objectLatency}ms</div>
-            ) : null}
-            {isCharacterSlide ? (
-              <div className="speech-preview">
-                {isCharacterRecording
-                  ? `${activeCharacterName}: listening...`
-                  : isCharacterThinking
-                    ? `${activeCharacterName}: thinking...`
-                      : `${activeCharacterName}: ready.`}
-                {characterReply ? ` “${characterReply}”` : ''}
-              </div>
-            ) : null}
-            {characterError ? <div className="speech-preview speech-error">{characterError}</div> : null}
-            {uploadError ? <div className="speech-preview speech-error">{uploadError}</div> : null}
-            {error ? <div className="error-box">{error}</div> : null}
-          </div>
-          <div className="story-actions">
-            {isCharacterSlide ? (
-              <button
-                className="btn accent"
-                onClick={isCharacterRecording ? stopCharacterRecording : startCharacterRecording}
-                disabled={isCharacterThinking}
-              >
-                {isCharacterRecording
-                  ? 'Stop'
-                  : isCharacterThinking
-                    ? 'Thinking...'
-                      : `Talk to ${activeCharacterName}`}
-              </button>
-            ) : null}
-            {isUploadSlide ? (
-              <label className="upload-pill">
-                <input type="file" accept="image/*" onChange={handleUploadChange} />
-                <span>{uploadImage ? uploadImage.name : 'Upload image'}</span>
-              </label>
-            ) : null}
-            <div className="prompt-input">
-              <input
-                type="text"
-                value={textPrompt}
-                onChange={(event) => setTextPrompt(event.target.value)}
-                onKeyDown={handleTextPromptKeyDown}
-                placeholder="Type a wish..."
-                disabled={!isStreamingReady}
-              />
-              <button className="btn ghost" onClick={handleTextPromptSubmit} disabled={!isStreamingReady}>
-                Send
-              </button>
-              <button className="btn ghost" onClick={handleSpeakWish} disabled={!isStreamingReady}>
-                {isRecording || isListeningBrowser ? 'Stop' : isTranscribing ? '...' : 'Speak'}
-              </button>
-            </div>
-            <button className="btn ghost" onClick={handlePrev}>
-              Back
-            </button>
-          <button className="btn primary" onClick={handleNext}>
-            Next
-          </button>
-        </div>
-      </footer>
       </div>
 
       <video ref={cameraRef} className="camera-feed" playsInline muted />
@@ -1781,6 +1733,8 @@ function App() {
           </div>
         </div>
       ) : null}
+      </>
+      )}
     </div>
   );
 }
