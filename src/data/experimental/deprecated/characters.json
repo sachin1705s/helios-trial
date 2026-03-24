@@ -1,0 +1,22 @@
+{
+  "characters": [
+    {
+      "id": "squirrel",
+      "title": "Pico the Squirrel",
+      "subtitle": "Character 08",
+      "body": "A quick, curious squirrel ready for playful antics.",
+      "image": "/images/characters/squirrel.jpeg",
+      "prompt": "Animate it",
+      "cta": "Animate it"
+    },
+    {
+      "id": "tesla",
+      "title": "Nikola Tesla",
+      "subtitle": "Character 10",
+      "body": "Nikola Tesla, inventive and electric, thinking in currents and systems.",
+      "image": "/images/characters/tesla.png",
+      "prompt": "Animate it",
+      "cta": "Animate it"
+    }
+  ]
+}

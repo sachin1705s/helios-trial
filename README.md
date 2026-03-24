@@ -38,6 +38,15 @@ vercel --prod
 
 The `vercel.json` routes all `/api/*` traffic to a single Express function at `api/server.js`.
 
+## Security note (API keys)
+
+- Server env vars are safe only if you never send them to the browser.
+- This project currently exposes `ODYSSEY_API_KEY` to the client via `/api/odyssey/token` so the Odyssey SDK can run in the browser.
+- If you want to hide that key, you must remove `/api/odyssey/token` and either:
+  - disable Odyssey in production, or
+  - implement a server-side relay/ephemeral-token flow (if Odyssey supports it), or
+  - gate the token behind auth (reduces exposure but does not eliminate it).
+
 ## Branch structure
 
 | Branch | Purpose |

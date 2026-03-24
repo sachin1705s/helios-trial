@@ -28,11 +28,11 @@
       "cta": "Animate it"
     },
     {
-      "id": "cleopetra",
+      "id": "cleopatra",
       "title": "Cleopatra",
       "subtitle": "Character 04",
       "body": "Cleopatra, the last Pharaoh, regal and strategic.",
-      "image": "/images/characters/cleopetra.png",
+      "image": "/images/characters/cleopatra.png",
       "prompt": "Animate it",
       "cta": "Animate it"
     },
@@ -59,16 +59,7 @@
       "title": "Grandpa Turtle",
       "subtitle": "Character 07",
       "body": "Grandpa Turtle, slow and thoughtful, sharing patient wisdom.",
-      "image": "/images/characters/gradpa turtle.png",
-      "prompt": "Animate it",
-      "cta": "Animate it"
-    },
-    {
-      "id": "squirral",
-      "title": "Pico the Squiarral",
-      "subtitle": "Character 08",
-      "body": "A quick, curious squirrel ready for playful antics.",
-      "image": "/images/characters/squirral.jpeg",
+      "image": "/images/characters/grandpa turtle.png",
       "prompt": "Animate it",
       "cta": "Animate it"
     },
@@ -78,15 +69,6 @@
       "subtitle": "Character 09",
       "body": "Steve Jobs, minimalist visionary obsessed with product and craft.",
       "image": "/images/characters/steve jobs.png",
-      "prompt": "Animate it",
-      "cta": "Animate it"
-    },
-    {
-      "id": "tesla",
-      "title": "Nikola Tesla",
-      "subtitle": "Character 10",
-      "body": "Nikola Tesla, inventive and electric, thinking in currents and systems.",
-      "image": "/images/characters/tesla.png",
       "prompt": "Animate it",
       "cta": "Animate it"
     }

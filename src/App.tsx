@@ -66,6 +66,7 @@ function App() {
   const [characterReply, setCharacterReply] = useState<string | null>(null);
   const [characterSources, setCharacterSources] = useState<{ title: string; url: string }[]>([]);
   const [characterError, setCharacterError] = useState<string | null>(null);
+  const [moderationError, setModerationError] = useState<string | null>(null);
   const [characterHistory, setCharacterHistory] = useState<Record<string, Array<{ role: 'user' | 'assistant'; content: string }>>>({});
   const [uploadImage, setUploadImage] = useState<File | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -91,6 +92,28 @@ function App() {
   const lastVoiceActionAtRef = useRef(0);
   const handleInteractRef = useRef<(promptOverride?: string) => void>(() => undefined);
   const ttsAudioCtxRef = useRef<AudioContext | null>(null);
+  const characterOpenedAtRef = useRef<number | null>(null);
+  const hasLoggedFirstPromptRef = useRef(false);
+
+  const logEvent = (event: string, data: Record<string, unknown>) => {
+    fetch('/api/log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event, data, timestamp: new Date().toISOString() }),
+    }).catch(() => undefined);
+  };
+
+  const logFirstPromptIfNeeded = (characterId: string, characterName: string, inputMethod: string) => {
+    if (!hasLoggedFirstPromptRef.current && characterOpenedAtRef.current !== null) {
+      logEvent('time_to_first_prompt', {
+        characterId,
+        characterName,
+        inputMethod,
+        timeMs: Date.now() - characterOpenedAtRef.current,
+      });
+      hasLoggedFirstPromptRef.current = true;
+    }
+  };
 
   const selectedCharacter = characters.find((item) => item.id === selectedCharacterId) ?? characters[0];
   const slide = selectedCharacter;
@@ -192,11 +215,21 @@ function App() {
           console.log('[odyssey] onStreamStarted');
           setStreamState('streaming');
           setIsStreamingReady(true);
+          setModerationError(null);
         },
         onStreamEnded: () => {
           console.log('[odyssey] onStreamEnded');
           setStreamState('ended');
           setIsStreamingReady(false);
+          // Auto-restart the stream so interact() keeps working
+          if (retryStreamRef.current) {
+            console.log('[odyssey] auto-restarting stream after end');
+            setStreamState('starting');
+            retryStreamRef.current().catch(() => {
+              setStreamState('error');
+              setIsStreamingReady(false);
+            });
+          }
         },
         onStreamError: (reason, message) => {
           console.error('[odyssey] onStreamError:', reason, message);
@@ -217,6 +250,7 @@ function App() {
                 });
               }, 1000);
             } else {
+              setModerationError('Prompt blocked by moderation. Please try a different request.');
               setError(null);
             }
             return;
@@ -228,6 +262,7 @@ function App() {
           setStreamState('error');
           setIsStreamingReady(false);
           if (err.message?.includes('moderation_failed')) {
+            setModerationError('Prompt blocked by moderation. Please try a different request.');
             setError(null);
             return;
           }
@@ -260,6 +295,7 @@ function App() {
     setStreamState('starting');
     setIsStreamingReady(false);
     setError(null);
+    setModerationError(null);
 
     const run = async () => {
       await service.endStream().catch(() => undefined);
@@ -462,16 +498,14 @@ function App() {
   };
 
   const VOICE_BY_SLIDE_ID: Record<string, string> = {
-    'grandpa-turtle': 'voice_sy0WTBbVLn',
-    'cleopetra': 'voice_77fTvcwjpf',
-    'bear': 'voice_6qrOrtdaCH',
-    'alexander': 'voice_xOnqX9wVFg',
-    'circus-lion': 'voice_ubOexwyolA',
-    'einstein': 'voice_wONXjF0SK8',
-    'steve-jobs': 'voice_cD7m0xgjFA',
-    'squirral': 'voice_ccZuktBgEo',
-    'tesla': 'voice_E7z5PM4RBT',
-    'da-vinci': 'voice_JwqjHuo5ll'
+    'grandpa-turtle': 'magnus',
+    'cleopatra': 'sophia',
+    'bear': 'liam',
+    'alexander': 'alex',
+    'circus-lion': 'alex',
+    'einstein': 'magnus',
+    'steve-jobs': 'alex',
+    'da-vinci': 'magnus'
   };
 
   const playCharacterTTS = async (text: string, slideId?: string) => {
@@ -487,11 +521,24 @@ function App() {
       console.log('[tts] AudioContext resumed, state:', ctx.state);
       const slideVoiceId = slideId ? VOICE_BY_SLIDE_ID[slideId] : '';
       const resolvedVoiceId = slideVoiceId || null;
-      const ttsRes = await fetch('/api/character/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, character: activeCharacterName, ...(resolvedVoiceId ? { voiceId: resolvedVoiceId } : {}) })
-      });
+      console.log('[tts] sending fetch to /api/character/tts, voiceId:', resolvedVoiceId ?? 'default');
+      const ttsAbort = new AbortController();
+      const ttsClientTimeout = setTimeout(() => ttsAbort.abort(), 20000);
+      let ttsRes: Response;
+      try {
+        ttsRes = await fetch('/api/character/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, character: activeCharacterName, ...(resolvedVoiceId ? { voiceId: resolvedVoiceId } : {}) }),
+          signal: ttsAbort.signal,
+        });
+      } catch (fetchErr) {
+        console.error('[tts] fetch failed or timed out:', fetchErr);
+        setCharacterError('TTS request timed out — check server logs for Smallest AI errors.');
+        return;
+      } finally {
+        clearTimeout(ttsClientTimeout);
+      }
       console.log('[tts] server response status:', ttsRes.status, ttsRes.statusText);
       console.log('[tts] content-type:', ttsRes.headers.get('content-type'));
       if (!ttsRes.ok) {
@@ -525,12 +572,10 @@ function App() {
           console.log('[tts] fallback audio playback started');
         } catch (playErr) {
           console.error('[tts] fallback audio play failed', playErr);
-          setCharacterError('Audio playback was blocked. Click the page once, then try again.');
         }
       }
     } catch (err) {
       console.error('[tts] error', err);
-      setCharacterError('TTS failed to play audio. Check the console for details.');
     }
   };
 
@@ -542,6 +587,7 @@ function App() {
       'score', 'happened', '2024', '2025', '2026',
     ];
     const enableSearch = SEARCH_TRIGGERS.some((kw) => userText.toLowerCase().includes(kw));
+    const chatStartedAt = Date.now();
     const chatResponse = await fetch('/api/character/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -552,6 +598,12 @@ function App() {
     const chatData = await chatResponse.json() as { reply?: string; action?: string; objects?: string[]; sources?: { title: string; url: string }[] };
     const reply = String(chatData.reply ?? '').trim() || 'Hmm, fascinating.';
     const trimmedReply = reply.split(/\s+/).slice(0, 40).join(' ');
+    logEvent('response_received', {
+      characterId: slideId,
+      characterName,
+      latencyMs: Date.now() - chatStartedAt,
+      responseLength: trimmedReply.length,
+    });
     const action = String(chatData.action ?? '').trim() || 'nod thoughtfully and gesture gently';
     const objects = Array.isArray(chatData.objects) ? chatData.objects.filter(Boolean).slice(0, 3) : [];
 
@@ -643,9 +695,25 @@ function App() {
             return;
           }
 
+          logFirstPromptIfNeeded(slideId, characterName, 'stt');
+          logEvent('prompt_sent', {
+            characterId: slideId,
+            characterName,
+            inputMethod: 'stt',
+            promptLength: transcript.length,
+          });
           await runCharacterInteraction(transcript, slideId, characterName);
         } catch (err) {
-          setCharacterError(err instanceof Error ? err.message : 'Character flow failed.');
+          const message = err instanceof Error ? err.message : 'Character flow failed.';
+          const isInputError =
+            /stt/i.test(message) ||
+            /microphone/i.test(message) ||
+            /hear anything/i.test(message);
+          if (isInputError) {
+            setCharacterError(message);
+          } else {
+            console.warn('[character] non-input error', message);
+          }
         } finally {
           setIsCharacterThinking(false);
           characterStreamRef.current?.getTracks().forEach((track) => track.stop());
@@ -700,6 +768,13 @@ function App() {
       } else {
         ttsAudioCtxRef.current.resume();
       }
+      logFirstPromptIfNeeded(slide.id, activeCharacterName, 'text');
+      logEvent('prompt_sent', {
+        characterId: slide.id,
+        characterName: activeCharacterName,
+        inputMethod: 'text',
+        promptLength: prompt.length,
+      });
       runCharacterInteraction(prompt, slide.id, activeCharacterName).catch(() => {});
     } else {
       handleInteract(prompt);
@@ -892,6 +967,23 @@ function App() {
   };
 
   const handleSelectCharacter = (id: string) => {
+    // Log time spent on previous character before switching
+    if (selectedCharacterId && characterOpenedAtRef.current !== null) {
+      const timeSpentMs = Date.now() - characterOpenedAtRef.current;
+      const prevCharacter = characters.find((c) => c.id === selectedCharacterId);
+      logEvent('character_closed', {
+        characterId: selectedCharacterId,
+        characterName: prevCharacter?.title ?? selectedCharacterId,
+        timeSpentMs,
+      });
+    }
+    const newCharacter = characters.find((c) => c.id === id);
+    logEvent('character_opened', {
+      characterId: id,
+      characterName: newCharacter?.title ?? id,
+    });
+    characterOpenedAtRef.current = Date.now();
+    hasLoggedFirstPromptRef.current = false;
     setSelectedCharacterId(id);
     setShowLanding(false);
   };
@@ -940,7 +1032,6 @@ function App() {
                     aria-hidden
                   />
                   <div className="character-card-body">
-                    <span className="card-tag">Live</span>
                     <h3>{character.title}</h3>
                     <p>{character.body}</p>
                   </div>
@@ -953,8 +1044,6 @@ function App() {
             <div className="landing-footer-links">
               <span>Join our community:</span>
               <a href="https://discord.gg/bSx4Vhyc" target="_blank" rel="noreferrer">Discord</a>
-              <span className="footer-sep">|</span>
-              <a href="#" className="footer-muted">X</a>
             </div>
             <div className="landing-footer-line" />
           </footer>
@@ -1056,21 +1145,9 @@ function App() {
         <footer className="story-bar">
           <div className="story-text">
             <p>{slide.body}</p>
-            {speechText ? <div className="speech-preview">Heard: "{speechText}"</div> : null}
             {speechError ? <div className="speech-preview speech-error">{speechError}</div> : null}
-            {isCharacterSlide ? (
-              <div className="speech-preview">
-                {isCharacterRecording
-                  ? `${activeCharacterName}: listening...`
-                  : isCharacterThinking
-                    ? `${activeCharacterName}: thinking...`
-                      : `${activeCharacterName}: ready.`}
-                {characterReply ? ` "${characterReply}"` : ''}
-              </div>
-            ) : null}
             {characterError ? <div className="speech-preview speech-error">{characterError}</div> : null}
-            {uploadError ? <div className="speech-preview speech-error">{uploadError}</div> : null}
-            {error ? <div className="error-box">{error}</div> : null}
+            {moderationError ? <div className="speech-preview speech-error">{moderationError}</div> : null}
           </div>
           <div className="story-actions">
             {isCharacterSlide ? (
