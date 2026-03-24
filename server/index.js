@@ -61,12 +61,13 @@ app.use(
     origin: (origin, callback) => {
       // Allow same-origin / server-to-server requests (no Origin header)
       if (!origin) return callback(null, true);
-      // In dev, allow any localhost origin
+      // Allow localhost in dev
       if (process.env.NODE_ENV !== 'production' && /^https?:\/\/localhost(:\d+)?$/.test(origin)) {
         return callback(null, true);
       }
-      if (!hasAllowedOrigins && process.env.NODE_ENV === 'production') {
-        return callback(new Error('Not allowed by CORS'));
+      // Allow all Vercel preview/production URLs for this project
+      if (/^https:\/\/interactive-studio[^.]*\.vercel\.app$/.test(origin)) {
+        return callback(null, true);
       }
       if (allowedOrigins.includes(origin)) {
         return callback(null, true);
@@ -106,7 +107,8 @@ if (!smallestApiKey) {
 
 const runtimeConfig = {
   geminiApiKey,
-  odysseyApiKey,
+  odysseyApiKey: odysseyApiKeys[0] || '',
+  odysseyApiKeys,
   smallestApiKey
 };
 
@@ -177,6 +179,60 @@ const sanitizeModelReply = (text) => {
   return text;
 };
 
+const ODYSSEY_KEY_LIMIT = Math.max(1, Number(process.env.ODYSSEY_KEY_LIMIT || 5));
+const ODYSSEY_LEASE_TTL_MS = Math.max(60_000, Number(process.env.ODYSSEY_LEASE_TTL_MS || 2 * 60 * 60 * 1000));
+
+const odysseyPool = {
+  keys: runtimeConfig.odysseyApiKeys,
+  limitPerKey: ODYSSEY_KEY_LIMIT,
+  inUse: runtimeConfig.odysseyApiKeys.map(() => 0),
+  leases: new Map()
+};
+
+const resetOdysseyPool = (keys) => {
+  odysseyPool.keys = keys;
+  odysseyPool.inUse = keys.map(() => 0);
+  odysseyPool.leases.clear();
+};
+
+const cleanupOdysseyLeases = () => {
+  const now = Date.now();
+  for (const [leaseId, lease] of odysseyPool.leases.entries()) {
+    if (now - lease.lastSeen > ODYSSEY_LEASE_TTL_MS) {
+      odysseyPool.leases.delete(leaseId);
+      const next = Math.max(0, (odysseyPool.inUse[lease.keyIndex] || 0) - 1);
+      odysseyPool.inUse[lease.keyIndex] = next;
+    }
+  }
+};
+
+const allocateOdysseyLease = () => {
+  if (!odysseyPool.keys.length) return null;
+  cleanupOdysseyLeases();
+  const keyIndex = odysseyPool.inUse.findIndex((count) => count < odysseyPool.limitPerKey);
+  if (keyIndex === -1) return null;
+  const leaseId = randomUUID();
+  odysseyPool.inUse[keyIndex] += 1;
+  odysseyPool.leases.set(leaseId, { keyIndex, lastSeen: Date.now() });
+  return { leaseId, apiKey: odysseyPool.keys[keyIndex], keyIndex };
+};
+
+const releaseOdysseyLease = (leaseId) => {
+  const lease = odysseyPool.leases.get(leaseId);
+  if (!lease) return false;
+  odysseyPool.leases.delete(leaseId);
+  const next = Math.max(0, (odysseyPool.inUse[lease.keyIndex] || 0) - 1);
+  odysseyPool.inUse[lease.keyIndex] = next;
+  return true;
+};
+
+const touchOdysseyLease = (leaseId) => {
+  const lease = odysseyPool.leases.get(leaseId);
+  if (!lease) return false;
+  lease.lastSeen = Date.now();
+  return true;
+};
+
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
@@ -186,10 +242,32 @@ app.get('/api/health', (_req, res) => {
 
 // Odyssey token endpoint — serves API key to authenticated same-origin clients
 app.get('/api/odyssey/token', (_req, res) => {
-  if (!runtimeConfig.odysseyApiKey) {
+  if (!runtimeConfig.odysseyApiKeys.length) {
     return res.status(503).json({ error: 'Odyssey not configured.' });
   }
-  return res.json({ apiKey: runtimeConfig.odysseyApiKey });
+  const lease = allocateOdysseyLease();
+  if (!lease) {
+    return res.status(503).json({ error: 'Odyssey is at capacity. Please try again shortly.' });
+  }
+  return res.json({ apiKey: lease.apiKey, leaseId: lease.leaseId, keyIndex: lease.keyIndex });
+});
+
+app.post('/api/odyssey/heartbeat', (req, res) => {
+  const leaseId = String(req.body?.leaseId ?? '').trim();
+  if (!leaseId) return res.status(400).json({ error: 'Missing leaseId.' });
+  cleanupOdysseyLeases();
+  if (!touchOdysseyLease(leaseId)) {
+    return res.status(404).json({ error: 'Lease not found.' });
+  }
+  return res.json({ ok: true });
+});
+
+app.post('/api/odyssey/release', (req, res) => {
+  const leaseId = String(req.body?.leaseId ?? '').trim();
+  if (!leaseId) return res.status(400).json({ error: 'Missing leaseId.' });
+  cleanupOdysseyLeases();
+  releaseOdysseyLease(leaseId);
+  return res.json({ ok: true });
 });
 
 app.get('/api/config', (_req, res) => {
@@ -200,7 +278,7 @@ app.get('/api/config', (_req, res) => {
     ok: true,
     configured: {
       gemini: Boolean(runtimeConfig.geminiApiKey),
-      odyssey: Boolean(runtimeConfig.odysseyApiKey),
+      odyssey: Boolean(runtimeConfig.odysseyApiKeys.length),
       smallest: Boolean(runtimeConfig.smallestApiKey)
     }
   });
@@ -212,13 +290,22 @@ app.post('/api/config', (req, res) => {
   }
   const nextGemini = String(req.body?.geminiApiKey ?? '').trim();
   const nextOdyssey = String(req.body?.odysseyApiKey ?? '').trim();
+  const nextOdysseyKeys = Array.isArray(req.body?.odysseyApiKeys)
+    ? req.body.odysseyApiKeys.map((key) => String(key).trim()).filter(Boolean)
+    : parseOdysseyKeys(String(req.body?.odysseyApiKeys ?? ''));
   const nextSmallest = String(req.body?.smallestApiKey ?? '').trim();
 
   if (nextGemini) {
     runtimeConfig.geminiApiKey = nextGemini;
   }
-  if (nextOdyssey) {
+  if (nextOdysseyKeys.length) {
+    runtimeConfig.odysseyApiKeys = nextOdysseyKeys;
+    runtimeConfig.odysseyApiKey = nextOdysseyKeys[0] || '';
+    resetOdysseyPool(runtimeConfig.odysseyApiKeys);
+  } else if (nextOdyssey) {
+    runtimeConfig.odysseyApiKeys = [nextOdyssey];
     runtimeConfig.odysseyApiKey = nextOdyssey;
+    resetOdysseyPool(runtimeConfig.odysseyApiKeys);
   }
   if (nextSmallest) {
     runtimeConfig.smallestApiKey = nextSmallest;
@@ -228,7 +315,7 @@ app.post('/api/config', (req, res) => {
     ok: true,
     configured: {
       gemini: Boolean(runtimeConfig.geminiApiKey),
-      odyssey: Boolean(runtimeConfig.odysseyApiKey),
+      odyssey: Boolean(runtimeConfig.odysseyApiKeys.length),
       smallest: Boolean(runtimeConfig.smallestApiKey)
     }
   });
