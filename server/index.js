@@ -250,18 +250,18 @@ app.post('/api/config', (req, res) => {
 });
 
 app.post('/api/log', (req, res) => {
-  try {
-    const event = String(req.body?.event || '').trim();
-    if (!event) return res.status(400).json({ error: 'Missing event.' });
-    const timestamp = String(req.body?.timestamp || new Date().toISOString());
-    const data = req.body?.data ?? {};
-    if (insertLog) {
+  const event = String(req.body?.event || '').trim();
+  if (!event) return res.status(400).json({ error: 'Missing event.' });
+  const timestamp = String(req.body?.timestamp || new Date().toISOString());
+  const data = req.body?.data ?? {};
+  if (insertLog) {
+    try {
       insertLog.run({ event, data_json: JSON.stringify(data), timestamp });
+    } catch (dbErr) {
+      console.warn('[db] write failed:', dbErr.message);
     }
-    return res.json({ ok: true });
-  } catch {
-    return res.status(500).json({ error: 'Log failed.' });
   }
+  return res.json({ ok: true });
 });
 
 app.get('/api/voices', async (req, res) => {
