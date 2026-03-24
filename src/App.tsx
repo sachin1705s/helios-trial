@@ -83,6 +83,8 @@ function App() {
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const serviceRef = useRef<OdysseyService | null>(null);
+  const odysseyLeaseIdRef = useRef<string | null>(null);
+  const odysseyHeartbeatRef = useRef<number | null>(null);
   const requestIdRef = useRef(0);
   const imageCacheRef = useRef<Map<string, File>>(new Map());
   const retryStreamRef = useRef<(() => Promise<void>) | null>(null);
@@ -110,6 +112,43 @@ function App() {
     }
   };
 
+  const stopOdysseyHeartbeat = () => {
+    if (odysseyHeartbeatRef.current !== null) {
+      window.clearInterval(odysseyHeartbeatRef.current);
+      odysseyHeartbeatRef.current = null;
+    }
+  };
+
+  const startOdysseyHeartbeat = (leaseId: string) => {
+    stopOdysseyHeartbeat();
+    odysseyHeartbeatRef.current = window.setInterval(() => {
+      fetch('/api/odyssey/heartbeat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leaseId }),
+      }).catch(() => undefined);
+    }, 60_000);
+  };
+
+  const releaseOdysseyLease = () => {
+    const leaseId = odysseyLeaseIdRef.current;
+    if (!leaseId) return;
+    stopOdysseyHeartbeat();
+    const payload = JSON.stringify({ leaseId });
+    if (navigator.sendBeacon) {
+      const blob = new Blob([payload], { type: 'application/json' });
+      navigator.sendBeacon('/api/odyssey/release', blob);
+    } else {
+      fetch('/api/odyssey/release', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+        keepalive: true,
+      }).catch(() => undefined);
+    }
+    odysseyLeaseIdRef.current = null;
+  };
+
   const selectedCharacter = characters.find((item) => item.id === selectedCharacterId) ?? characters[0];
   const slide = selectedCharacter;
   const slideImageUrl = encodeURI(slide?.image ?? '');
@@ -128,12 +167,46 @@ function App() {
 
 
   useEffect(() => {
-    fetch('/api/odyssey/token')
-      .then((r) => r.ok ? r.json() : null)
-      .then((data) => {
-        if (data?.apiKey) setApiKey(data.apiKey);
-      })
-      .catch(() => {});
+    let cancelled = false;
+    const requestToken = async () => {
+      try {
+        const response = await fetch('/api/odyssey/token');
+        if (!response.ok) {
+          const data = await response.json().catch(() => null);
+          const message = data?.error || 'Odyssey not available right now.';
+          if (!cancelled) setError(message);
+          return;
+        }
+        const data = await response.json();
+        if (cancelled) return;
+        if (data?.apiKey) {
+          setApiKey(data.apiKey);
+        } else {
+          setError('Missing Odyssey API key. Set ODYSSEY_API_KEYS in your server environment.');
+        }
+        if (data?.leaseId) {
+          odysseyLeaseIdRef.current = data.leaseId;
+          startOdysseyHeartbeat(data.leaseId);
+        }
+      } catch {
+        if (!cancelled) setError('Failed to reach Odyssey. Please try again.');
+      }
+    };
+    requestToken();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      releaseOdysseyLease();
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      releaseOdysseyLease();
+    };
   }, []);
 
 

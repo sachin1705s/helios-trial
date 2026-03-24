@@ -181,53 +181,117 @@ const sanitizeModelReply = (text) => {
 
 const ODYSSEY_KEY_LIMIT = Math.max(1, Number(process.env.ODYSSEY_KEY_LIMIT || 5));
 const ODYSSEY_LEASE_TTL_MS = Math.max(60_000, Number(process.env.ODYSSEY_LEASE_TTL_MS || 2 * 60 * 60 * 1000));
+const ODYSSEY_LEASE_TTL_S = Math.ceil(ODYSSEY_LEASE_TTL_MS / 1000);
 
-const odysseyPool = {
-  keys: runtimeConfig.odysseyApiKeys,
-  limitPerKey: ODYSSEY_KEY_LIMIT,
+// ─── Upstash Redis pool (shared across all serverless instances) ───────────────
+// Falls back to in-memory when UPSTASH_REDIS_REST_URL is not set (local dev).
+const useRedis = Boolean(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN);
+let redis = null;
+if (useRedis) {
+  const { Redis } = await import('@upstash/redis');
+  redis = new Redis({
+    url: process.env.UPSTASH_REDIS_REST_URL,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN,
+  });
+}
+
+// In-memory fallback (local dev only)
+const memPool = {
   inUse: runtimeConfig.odysseyApiKeys.map(() => 0),
-  leases: new Map()
+  leases: new Map(),
 };
 
-const resetOdysseyPool = (keys) => {
-  odysseyPool.keys = keys;
-  odysseyPool.inUse = keys.map(() => 0);
-  odysseyPool.leases.clear();
+// Count active slot keys for a given key index (Redis TTL handles expiry automatically)
+const redisCountSlots = async (keyIndex) => {
+  let cursor = 0;
+  let total = 0;
+  do {
+    const [nextCursor, keys] = await redis.scan(cursor, { match: `odyssey:slot:${keyIndex}:*`, count: 100 });
+    total += keys.length;
+    cursor = nextCursor;
+  } while (cursor !== 0);
+  return total;
 };
 
-const cleanupOdysseyLeases = () => {
-  const now = Date.now();
-  for (const [leaseId, lease] of odysseyPool.leases.entries()) {
-    if (now - lease.lastSeen > ODYSSEY_LEASE_TTL_MS) {
-      odysseyPool.leases.delete(leaseId);
-      const next = Math.max(0, (odysseyPool.inUse[lease.keyIndex] || 0) - 1);
-      odysseyPool.inUse[lease.keyIndex] = next;
-    }
+const resetOdysseyPool = async (keys) => {
+  memPool.inUse = keys.map(() => 0);
+  memPool.leases.clear();
+  if (useRedis) {
+    let cursor = 0;
+    const toDelete = [];
+    do {
+      const [nextCursor, keys] = await redis.scan(cursor, { match: 'odyssey:*', count: 100 });
+      toDelete.push(...keys);
+      cursor = nextCursor;
+    } while (cursor !== 0);
+    if (toDelete.length) await redis.del(...toDelete);
   }
 };
 
-const allocateOdysseyLease = () => {
-  if (!odysseyPool.keys.length) return null;
-  cleanupOdysseyLeases();
-  const keyIndex = odysseyPool.inUse.findIndex((count) => count < odysseyPool.limitPerKey);
+const allocateOdysseyLease = async () => {
+  const keys = runtimeConfig.odysseyApiKeys;
+  if (!keys.length) return null;
+
+  if (useRedis) {
+    for (let keyIndex = 0; keyIndex < keys.length; keyIndex++) {
+      const count = await redisCountSlots(keyIndex);
+      if (count >= ODYSSEY_KEY_LIMIT) continue;
+      const leaseId = randomUUID();
+      await Promise.all([
+        redis.set(`odyssey:slot:${keyIndex}:${leaseId}`, 1, { ex: ODYSSEY_LEASE_TTL_S }),
+        redis.set(`odyssey:lease:${leaseId}`, keyIndex, { ex: ODYSSEY_LEASE_TTL_S }),
+      ]);
+      return { leaseId, apiKey: keys[keyIndex], keyIndex };
+    }
+    return null;
+  }
+
+  // In-memory fallback
+  const now = Date.now();
+  for (const [id, lease] of memPool.leases.entries()) {
+    if (now - lease.lastSeen > ODYSSEY_LEASE_TTL_MS) {
+      memPool.leases.delete(id);
+      memPool.inUse[lease.keyIndex] = Math.max(0, (memPool.inUse[lease.keyIndex] || 0) - 1);
+    }
+  }
+  const keyIndex = memPool.inUse.findIndex((count) => count < ODYSSEY_KEY_LIMIT);
   if (keyIndex === -1) return null;
   const leaseId = randomUUID();
-  odysseyPool.inUse[keyIndex] += 1;
-  odysseyPool.leases.set(leaseId, { keyIndex, lastSeen: Date.now() });
-  return { leaseId, apiKey: odysseyPool.keys[keyIndex], keyIndex };
+  memPool.inUse[keyIndex] += 1;
+  memPool.leases.set(leaseId, { keyIndex, lastSeen: Date.now() });
+  return { leaseId, apiKey: keys[keyIndex], keyIndex };
 };
 
-const releaseOdysseyLease = (leaseId) => {
-  const lease = odysseyPool.leases.get(leaseId);
+const releaseOdysseyLease = async (leaseId) => {
+  if (useRedis) {
+    const keyIndex = await redis.get(`odyssey:lease:${leaseId}`);
+    if (keyIndex === null) return false;
+    await Promise.all([
+      redis.del(`odyssey:slot:${keyIndex}:${leaseId}`),
+      redis.del(`odyssey:lease:${leaseId}`),
+    ]);
+    return true;
+  }
+
+  const lease = memPool.leases.get(leaseId);
   if (!lease) return false;
-  odysseyPool.leases.delete(leaseId);
-  const next = Math.max(0, (odysseyPool.inUse[lease.keyIndex] || 0) - 1);
-  odysseyPool.inUse[lease.keyIndex] = next;
+  memPool.leases.delete(leaseId);
+  memPool.inUse[lease.keyIndex] = Math.max(0, (memPool.inUse[lease.keyIndex] || 0) - 1);
   return true;
 };
 
-const touchOdysseyLease = (leaseId) => {
-  const lease = odysseyPool.leases.get(leaseId);
+const touchOdysseyLease = async (leaseId) => {
+  if (useRedis) {
+    const keyIndex = await redis.get(`odyssey:lease:${leaseId}`);
+    if (keyIndex === null) return false;
+    await Promise.all([
+      redis.expire(`odyssey:slot:${keyIndex}:${leaseId}`, ODYSSEY_LEASE_TTL_S),
+      redis.expire(`odyssey:lease:${leaseId}`, ODYSSEY_LEASE_TTL_S),
+    ]);
+    return true;
+  }
+
+  const lease = memPool.leases.get(leaseId);
   if (!lease) return false;
   lease.lastSeen = Date.now();
   return true;
@@ -241,32 +305,30 @@ app.get('/api/health', (_req, res) => {
 });
 
 // Odyssey token endpoint — serves API key to authenticated same-origin clients
-app.get('/api/odyssey/token', (_req, res) => {
+app.get('/api/odyssey/token', async (_req, res) => {
   if (!runtimeConfig.odysseyApiKeys.length) {
     return res.status(503).json({ error: 'Odyssey not configured.' });
   }
-  const lease = allocateOdysseyLease();
+  const lease = await allocateOdysseyLease();
   if (!lease) {
     return res.status(503).json({ error: 'Odyssey is at capacity. Please try again shortly.' });
   }
   return res.json({ apiKey: lease.apiKey, leaseId: lease.leaseId, keyIndex: lease.keyIndex });
 });
 
-app.post('/api/odyssey/heartbeat', (req, res) => {
+app.post('/api/odyssey/heartbeat', async (req, res) => {
   const leaseId = String(req.body?.leaseId ?? '').trim();
   if (!leaseId) return res.status(400).json({ error: 'Missing leaseId.' });
-  cleanupOdysseyLeases();
-  if (!touchOdysseyLease(leaseId)) {
+  if (!await touchOdysseyLease(leaseId)) {
     return res.status(404).json({ error: 'Lease not found.' });
   }
   return res.json({ ok: true });
 });
 
-app.post('/api/odyssey/release', (req, res) => {
+app.post('/api/odyssey/release', async (req, res) => {
   const leaseId = String(req.body?.leaseId ?? '').trim();
   if (!leaseId) return res.status(400).json({ error: 'Missing leaseId.' });
-  cleanupOdysseyLeases();
-  releaseOdysseyLease(leaseId);
+  await releaseOdysseyLease(leaseId);
   return res.json({ ok: true });
 });
 
@@ -284,7 +346,7 @@ app.get('/api/config', (_req, res) => {
   });
 });
 
-app.post('/api/config', (req, res) => {
+app.post('/api/config', async (req, res) => {
   if (isProduction) {
     return res.status(404).json({ error: 'Not found.' });
   }
@@ -301,11 +363,11 @@ app.post('/api/config', (req, res) => {
   if (nextOdysseyKeys.length) {
     runtimeConfig.odysseyApiKeys = nextOdysseyKeys;
     runtimeConfig.odysseyApiKey = nextOdysseyKeys[0] || '';
-    resetOdysseyPool(runtimeConfig.odysseyApiKeys);
+    await resetOdysseyPool(runtimeConfig.odysseyApiKeys);
   } else if (nextOdyssey) {
     runtimeConfig.odysseyApiKeys = [nextOdyssey];
     runtimeConfig.odysseyApiKey = nextOdyssey;
-    resetOdysseyPool(runtimeConfig.odysseyApiKeys);
+    await resetOdysseyPool(runtimeConfig.odysseyApiKeys);
   }
   if (nextSmallest) {
     runtimeConfig.smallestApiKey = nextSmallest;
