@@ -4,7 +4,8 @@ import helmet from 'helmet';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { GoogleGenAI } from '@google/genai';
-import Database from 'better-sqlite3';
+let Database = null;
+try { ({ default: Database } = await import('better-sqlite3')); } catch { /* native module unavailable */ }
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
@@ -130,6 +131,7 @@ let db = null;
 let insertLog;
 
 try {
+  if (!Database) throw new Error('better-sqlite3 not available');
   db = new Database(DB_PATH);
   db.pragma('journal_mode = WAL');
   db.exec(`
