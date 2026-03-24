@@ -8,6 +8,7 @@ import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { randomUUID } from 'crypto';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -83,9 +84,19 @@ if (!geminiApiKey) {
   console.error('[startup] Missing GEMINI_API_KEY');
 }
 
+const parseOdysseyKeys = (raw) =>
+  raw
+    .split(',')
+    .map((key) => key.trim())
+    .filter(Boolean);
+
 const odysseyApiKey = process.env.ODYSSEY_API_KEY || '';
-if (!odysseyApiKey) {
-  console.warn('[startup] Missing ODYSSEY_API_KEY');
+const odysseyApiKeys = parseOdysseyKeys(process.env.ODYSSEY_API_KEYS || '');
+if (odysseyApiKeys.length === 0 && odysseyApiKey) {
+  odysseyApiKeys.push(odysseyApiKey);
+}
+if (odysseyApiKeys.length === 0) {
+  console.warn('[startup] Missing ODYSSEY_API_KEY(S)');
 }
 
 const smallestApiKey = process.env.SMALLEST_API_KEY || '';
@@ -123,9 +134,6 @@ const aiLimiter = rateLimit({
 app.use('/api/', generalLimiter);
 app.use(express.json({ limit: '10mb' }));
 
-// ─── Database (disabled on serverless) ───────────────────────────────────────
-let db = null;
-let insertLog = null;
 
 // ─── Multer (audio only) ──────────────────────────────────────────────────────
 const upload = multer({
@@ -226,20 +234,6 @@ app.post('/api/config', (req, res) => {
   });
 });
 
-app.post('/api/log', (req, res) => {
-  const event = String(req.body?.event || '').trim();
-  if (!event) return res.status(400).json({ error: 'Missing event.' });
-  const timestamp = String(req.body?.timestamp || new Date().toISOString());
-  const data = req.body?.data ?? {};
-  if (insertLog) {
-    try {
-      insertLog.run({ event, data_json: JSON.stringify(data), timestamp });
-    } catch (dbErr) {
-      console.warn('[db] write failed:', dbErr.message);
-    }
-  }
-  return res.json({ ok: true });
-});
 
 app.get('/api/voices', async (req, res) => {
   const smallestApiKey = runtimeConfig.smallestApiKey;
@@ -252,20 +246,6 @@ app.get('/api/voices', async (req, res) => {
   return res.json(data);
 });
 
-app.get('/api/logs', (req, res) => {
-  if (!db) return res.json({ data: [] });
-  try {
-    const event = req.query.event ? String(req.query.event) : null;
-    const limit = Math.min(Number(req.query.limit || 500), 1000);
-    const rows = event
-      ? db.prepare('SELECT * FROM logs WHERE event = ? ORDER BY id DESC LIMIT ?').all(event, limit)
-      : db.prepare('SELECT * FROM logs ORDER BY id DESC LIMIT ?').all(limit);
-    const data = rows.map((row) => ({ ...row, data: row.data_json ? JSON.parse(row.data_json) : {} }));
-    return res.json({ data });
-  } catch {
-    return res.status(500).json({ error: 'Query failed.' });
-  }
-});
 
 app.post('/api/stt', upload.single('audio'), async (req, res) => {
   try {

@@ -95,13 +95,8 @@ function App() {
   const characterOpenedAtRef = useRef<number | null>(null);
   const hasLoggedFirstPromptRef = useRef(false);
 
-  const logEvent = (event: string, data: Record<string, unknown>) => {
-    fetch('/api/log', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ event, data, timestamp: new Date().toISOString() }),
-    }).catch(() => undefined);
-  };
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const logEvent = (_event: string, _data: Record<string, unknown>) => {};
 
   const logFirstPromptIfNeeded = (characterId: string, characterName: string, inputMethod: string) => {
     if (!hasLoggedFirstPromptRef.current && characterOpenedAtRef.current !== null) {
@@ -999,7 +994,7 @@ function App() {
             </div>
             <div className="landing-actions">
               <button className="btn ghost" onClick={() => { setSelectedCharacterId(null); setShowLanding(false); }}>About us</button>
-              <a className="btn primary" href="mailto:hello@interactstudio.space">Get in touch</a>
+              <a className="btn primary" href="mailto:hello.interactstudio@gmail.com">Get in touch</a>
             </div>
           </header>
 
@@ -1063,7 +1058,7 @@ function App() {
             </div>
             <div className="landing-actions">
               <button className="btn ghost" onClick={() => setShowLanding(true)}>Back</button>
-              <a className="btn primary" href="mailto:hello@interactstudio.space">Get in touch</a>
+              <a className="btn primary" href="mailto:hello.interactstudio@gmail.com">Get in touch</a>
             </div>
           </header>
           <section className="landing-intro">
