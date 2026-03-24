@@ -4,8 +4,6 @@ import helmet from 'helmet';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { GoogleGenAI } from '@google/genai';
-let Database = null;
-try { ({ default: Database } = await import('better-sqlite3')); } catch { /* native module unavailable */ }
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
@@ -125,30 +123,9 @@ const aiLimiter = rateLimit({
 app.use('/api/', generalLimiter);
 app.use(express.json({ limit: '10mb' }));
 
-// ─── Database (graceful fallback) ─────────────────────────────────────────────
-const DB_PATH = process.env.DATABASE_PATH || (process.env.VERCEL ? '/tmp/data.sqlite' : 'data.sqlite');
+// ─── Database (disabled on serverless) ───────────────────────────────────────
 let db = null;
-let insertLog;
-
-try {
-  if (!Database) throw new Error('better-sqlite3 not available');
-  db = new Database(DB_PATH);
-  db.pragma('journal_mode = WAL');
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      event TEXT NOT NULL,
-      data_json TEXT,
-      timestamp TEXT NOT NULL
-    );
-  `);
-  insertLog = db.prepare(`
-    INSERT INTO logs (event, data_json, timestamp)
-    VALUES (@event, @data_json, @timestamp)
-  `);
-} catch (err) {
-  console.warn('[db] SQLite unavailable, persistence disabled:', err.message);
-}
+let insertLog = null;
 
 // ─── Multer (audio only) ──────────────────────────────────────────────────────
 const upload = multer({
