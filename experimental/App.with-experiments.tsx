@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } fro
 import { Analytics } from '@vercel/analytics/react';
 import { SpeedInsights } from '@vercel/speed-insights/react';
 import type { ConnectionStatus } from '@odysseyml/odyssey';
+import { FilesetResolver, ObjectDetector } from '@mediapipe/tasks-vision';
+import { AtomsClient } from 'atoms-client-sdk';
 import charactersData from './data/characters.json';
 import { OdysseyService, loadImageFile, type StreamState } from './lib/odyssey';
 import './App.css';
@@ -15,6 +17,8 @@ interface Character {
   prompt: string;
   cta: string;
 }
+
+type GestureLabel = 'hello' | 'thumbs_up' | 'victory' | 'namaste';
 
 type SpeechRecognitionResultEvent = Event & {
   results: {
@@ -38,6 +42,18 @@ type SpeechRecognitionLike = {
 };
 
 const characters = (charactersData as { characters: Character[] }).characters;
+const GESTURE_DELAY_MS = 600;
+const GEMINI_GESTURE_COOLDOWN_MS = 1700;
+const VISION_POLL_MS = 1700;
+const OBJECT_POLL_MS = 1200;
+
+const GESTURE_PROMPTS: Record<GestureLabel, string> = {
+  hello: 'do hello',
+  thumbs_up: 'do thumbs up',
+  victory: 'do victory sign',
+  namaste: 'do namaste'
+};
+
 
 function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
   const win = window as typeof window & {
@@ -69,6 +85,13 @@ function App() {
   const [characterHistory, setCharacterHistory] = useState<Record<string, Array<{ role: 'user' | 'assistant'; content: string }>>>({});
   const [uploadImage, setUploadImage] = useState<File | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [gesturesEnabled, setGesturesEnabled] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [gestureStatus, setGestureStatus] = useState('');
+  const [gestureLatency, setGestureLatency] = useState<number | null>(null);
+  const [objectDetectionEnabled, setObjectDetectionEnabled] = useState(false);
+  const [objectStatus, setObjectStatus] = useState('');
+  const [objectLatency, setObjectLatency] = useState<number | null>(null);
   const [voiceStatus, setVoiceStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
   const [, setVoiceError] = useState<string | null>(null);
   const [, setLastVoiceText] = useState<string | null>(null);
@@ -81,16 +104,43 @@ function App() {
   const characterChunksRef = useRef<Blob[]>([]);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraRef = useRef<HTMLVideoElement | null>(null);
   const serviceRef = useRef<OdysseyService | null>(null);
   const requestIdRef = useRef(0);
+  const detectFrameRef = useRef<number | null>(null);
+  const objectDetectorRef = useRef<ObjectDetector | null>(null);
+  const objectInFlightRef = useRef(false);
   const imageCacheRef = useRef<Map<string, File>>(new Map());
+  const pendingGestureRef = useRef<GestureLabel | null>(null);
   const retryStreamRef = useRef<(() => Promise<void>) | null>(null);
   const moderationRetryCountRef = useRef(0);
+  const pendingTimerRef = useRef<number | null>(null);
+  const lastGeminiAtRef = useRef(0);
+  const lastVisionCheckRef = useRef(0);
+  const visionInFlightRef = useRef(false);
+  const visionRetryAtRef = useRef(0);
+  const lastObjectCheckRef = useRef(0);
+  const objectSessionRef = useRef(0);
+  const lastCaptureAtRef = useRef(0);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const gestureSessionRef = useRef(0);
+  const atomsClientRef = useRef<AtomsClient | null>(null);
   const isStreamingReadyRef = useRef(false);
   const isVoiceAgentSlideRef = useRef(false);
   const lastVoiceActionAtRef = useRef(0);
   const handleInteractRef = useRef<(promptOverride?: string) => void>(() => undefined);
   const ttsAudioCtxRef = useRef<AudioContext | null>(null);
+  const [clonedVoiceId, setClonedVoiceId] = useState<string | null>(null);
+  const [voiceCloneStatus, setVoiceCloneStatus] = useState<'idle' | 'recording' | 'uploading' | 'ready' | 'error'>('idle');
+  const [voiceCloneError, setVoiceCloneError] = useState<string | null>(null);
+  const [voiceCloneDuration, setVoiceCloneDuration] = useState(0);
+  const [showVoiceClone, setShowVoiceClone] = useState(false);
+  const [streamNeedsGesture, setStreamNeedsGesture] = useState(false);
+  const voiceCloneRecorderRef = useRef<MediaRecorder | null>(null);
+  const voiceCloneStreamRef = useRef<MediaStream | null>(null);
+  const voiceCloneChunksRef = useRef<Blob[]>([]);
+  const voiceCloneStartRef = useRef<number>(0);
+  const voiceCloneDurationTimerRef = useRef<number | null>(null);
 
   const selectedCharacter = characters.find((item) => item.id === selectedCharacterId) ?? characters[0];
   const slide = selectedCharacter;
@@ -126,12 +176,14 @@ function App() {
   useEffect(() => {
     isVoiceAgentSlideRef.current = isVoiceAgentSlide;
     if (!isVoiceAgentSlide && voiceStatus === 'connected') {
+      atomsClientRef.current?.stopSession();
       setVoiceStatus('idle');
     }
   }, [isVoiceAgentSlide, voiceStatus]);
 
   useEffect(() => {
     if (!isStreamingReady && voiceStatus === 'connected') {
+      atomsClientRef.current?.stopSession();
       setVoiceStatus('idle');
       setVoiceError('Stream stopped.');
     }
@@ -175,9 +227,12 @@ function App() {
           const attach = () => {
             if (videoRef.current) {
               videoRef.current.srcObject = stream;
-              videoRef.current.play().catch((e) => {
-                console.warn('[odyssey] video.play failed:', e);
-              });
+              videoRef.current.play()
+                .then(() => setStreamNeedsGesture(false))
+                .catch((e) => {
+                  console.warn('[odyssey] video.play failed:', e);
+                  setStreamNeedsGesture(true);
+                });
             } else {
               setTimeout(attach, 100);
             }
@@ -192,6 +247,11 @@ function App() {
           console.log('[odyssey] onStreamStarted');
           setStreamState('streaming');
           setIsStreamingReady(true);
+          if (pendingGestureRef.current) {
+            const prompt = GESTURE_PROMPTS[pendingGestureRef.current];
+            pendingGestureRef.current = null;
+            handleInteract(prompt);
+          }
         },
         onStreamEnded: () => {
           console.log('[odyssey] onStreamEnded');
@@ -326,6 +386,28 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      atomsClientRef.current?.stopSession();
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (detectFrameRef.current) {
+        cancelAnimationFrame(detectFrameRef.current);
+      }
+      cameraRef.current?.srcObject && (cameraRef.current.srcObject as MediaStream).getTracks().forEach((t) => t.stop());
+    };
+  }, []);
+
+  const stopCameraStream = () => {
+    if (cameraRef.current?.srcObject) {
+      (cameraRef.current.srcObject as MediaStream).getTracks().forEach((track) => track.stop());
+      cameraRef.current.srcObject = null;
+    }
+  };
+
   // If the Odyssey stream connected while the landing page was showing (video element
   // didn't exist yet), attach the stream now that the story view is rendered.
   useEffect(() => {
@@ -367,6 +449,17 @@ function App() {
       window.removeEventListener('keyup', onKeyUp, { capture: true });
     };
   }, []);
+
+  const handleStartStreamPlayback = async () => {
+    if (!videoRef.current) return;
+    try {
+      await videoRef.current.play();
+      setStreamNeedsGesture(false);
+    } catch (err) {
+      console.warn('[odyssey] manual play failed:', err);
+      setStreamNeedsGesture(true);
+    }
+  };
 
   const handleInteract = (promptOverride?: string) => {
     if (!serviceRef.current || !isStreamingReady) {
@@ -437,6 +530,8 @@ function App() {
   };
 
 
+
+
   const handleVoiceUtterance = (text: string, _source: string) => {
     const mapped = mapUtteranceToPrompt(text);
     if (!mapped) return;
@@ -486,7 +581,7 @@ function App() {
       await ctx.resume();
       console.log('[tts] AudioContext resumed, state:', ctx.state);
       const slideVoiceId = slideId ? VOICE_BY_SLIDE_ID[slideId] : '';
-      const resolvedVoiceId = slideVoiceId || null;
+      const resolvedVoiceId = slideVoiceId || clonedVoiceId;
       const ttsRes = await fetch('/api/character/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -659,6 +754,122 @@ function App() {
       setCharacterError(err instanceof Error ? err.message : 'Microphone access was blocked.');
     }
   };
+
+  // ─── Voice Cloning ─────────────────────────────────────────────────────────
+
+  const submitVoiceClone = async (blob: Blob, mimeType: string) => {
+    setVoiceCloneStatus('uploading');
+    setVoiceCloneError(null);
+    try {
+      const formData = new FormData();
+      const ext = mimeType.includes('wav') ? 'wav' : mimeType.includes('ogg') ? 'ogg' : mimeType.includes('mp') ? 'mp3' : 'webm';
+      formData.append('audio', blob, `voice_sample.${ext}`);
+      formData.append('name', `my-voice-${Date.now()}`);
+      const res = await fetch('/api/voice-clone', { method: 'POST', body: formData });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Upload failed.' })) as { error?: string };
+        throw new Error(err.error ?? 'Voice clone failed.');
+      }
+      const data = await res.json() as { voiceId: string };
+      setClonedVoiceId(data.voiceId);
+      setVoiceCloneStatus('ready');
+    } catch (err) {
+      setVoiceCloneError(err instanceof Error ? err.message : 'Voice clone failed.');
+      setVoiceCloneStatus('error');
+    }
+  };
+
+  const stopVoiceCloneRecording = () => {
+    if (voiceCloneRecorderRef.current?.state === 'recording') {
+      voiceCloneRecorderRef.current.stop();
+    }
+    if (voiceCloneDurationTimerRef.current) {
+      window.clearInterval(voiceCloneDurationTimerRef.current);
+      voiceCloneDurationTimerRef.current = null;
+    }
+  };
+
+  const startVoiceCloneRecording = async () => {
+    if (voiceCloneStatus === 'recording') {
+      stopVoiceCloneRecording();
+      return;
+    }
+    setVoiceCloneError(null);
+    setVoiceCloneDuration(0);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { sampleRate: 44100, channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      });
+      voiceCloneStreamRef.current = stream;
+      voiceCloneChunksRef.current = [];
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=pcm')
+        ? 'audio/webm;codecs=pcm'
+        : MediaRecorder.isTypeSupported('audio/webm')
+          ? 'audio/webm'
+          : '';
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+      voiceCloneRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) voiceCloneChunksRef.current.push(e.data); };
+      recorder.onstop = () => {
+        voiceCloneStreamRef.current?.getTracks().forEach((t) => t.stop());
+        voiceCloneStreamRef.current = null;
+        if (voiceCloneDurationTimerRef.current) {
+          window.clearInterval(voiceCloneDurationTimerRef.current);
+          voiceCloneDurationTimerRef.current = null;
+        }
+        const blob = new Blob(voiceCloneChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        voiceCloneChunksRef.current = [];
+        const duration = (Date.now() - voiceCloneStartRef.current) / 1000;
+        if (duration < 10) {
+          setVoiceCloneError(`Recording too short (${duration.toFixed(1)}s). Please record at least 10 seconds.`);
+          setVoiceCloneStatus('error');
+          return;
+        }
+        submitVoiceClone(blob, recorder.mimeType || 'audio/webm');
+      };
+
+      voiceCloneStartRef.current = Date.now();
+      recorder.start();
+      setVoiceCloneStatus('recording');
+      voiceCloneDurationTimerRef.current = window.setInterval(() => {
+        const elapsed = Math.floor((Date.now() - voiceCloneStartRef.current) / 1000);
+        setVoiceCloneDuration(elapsed);
+        // Auto-stop at 15 seconds (SDK maximum)
+        if (elapsed >= 15) {
+          if (voiceCloneRecorderRef.current?.state === 'recording') {
+            voiceCloneRecorderRef.current.stop();
+          }
+        }
+      }, 500);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('not found') || msg.includes('NotFoundError')) {
+        setVoiceCloneError('No microphone found. Please connect a mic or use "Upload audio" instead.');
+      } else if (msg.includes('Permission') || msg.includes('NotAllowed')) {
+        setVoiceCloneError('Microphone access denied. Allow mic access in your browser settings.');
+      } else {
+        setVoiceCloneError(msg || 'Microphone access blocked.');
+      }
+      setVoiceCloneStatus('error');
+    }
+  };
+
+  const handleVoiceCloneFile = (file: File) => {
+    const supported = ['audio/wav', 'audio/mp3', 'audio/mpeg', 'audio/webm', 'audio/ogg'];
+    if (!supported.includes(file.type)) {
+      setVoiceCloneError('Unsupported format. Please upload a WAV, MP3, WebM, or OGG file (not M4A/AAC).');
+      return;
+    }
+    if (file.size > 50 * 1024 * 1024) {
+      setVoiceCloneError('File too large (max 50MB).');
+      return;
+    }
+    setVoiceCloneError(null);
+    submitVoiceClone(file, file.type);
+  };
+
+  // ───────────────────────────────────────────────────────────────────────────
 
   const startUploadStream = (file: File) => {
     if (!serviceRef.current || connectionStatus !== 'connected') {
@@ -854,6 +1065,24 @@ function App() {
     return true;
   };
 
+  const scheduleGesturePrompt = (label: GestureLabel) => {
+    pendingGestureRef.current = label;
+    if (pendingTimerRef.current) {
+      window.clearTimeout(pendingTimerRef.current);
+    }
+    pendingTimerRef.current = window.setTimeout(() => {
+      if (pendingGestureRef.current !== label) {
+        return;
+      }
+      setGestureStatus(`Gesture: ${label}`);
+      if (isStreamingReady) {
+        const prompt = GESTURE_PROMPTS[label];
+        pendingGestureRef.current = null;
+        handleInteract(prompt);
+      }
+    }, GESTURE_DELAY_MS);
+  };
+
   const handleSpeakWish = () => {
     if (isTranscribing) {
       return;
@@ -869,6 +1098,246 @@ function App() {
     }
     setSpeechError(null);
     startBackendRecording();
+  };
+
+  const classifyGestureFromFrame = async (dataUrl: string) => {
+    const now = Date.now();
+    if (visionInFlightRef.current) {
+      return;
+    }
+    if (now < visionRetryAtRef.current) {
+      return;
+    }
+    if (now - lastGeminiAtRef.current < GEMINI_GESTURE_COOLDOWN_MS) {
+      return;
+    }
+    visionInFlightRef.current = true;
+    lastGeminiAtRef.current = now;
+
+    const [meta, base64] = dataUrl.split(',');
+    const mimeMatch = /data:(.*?);base64/.exec(meta);
+    const mimeType = mimeMatch?.[1] ?? 'image/jpeg';
+
+    try {
+      const response = await fetch('/api/gesture-vision', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: base64, mimeType })
+      });
+
+      if (response.status === 429) {
+        const data = (await response.json()) as { retryAfterMs?: number };
+        visionRetryAtRef.current = Date.now() + (data.retryAfterMs ?? 10000);
+        setGestureStatus('Gesture: rate limited');
+        return;
+      }
+      if (response.status === 503) {
+        setGestureStatus('Gesture: missing Gemini key');
+        return;
+      }
+      if (!response.ok) {
+        setGestureStatus(`Gesture: error ${response.status}`);
+        return;
+      }
+
+      const data = (await response.json()) as { label?: string };
+      const label = data.label as GestureLabel | undefined;
+      if (label && GESTURE_PROMPTS[label]) {
+        const latency = Date.now() - lastCaptureAtRef.current;
+        setGestureLatency(latency);
+        scheduleGesturePrompt(label);
+      } else {
+        setGestureStatus('Gesture: none');
+      }
+    } catch {
+      // ignore
+    } finally {
+      visionInFlightRef.current = false;
+    }
+  };
+
+  const ensureObjectDetector = async () => {
+    if (objectDetectorRef.current) {
+      return objectDetectorRef.current;
+    }
+    const vision = await FilesetResolver.forVisionTasks(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.32/wasm'
+    );
+    const detector = await ObjectDetector.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: 'https://storage.googleapis.com/mediapipe-assets/efficientdet_lite0.tflite'
+      },
+      scoreThreshold: 0.5,
+      runningMode: 'VIDEO'
+    });
+    objectDetectorRef.current = detector;
+    return detector;
+  };
+
+  const startGestureLoop = () => {
+    const camera = cameraRef.current;
+    if (!camera) {
+      return;
+    }
+
+    const detect = () => {
+      if (!cameraRef.current) {
+        return;
+      }
+      const now = performance.now();
+      if (now - lastVisionCheckRef.current >= VISION_POLL_MS) {
+        lastVisionCheckRef.current = now;
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            const width = camera.videoWidth || 320;
+            const height = camera.videoHeight || 240;
+            canvas.width = width;
+            canvas.height = height;
+            ctx.drawImage(camera, 0, 0, width, height);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+            if (isStreamingReady) {
+              lastCaptureAtRef.current = Date.now();
+              classifyGestureFromFrame(dataUrl);
+            }
+          }
+        }
+      }
+      detectFrameRef.current = requestAnimationFrame(detect);
+    };
+
+    detectFrameRef.current = requestAnimationFrame(detect);
+  };
+
+  const startObjectLoop = () => {
+    const camera = cameraRef.current;
+    if (!camera) {
+      return;
+    }
+
+    const detect = async () => {
+      if (!cameraRef.current) {
+        return;
+      }
+      const now = performance.now();
+      if (now - lastObjectCheckRef.current >= OBJECT_POLL_MS) {
+        lastObjectCheckRef.current = now;
+        if (!objectInFlightRef.current) {
+          objectInFlightRef.current = true;
+          const start = Date.now();
+          try {
+            const detector = await ensureObjectDetector();
+            const results = detector.detectForVideo(cameraRef.current, now);
+            const detection = results.detections?.[0];
+            const category = detection?.categories?.[0];
+            if (category?.categoryName) {
+              setObjectStatus(`Object: ${category.categoryName}`);
+            } else {
+              setObjectStatus('Object: none');
+            }
+            setObjectLatency(Date.now() - start);
+          } catch {
+            setObjectStatus('Object detection failed.');
+            disableObjectDetection();
+          } finally {
+            objectInFlightRef.current = false;
+          }
+        }
+      }
+      detectFrameRef.current = requestAnimationFrame(detect);
+    };
+
+    detectFrameRef.current = requestAnimationFrame(detect);
+  };
+
+  const enableGestures = async () => {
+    if (gesturesEnabled) {
+      return;
+    }
+    if (objectDetectionEnabled) {
+      disableObjectDetection();
+    }
+    try {
+      const sessionId = ++gestureSessionRef.current;
+      setGestureStatus('Starting camera...');
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+      if (sessionId !== gestureSessionRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      if (cameraRef.current) {
+        cameraRef.current.srcObject = stream;
+        await cameraRef.current.play();
+      }
+      setGesturesEnabled(true);
+      setGestureStatus('Gesture detection on');
+      startGestureLoop();
+    } catch (err) {
+      setGestureStatus('Gesture setup failed');
+    }
+  };
+
+  const disableGestures = () => {
+    gestureSessionRef.current += 1;
+    setGesturesEnabled(false);
+    setGestureStatus('');
+    setGestureLatency(null);
+    pendingGestureRef.current = null;
+    if (pendingTimerRef.current) {
+      window.clearTimeout(pendingTimerRef.current);
+      pendingTimerRef.current = null;
+    }
+    if (detectFrameRef.current) {
+      cancelAnimationFrame(detectFrameRef.current);
+      detectFrameRef.current = null;
+    }
+    if (cameraRef.current) {
+      cameraRef.current.pause();
+    }
+    stopCameraStream();
+  };
+
+  const enableObjectDetection = async () => {
+    if (objectDetectionEnabled) {
+      return;
+    }
+    if (gesturesEnabled) {
+      disableGestures();
+    }
+    try {
+      const sessionId = ++objectSessionRef.current;
+      setObjectStatus('Starting camera...');
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+      if (sessionId !== objectSessionRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      if (cameraRef.current) {
+        cameraRef.current.srcObject = stream;
+        await cameraRef.current.play();
+      }
+      setObjectDetectionEnabled(true);
+      setObjectStatus('Object detection on');
+      startObjectLoop();
+    } catch {
+      setObjectStatus('Camera permission blocked.');
+    }
+  };
+
+  const disableObjectDetection = () => {
+    objectSessionRef.current += 1;
+    setObjectDetectionEnabled(false);
+    setObjectStatus('');
+    setObjectLatency(null);
+    if (detectFrameRef.current) {
+      cancelAnimationFrame(detectFrameRef.current);
+      detectFrameRef.current = null;
+    }
+    if (cameraRef.current) {
+      cameraRef.current.pause();
+    }
+    stopCameraStream();
   };
 
   const stopRecording = () => {
@@ -1019,6 +1488,33 @@ function App() {
           <button className="btn ghost back-to-landing" onClick={() => setShowLanding(true)}>
             Back
           </button>
+          <div className="settings">
+            <button className="btn ghost" onClick={() => setSettingsOpen((prev) => !prev)}>
+              Settings
+            </button>
+            {settingsOpen ? (
+              <div className="settings-menu">
+                <button
+                  className={`btn ghost ${gesturesEnabled ? 'active' : ''}`}
+                  onClick={gesturesEnabled ? disableGestures : enableGestures}
+                >
+                  {gesturesEnabled ? 'Gestures on' : 'Gestures off'}
+                </button>
+                <button
+                  className={`btn ghost ${objectDetectionEnabled ? 'active' : ''}`}
+                  onClick={objectDetectionEnabled ? disableObjectDetection : enableObjectDetection}
+                >
+                  {objectDetectionEnabled ? 'Object detection on' : 'Object detection off'}
+                </button>
+                <button
+                  className={`btn ghost ${clonedVoiceId ? 'active' : ''}`}
+                  onClick={() => { setShowVoiceClone((p) => !p); setSettingsOpen(false); }}
+                >
+                  {clonedVoiceId ? 'Voice cloned ✓' : 'Clone voice'}
+                </button>
+              </div>
+            ) : null}
+          </div>
         </header>
 
         {isCharacterSlide ? (
@@ -1056,8 +1552,16 @@ function App() {
         <footer className="story-bar">
           <div className="story-text">
             <p>{slide.body}</p>
-            {speechText ? <div className="speech-preview">Heard: "{speechText}"</div> : null}
+            {speechText ? <div className="speech-preview">Heard: “{speechText}”</div> : null}
             {speechError ? <div className="speech-preview speech-error">{speechError}</div> : null}
+            {gestureStatus ? <div className="speech-preview">{gestureStatus}</div> : null}
+            {gestureLatency !== null ? (
+              <div className="speech-preview">Gesture latency: {gestureLatency}ms + 600ms delay</div>
+            ) : null}
+            {objectStatus ? <div className="speech-preview">{objectStatus}</div> : null}
+            {objectLatency !== null ? (
+              <div className="speech-preview">Object latency: {objectLatency}ms</div>
+            ) : null}
             {isCharacterSlide ? (
               <div className="speech-preview">
                 {isCharacterRecording
@@ -1065,7 +1569,7 @@ function App() {
                   : isCharacterThinking
                     ? `${activeCharacterName}: thinking...`
                       : `${activeCharacterName}: ready.`}
-                {characterReply ? ` "${characterReply}"` : ''}
+                {characterReply ? ` “${characterReply}”` : ''}
               </div>
             ) : null}
             {characterError ? <div className="speech-preview speech-error">{characterError}</div> : null}
@@ -1073,6 +1577,11 @@ function App() {
             {error ? <div className="error-box">{error}</div> : null}
           </div>
           <div className="story-actions">
+            {streamNeedsGesture ? (
+              <button className="btn accent" onClick={handleStartStreamPlayback}>
+                Start stream
+              </button>
+            ) : null}
             {isCharacterSlide ? (
               <button
                 className="btn accent"
@@ -1108,9 +1617,77 @@ function App() {
                 {isRecording || isListeningBrowser ? 'Stop' : isTranscribing ? '...' : 'Speak'}
               </button>
             </div>
-          </div>
-        </footer>
+        </div>
+      </footer>
       </div>
+
+      <video ref={cameraRef} className="camera-feed" playsInline muted />
+
+      <canvas ref={canvasRef} className="camera-feed" />
+
+      {showVoiceClone ? (
+        <div className="voice-clone-panel">
+          <div className="voice-clone-inner">
+            <div className="voice-clone-header">
+              <span>Clone Your Voice</span>
+              <button className="btn ghost voice-clone-close" onClick={() => setShowVoiceClone(false)}>✕</button>
+            </div>
+            <p className="voice-clone-hint">
+              Record or upload between <strong>10–15 seconds</strong> of your voice.
+              It will be used to power the character TTS.
+            </p>
+
+            {clonedVoiceId ? (
+              <div className="voice-clone-success">
+                Voice cloned! Your voice is now active for TTS.
+                <button
+                  className="btn ghost"
+                  style={{ marginTop: 8 }}
+                  onClick={() => { setClonedVoiceId(null); setVoiceCloneStatus('idle'); setVoiceCloneDuration(0); }}
+                >
+                  Remove clone
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="voice-clone-actions">
+                  <button
+                    className={`btn accent ${voiceCloneStatus === 'recording' ? 'active' : ''}`}
+                    onClick={startVoiceCloneRecording}
+                    disabled={voiceCloneStatus === 'uploading'}
+                  >
+                    {voiceCloneStatus === 'recording'
+                      ? `Stop (${voiceCloneDuration}s)`
+                      : voiceCloneStatus === 'uploading'
+                        ? 'Processing...'
+                        : 'Record voice'}
+                  </button>
+                  <label className="upload-pill">
+                    <input
+                      type="file"
+                      accept="audio/wav,audio/mp3,audio/mpeg,audio/webm,audio/ogg,.wav,.mp3,.webm,.ogg"
+                      onChange={(e) => { const f = e.target.files?.[0]; if (f) handleVoiceCloneFile(f); e.target.value = ''; }}
+                      disabled={voiceCloneStatus === 'recording' || voiceCloneStatus === 'uploading'}
+                    />
+                    <span>Upload audio</span>
+                  </label>
+                </div>
+                {voiceCloneStatus === 'recording' && (
+                  <div className="voice-clone-timer">
+                    {voiceCloneDuration < 10
+                      ? `Keep recording… ${10 - voiceCloneDuration}s to minimum`
+                      : voiceCloneDuration < 15
+                        ? `${voiceCloneDuration}s — tap Stop (auto-stops at 15s)`
+                        : 'Finalising…'}
+                  </div>
+                )}
+              </>
+            )}
+
+            {voiceCloneError ? <div className="voice-clone-error">{voiceCloneError}</div> : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
