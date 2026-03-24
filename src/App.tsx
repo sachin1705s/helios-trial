@@ -53,9 +53,9 @@ function App() {
   const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(characters[0]?.id ?? null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [streamState, setStreamState] = useState<StreamState>('idle');
-  const [error, setError] = useState<string | null>(null);
+  const [_error, setError] = useState<string | null>(null);
   const [isStreamingReady, setIsStreamingReady] = useState(false);
-  const [speechText, setSpeechText] = useState('');
+  const [_speechText, setSpeechText] = useState('');
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -69,7 +69,7 @@ function App() {
   const [moderationError, setModerationError] = useState<string | null>(null);
   const [characterHistory, setCharacterHistory] = useState<Record<string, Array<{ role: 'user' | 'assistant'; content: string }>>>({});
   const [uploadImage, setUploadImage] = useState<File | null>(null);
-  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [_uploadError, setUploadError] = useState<string | null>(null);
   const [voiceStatus, setVoiceStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
   const [, setVoiceError] = useState<string | null>(null);
   const [, setLastVoiceText] = useState<string | null>(null);
