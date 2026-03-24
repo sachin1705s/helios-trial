@@ -1,73 +1,46 @@
-# React + TypeScript + Vite
+# Interact Studio
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Interactive AI character platform at [interactstudio.space](https://interactstudio.space).
 
-Currently, two official plugins are available:
+Talk to historical figures, animals, and fictional characters in real time — powered by generative media and voice.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Stack
 
-## React Compiler
+- **Frontend:** React 18 + TypeScript + Vite
+- **Backend:** Express (served as a single Vercel serverless function)
+- **AI:** Odyssey ML (avatar streaming), Google Gemini (character intelligence), Smallest AI (voice synthesis)
+- **Deployment:** Vercel + custom domain
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Getting started
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+cp .env.example .env   # fill in your API keys
+npm install
+npm run dev            # starts Vite (port 5173) + Express (port 8787) concurrently
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Environment variables
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+| Variable | Description |
+|----------|-------------|
+| `ODYSSEY_API_KEY` | Avatar video streaming |
+| `GEMINI_API_KEY` | Character chat + intelligence |
+| `SMALLEST_API_KEY` | Voice synthesis (TTS) |
+| `ALLOWED_ORIGINS` | Comma-separated allowed CORS origins in production |
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Deployment
+
+Configured for Vercel. Set env vars in the Vercel dashboard, then:
+
+```bash
+vercel --prod
 ```
+
+The `vercel.json` routes all `/api/*` traffic to a single Express function at `api/server.js`.
+
+## Branch structure
+
+| Branch | Purpose |
+|--------|---------|
+| `main` | Production — what ships to interactstudio.space |
+| `experiments` | Experimental features (gesture control, voice cloning, voice agents) |
