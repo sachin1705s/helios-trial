@@ -892,6 +892,16 @@
   overflow: hidden;
 }
 
+.contact-page {
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+.contact-email {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
 .landing-footer {
   position: relative;
   margin-top: 48px;

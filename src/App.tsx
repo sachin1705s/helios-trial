@@ -51,6 +51,7 @@ function App() {
   const [apiKey, setApiKey] = useState<string | undefined>(undefined);
   const [showLanding, setShowLanding] = useState(true);
   const [showAbout, setShowAbout] = useState(false);
+  const [showContact, setShowContact] = useState(false);
   const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(characters[0]?.id ?? null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [streamState, setStreamState] = useState<StreamState>('idle');
@@ -169,9 +170,12 @@ function App() {
 
   useEffect(() => {
     const syncFromLocation = () => {
-      const isAbout = window.location.pathname === '/about-us';
+      const path = window.location.pathname;
+      const isAbout = path === '/about-us';
+      const isContact = path === '/contact';
       setShowAbout(isAbout);
-      if (isAbout) {
+      setShowContact(isContact);
+      if (isAbout || isContact) {
         setShowLanding(true);
       }
     };
@@ -1088,6 +1092,7 @@ function App() {
     setCharacterReply(null);
     setSelectedCharacterId(id);
     setShowAbout(false);
+    setShowContact(false);
     setShowLanding(false);
     window.history.pushState({}, '', '/');
   };
@@ -1105,6 +1110,7 @@ function App() {
                 onClick={() => {
                   setShowLanding(true);
                   setShowAbout(false);
+                  setShowContact(false);
                   setSelectedCharacterId((prev) => prev ?? (characters[0]?.id ?? null));
                   window.history.pushState({}, '', '/');
                 }}
@@ -1113,7 +1119,19 @@ function App() {
               </button>
             </div>
             <div className="landing-actions">
-              <a className="btn primary" href="mailto:hello.interactstudio@gmail.com">Get in touch</a>
+              <a
+                className="btn primary"
+                href="/contact"
+                onClick={(event) => {
+                  event.preventDefault();
+                  setShowContact(true);
+                  setShowAbout(false);
+                  setShowLanding(true);
+                  window.history.pushState({}, '', '/contact');
+                }}
+              >
+                Get in touch
+              </a>
             </div>
           </header>
           <section className="landing-intro">
@@ -1123,6 +1141,54 @@ function App() {
               Interact Studio is an experiment in live storytelling. We blend world models,
               generative media, and voice to create characters that feel present, responsive,
               and emotionally expressive. Our goal is simple: make conversation move the world.
+            </p>
+          </section>
+        </div>
+      </div>
+    );
+  }
+
+  if (showLanding && showContact) {
+    const contactEmail = 'hello.interactstudio@gmail.com';
+    return (
+      <div className="app landing-shell contact-page">
+        <div className="landing-hero">
+          <div className="landing-hero-bg" aria-hidden />
+          <header className="landing-topbar">
+            <div className="brand">
+              <button
+                type="button"
+                className="brand-mark"
+                onClick={() => {
+                  setShowLanding(true);
+                  setShowAbout(false);
+                  setShowContact(false);
+                  setSelectedCharacterId((prev) => prev ?? (characters[0]?.id ?? null));
+                  window.history.pushState({}, '', '/');
+                }}
+              >
+                Interact Studio
+              </button>
+            </div>
+            <div className="landing-actions">
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={() => {
+                  if (navigator?.clipboard?.writeText) {
+                    navigator.clipboard.writeText(contactEmail).catch(() => undefined);
+                  }
+                }}
+              >
+                Copy email
+              </button>
+            </div>
+          </header>
+          <section className="landing-intro">
+            <p className="eyebrow">Contact</p>
+            <h1 className="hero-title">Get in touch.</h1>
+            <p className="landing-subtitle">
+              Email us at <span className="contact-email">{contactEmail}</span> and we will get back to you.
             </p>
           </section>
         </div>
@@ -1143,6 +1209,7 @@ function App() {
                 onClick={() => {
                   setShowLanding(true);
                   setShowAbout(false);
+                  setShowContact(false);
                   setSelectedCharacterId((prev) => prev ?? (characters[0]?.id ?? null));
                   window.history.pushState({}, '', '/');
                 }}
@@ -1157,13 +1224,26 @@ function App() {
                 onClick={(event) => {
                   event.preventDefault();
                   setShowAbout(true);
+                  setShowContact(false);
                   setShowLanding(true);
                   window.history.pushState({}, '', '/about-us');
                 }}
               >
                 About us
               </a>
-              <a className="btn primary" href="mailto:hello.interactstudio@gmail.com">Get in touch</a>
+              <a
+                className="btn primary"
+                href="/contact"
+                onClick={(event) => {
+                  event.preventDefault();
+                  setShowContact(true);
+                  setShowAbout(false);
+                  setShowLanding(true);
+                  window.history.pushState({}, '', '/contact');
+                }}
+              >
+                Get in touch
+              </a>
             </div>
           </header>
 
