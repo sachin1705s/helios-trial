@@ -378,7 +378,11 @@ function App() {
         return;
       }
       const streamOptions = { prompt: slide.prompt, image: file, portrait: slide.id === 'characters-sudharshan' };
-      retryStreamRef.current = () => service.startStream(streamOptions).then(() => undefined);
+      const myRequestId = requestId;
+      retryStreamRef.current = () => {
+        if (requestIdRef.current !== myRequestId) return Promise.resolve();
+        return service.startStream(streamOptions).then(() => undefined);
+      };
       console.log('[odyssey] calling startStream — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
       await service.startStream(streamOptions);
       console.log('[odyssey] startStream resolved');
@@ -393,6 +397,14 @@ function App() {
       setError(err instanceof Error ? err.message : String(err));
     });
   }, [connectionStatus, showLanding, selectedCharacterId, slide.id, slide.image, slide.prompt, isUploadSlide]);
+
+  // End the stream when the user navigates back to the landing page so the session isn't consumed idle.
+  useEffect(() => {
+    if (!showLanding) return;
+    ++requestIdRef.current; // Invalidate any pending retry closure
+    retryStreamRef.current = null;
+    serviceRef.current?.endStream().catch(() => undefined);
+  }, [showLanding]);
 
 
   useEffect(() => {
