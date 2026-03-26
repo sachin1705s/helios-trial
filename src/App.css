@@ -843,6 +843,11 @@
 .brand-mark {
   font-family: 'Fraunces', serif;
   font-size: 1.1rem;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
 }
 
 .landing-nav {

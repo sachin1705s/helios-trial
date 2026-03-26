@@ -363,12 +363,16 @@ function App() {
     setModerationError(null);
 
     const run = async () => {
-      await service.endStream().catch(() => undefined);
       if (isUploadSlide) {
         retryStreamRef.current = null;
+        await service.endStream().catch(() => undefined);
         setStreamState('idle');
         return;
       }
+
+      // Load image BEFORE ending the old stream so retryStreamRef is updated
+      // with the new character's options before onStreamEnded fires.
+      // This prevents onStreamEnded from auto-restarting the wrong character.
       const cached = imageCacheRef.current.get(slide.id);
       const file = cached ?? (await loadImageFile(slide.image, `${slide.id}.png`));
       if (!cached) {
@@ -377,12 +381,14 @@ function App() {
       if (requestIdRef.current !== requestId) {
         return;
       }
+
       const streamOptions = { prompt: slide.prompt, image: file, portrait: slide.id === 'characters-sudharshan' };
-      const myRequestId = requestId;
-      retryStreamRef.current = () => {
-        if (requestIdRef.current !== myRequestId) return Promise.resolve();
-        return service.startStream(streamOptions).then(() => undefined);
-      };
+      retryStreamRef.current = () => service.startStream(streamOptions).then(() => undefined);
+
+      await service.endStream().catch(() => undefined);
+      if (requestIdRef.current !== requestId) {
+        return;
+      }
       console.log('[odyssey] calling startStream — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
       await service.startStream(streamOptions);
       console.log('[odyssey] startStream resolved');
@@ -1044,10 +1050,19 @@ function App() {
           <div className="landing-hero-bg" aria-hidden />
           <header className="landing-topbar">
             <div className="brand">
-              <span className="brand-mark">Interact Studio</span>
+              <button
+                type="button"
+                className="brand-mark"
+                onClick={() => {
+                  setShowLanding(true);
+                  setSelectedCharacterId((prev) => prev ?? (characters[0]?.id ?? null));
+                }}
+              >
+                Interact Studio
+              </button>
             </div>
             <div className="landing-actions">
-              <button className="btn ghost" onClick={() => { setSelectedCharacterId(null); setShowLanding(false); }}>About us</button>
+              <a className="btn ghost" href="https://interactstudio.space/about-us">About us</a>
               <a className="btn primary" href="mailto:hello.interactstudio@gmail.com">Get in touch</a>
             </div>
           </header>
@@ -1108,10 +1123,18 @@ function App() {
           <div className="landing-hero-bg" aria-hidden />
           <header className="landing-topbar">
             <div className="brand">
-              <span className="brand-mark">Interact Studio</span>
+              <button
+                type="button"
+                className="brand-mark"
+                onClick={() => {
+                  setShowLanding(true);
+                  setSelectedCharacterId((prev) => prev ?? (characters[0]?.id ?? null));
+                }}
+              >
+                Interact Studio
+              </button>
             </div>
             <div className="landing-actions">
-              <button className="btn ghost" onClick={() => setShowLanding(true)}>Back</button>
               <a className="btn primary" href="mailto:hello.interactstudio@gmail.com">Get in touch</a>
             </div>
           </header>

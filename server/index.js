@@ -723,7 +723,15 @@ app.post('/api/character/chat', aiLimiter, async (req, res) => {
     }
     const response = await ai.models.generateContent(generateParams);
 
-    const raw = response.text?.trim() || '';
+    let raw = '';
+    try {
+      raw = response.text?.trim() || '';
+    } catch (textErr) {
+      // response.text throws when content is blocked by safety filters
+      const finishReason = response.candidates?.[0]?.finishReason;
+      console.warn('[character/chat] response.text threw (finishReason:', finishReason, '):', textErr?.message);
+      return res.json({ reply: "I'm not able to respond to that. Try asking me something else!", action: '', objects: [], sources: [], searchUsed: false });
+    }
     let parsed = null;
     try {
       parsed = JSON.parse(raw);
@@ -783,7 +791,8 @@ app.post('/api/character/chat', aiLimiter, async (req, res) => {
     }
 
     return res.json({ reply, action, objects, sources, searchUsed: enableSearch });
-  } catch {
+  } catch (err) {
+    console.error('[character/chat] error:', err?.message || err, err?.stack);
     return res.status(500).json({ error: 'Chat failed.' });
   }
 });
