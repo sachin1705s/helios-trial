@@ -167,6 +167,7 @@ function App() {
 
 
   useEffect(() => {
+    if (showLanding) return; // Wait until user has selected a character before connecting
     let cancelled = false;
     const requestToken = async () => {
       try {
@@ -196,7 +197,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [showLanding]);
 
   useEffect(() => {
     const handleBeforeUnload = () => {
@@ -250,10 +251,7 @@ function App() {
 
 
   useEffect(() => {
-    if (!apiKey) {
-      setError('Missing Odyssey API key. Set ODYSSEY_API_KEY in your server environment.');
-      return;
-    }
+    if (!apiKey) return; // Token not yet fetched — wait for character selection
 
     const service = new OdysseyService(apiKey);
     serviceRef.current = service;
@@ -997,30 +995,6 @@ function App() {
     return true;
   };
 
-  const handleSpeakWish = () => {
-    if (isTranscribing) {
-      return;
-    }
-    if (isRecording) {
-      stopRecording();
-      return;
-    }
-    if (isListeningBrowser) {
-      recognitionRef.current?.stop();
-      setIsListeningBrowser(false);
-      return;
-    }
-    setSpeechError(null);
-    startBackendRecording();
-  };
-
-  const stopRecording = () => {
-    if (!isRecording) {
-      return;
-    }
-    mediaRecorderRef.current?.stop();
-  };
-
   // Keep PTT refs pointing to latest function instances to avoid stale closures
   pttStartRef.current = () => {
     setSpeechError(null);
@@ -1248,9 +1222,6 @@ function App() {
               />
               <button className="btn ghost" onClick={handleTextPromptSubmit} disabled={!isStreamingReady}>
                 Send
-              </button>
-              <button className="btn ghost" onClick={handleSpeakWish} disabled={!isStreamingReady}>
-                {isRecording || isListeningBrowser ? 'Stop' : isTranscribing ? '...' : 'Speak'}
               </button>
             </div>
           </div>
