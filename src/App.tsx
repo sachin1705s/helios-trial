@@ -1078,10 +1078,36 @@ function App() {
   if (showLanding && showAbout) {
     return (
       <div className="app landing-shell about-page">
-        <div className="about-copy">
-          Interact Studio is an experiment in live storytelling. We blend world models,
-          generative media, and voice to create characters that feel present, responsive,
-          and emotionally expressive. Our goal is simple: make conversation move the world.
+        <div className="landing-hero">
+          <div className="landing-hero-bg" aria-hidden />
+          <header className="landing-topbar">
+            <div className="brand">
+              <button
+                type="button"
+                className="brand-mark"
+                onClick={() => {
+                  setShowLanding(true);
+                  setShowAbout(false);
+                  setSelectedCharacterId((prev) => prev ?? (characters[0]?.id ?? null));
+                  window.history.pushState({}, '', '/');
+                }}
+              >
+                Interact Studio
+              </button>
+            </div>
+            <div className="landing-actions">
+              <a className="btn primary" href="mailto:hello.interactstudio@gmail.com">Get in touch</a>
+            </div>
+          </header>
+          <section className="landing-intro">
+            <p className="eyebrow">About us</p>
+            <h1 className="hero-title">We build worlds that listen.</h1>
+            <p className="landing-subtitle">
+              Interact Studio is an experiment in live storytelling. We blend world models,
+              generative media, and voice to create characters that feel present, responsive,
+              and emotionally expressive. Our goal is simple: make conversation move the world.
+            </p>
+          </section>
         </div>
       </div>
     );
