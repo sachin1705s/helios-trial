@@ -1171,17 +1171,19 @@ function App() {
               </button>
             </div>
             <div className="landing-actions">
-              <button
-                type="button"
+              <a
                 className="btn ghost"
-                onClick={() => {
-                  if (navigator?.clipboard?.writeText) {
-                    navigator.clipboard.writeText(contactEmail).catch(() => undefined);
-                  }
+                href="/about-us"
+                onClick={(event) => {
+                  event.preventDefault();
+                  setShowAbout(true);
+                  setShowContact(false);
+                  setShowLanding(true);
+                  window.history.pushState({}, '', '/about-us');
                 }}
               >
-                Copy email
-              </button>
+                About us
+              </a>
             </div>
           </header>
           <section className="landing-intro">
