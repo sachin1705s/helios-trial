@@ -388,14 +388,18 @@ function App() {
         return;
       }
 
+      console.log('[run] endStream start — slide:', slide.id, 'requestId:', requestId);
       await service.endStream().catch(() => undefined);
+      console.log('[run] endStream done — slide:', slide.id, 'requestId:', requestId);
 
       const cached = imageCacheRef.current.get(slide.id);
       const file = cached ?? (await loadImageFile(slide.image, `${slide.id}.png`));
       if (!cached) {
         imageCacheRef.current.set(slide.id, file);
       }
+      console.log('[run] image ready — requestIdRef:', requestIdRef.current, 'requestId:', requestId);
       if (requestIdRef.current !== requestId) {
+        console.log('[run] bailing — superseded by newer requestId');
         return;
       }
 
@@ -1069,6 +1073,7 @@ function App() {
     });
     characterOpenedAtRef.current = Date.now();
     hasLoggedFirstPromptRef.current = false;
+    setCharacterReply(null);
     setSelectedCharacterId(id);
     setShowAbout(false);
     setShowLanding(false);
