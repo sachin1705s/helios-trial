@@ -50,6 +50,7 @@ function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
 function App() {
   const [apiKey, setApiKey] = useState<string | undefined>(undefined);
   const [showLanding, setShowLanding] = useState(true);
+  const [showAbout, setShowAbout] = useState(false);
   const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(characters[0]?.id ?? null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [streamState, setStreamState] = useState<StreamState>('idle');
@@ -164,6 +165,20 @@ function App() {
   const activeCharacterHistory = slide ? characterHistory[slide.id] ?? [] : [];
   const slideCtaRef = useRef('');
 
+
+  useEffect(() => {
+    const syncFromLocation = () => {
+      const isAbout = window.location.pathname === '/about-us';
+      setShowAbout(isAbout);
+      if (isAbout) {
+        setShowLanding(true);
+      }
+    };
+    syncFromLocation();
+    const onPopState = () => syncFromLocation();
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
 
   useEffect(() => {
     if (showLanding) return; // Wait until user has selected a character before connecting
@@ -1055,7 +1070,9 @@ function App() {
     characterOpenedAtRef.current = Date.now();
     hasLoggedFirstPromptRef.current = false;
     setSelectedCharacterId(id);
+    setShowAbout(false);
     setShowLanding(false);
+    window.history.pushState({}, '', '/');
   };
 
   if (showLanding) {
@@ -1070,14 +1087,27 @@ function App() {
                 className="brand-mark"
                 onClick={() => {
                   setShowLanding(true);
+                  setShowAbout(false);
                   setSelectedCharacterId((prev) => prev ?? (characters[0]?.id ?? null));
+                  window.history.pushState({}, '', '/');
                 }}
               >
                 Interact Studio
               </button>
             </div>
             <div className="landing-actions">
-              <a className="btn ghost" href="https://interactstudio.space/about-us">About us</a>
+              <a
+                className="btn ghost"
+                href="/about-us"
+                onClick={(event) => {
+                  event.preventDefault();
+                  setShowAbout(true);
+                  setShowLanding(true);
+                  window.history.pushState({}, '', '/about-us');
+                }}
+              >
+                About us
+              </a>
               <a className="btn primary" href="mailto:hello.interactstudio@gmail.com">Get in touch</a>
             </div>
           </header>
@@ -1131,7 +1161,7 @@ function App() {
     );
   }
 
-  if (!showLanding && !selectedCharacterId) {
+  if (showLanding && showAbout) {
     return (
       <div className="app landing-shell about-page">
         <div className="landing-hero">
@@ -1143,7 +1173,9 @@ function App() {
                 className="brand-mark"
                 onClick={() => {
                   setShowLanding(true);
+                  setShowAbout(false);
                   setSelectedCharacterId((prev) => prev ?? (characters[0]?.id ?? null));
+                  window.history.pushState({}, '', '/');
                 }}
               >
                 Interact Studio
