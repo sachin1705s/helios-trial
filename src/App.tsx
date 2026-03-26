@@ -378,28 +378,32 @@ function App() {
     setModerationError(null);
 
     const run = async () => {
-      // Clear retry immediately so onStreamEnded (fired by endStream below) does not
-      // auto-restart the previous character while we are transitioning.
+      // Clear retry immediately so onStreamEnded does not auto-restart the previous
+      // character while we are transitioning.
       retryStreamRef.current = null;
 
+      // Capture whether a stream is currently live BEFORE React flushes the
+      // setIsStreamingReady(false) we called above — the ref still holds the old value.
+      // Only call endStream when there is actually something to end; calling it on an
+      // idle connection causes the Odyssey library to hang the promise indefinitely.
+      const hadActiveStream = isStreamingReadyRef.current;
+
       if (isUploadSlide) {
-        await service.endStream().catch(() => undefined);
+        if (hadActiveStream) await service.endStream().catch(() => undefined);
         setStreamState('idle');
         return;
       }
 
-      console.log('[run] endStream start — slide:', slide.id, 'requestId:', requestId);
-      await service.endStream().catch(() => undefined);
-      console.log('[run] endStream done — slide:', slide.id, 'requestId:', requestId);
+      if (hadActiveStream) {
+        await service.endStream().catch(() => undefined);
+      }
 
       const cached = imageCacheRef.current.get(slide.id);
       const file = cached ?? (await loadImageFile(slide.image, `${slide.id}.png`));
       if (!cached) {
         imageCacheRef.current.set(slide.id, file);
       }
-      console.log('[run] image ready — requestIdRef:', requestIdRef.current, 'requestId:', requestId);
       if (requestIdRef.current !== requestId) {
-        console.log('[run] bailing — superseded by newer requestId');
         return;
       }
 
@@ -426,7 +430,9 @@ function App() {
     if (!showLanding) return;
     ++requestIdRef.current; // Invalidate any pending retry closure
     retryStreamRef.current = null;
-    serviceRef.current?.endStream().catch(() => undefined);
+    if (isStreamingReadyRef.current) {
+      serviceRef.current?.endStream().catch(() => undefined);
+    }
   }, [showLanding]);
 
 
