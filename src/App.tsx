@@ -90,6 +90,7 @@ function App() {
   const retryStreamRef = useRef<(() => Promise<void>) | null>(null);
   const moderationRetryCountRef = useRef(0);
   const isStreamingReadyRef = useRef(false);
+  const streamActiveRef = useRef(false); // Set directly in Odyssey callbacks — no React cycle
   const isVoiceAgentSlideRef = useRef(false);
   const lastVoiceActionAtRef = useRef(0);
   const handleInteractRef = useRef<(promptOverride?: string) => void>(() => undefined);
@@ -293,12 +294,14 @@ function App() {
         },
         onStreamStarted: () => {
           console.log('[odyssey] onStreamStarted');
+          streamActiveRef.current = true;
           setStreamState('streaming');
           setIsStreamingReady(true);
           setModerationError(null);
         },
         onStreamEnded: () => {
           console.log('[odyssey] onStreamEnded');
+          streamActiveRef.current = false;
           setStreamState('ended');
           setIsStreamingReady(false);
           // Auto-restart the stream so interact() keeps working
@@ -313,6 +316,7 @@ function App() {
         },
         onStreamError: (reason, message) => {
           console.error('[odyssey] onStreamError:', reason, message);
+          streamActiveRef.current = false;
           setStreamState('error');
           setIsStreamingReady(false);
           const r = typeof reason === 'string' ? reason : JSON.stringify(reason);
@@ -339,6 +343,7 @@ function App() {
         },
         onError: (err) => {
           console.error('[odyssey] onError:', err);
+          streamActiveRef.current = false;
           setStreamState('error');
           setIsStreamingReady(false);
           if (err.message?.includes('moderation_failed')) {
@@ -382,11 +387,11 @@ function App() {
       // character while we are transitioning.
       retryStreamRef.current = null;
 
-      // Capture whether a stream is currently live BEFORE React flushes the
-      // setIsStreamingReady(false) we called above — the ref still holds the old value.
-      // Only call endStream when there is actually something to end; calling it on an
-      // idle connection causes the Odyssey library to hang the promise indefinitely.
-      const hadActiveStream = isStreamingReadyRef.current;
+      // Read and immediately clear streamActiveRef atomically.
+      // This ref is set directly in Odyssey callbacks (not via useEffect), so it
+      // accurately reflects whether a stream is live right now — no React cycle lag.
+      const hadActiveStream = streamActiveRef.current;
+      streamActiveRef.current = false;
 
       if (isUploadSlide) {
         if (hadActiveStream) await service.endStream().catch(() => undefined);
@@ -430,7 +435,8 @@ function App() {
     if (!showLanding) return;
     ++requestIdRef.current; // Invalidate any pending retry closure
     retryStreamRef.current = null;
-    if (isStreamingReadyRef.current) {
+    if (streamActiveRef.current) {
+      streamActiveRef.current = false;
       serviceRef.current?.endStream().catch(() => undefined);
     }
   }, [showLanding]);
