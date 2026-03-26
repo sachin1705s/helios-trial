@@ -363,16 +363,18 @@ function App() {
     setModerationError(null);
 
     const run = async () => {
+      // Clear retry immediately so onStreamEnded (fired by endStream below) does not
+      // auto-restart the previous character while we are transitioning.
+      retryStreamRef.current = null;
+
       if (isUploadSlide) {
-        retryStreamRef.current = null;
         await service.endStream().catch(() => undefined);
         setStreamState('idle');
         return;
       }
 
-      // Load image BEFORE ending the old stream so retryStreamRef is updated
-      // with the new character's options before onStreamEnded fires.
-      // This prevents onStreamEnded from auto-restarting the wrong character.
+      await service.endStream().catch(() => undefined);
+
       const cached = imageCacheRef.current.get(slide.id);
       const file = cached ?? (await loadImageFile(slide.image, `${slide.id}.png`));
       if (!cached) {
@@ -385,10 +387,6 @@ function App() {
       const streamOptions = { prompt: slide.prompt, image: file, portrait: slide.id === 'characters-sudharshan' };
       retryStreamRef.current = () => service.startStream(streamOptions).then(() => undefined);
 
-      await service.endStream().catch(() => undefined);
-      if (requestIdRef.current !== requestId) {
-        return;
-      }
       console.log('[odyssey] calling startStream — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
       await service.startStream(streamOptions);
       console.log('[odyssey] startStream resolved');
@@ -457,7 +455,7 @@ function App() {
   }, [showLanding]);
 
   const pttActiveRef = useRef(false);
-  const pttStartRef = useRef<() => void>(() => {});
+  const pttStartRef = useRef<() => boolean>(() => false);
   const pttStopRef = useRef<() => void>(() => {});
 
   useEffect(() => {
@@ -466,8 +464,8 @@ function App() {
         e.preventDefault();
         e.stopPropagation();
         (document.activeElement as HTMLElement | null)?.blur();
-        pttActiveRef.current = true;
-        pttStartRef.current();
+        const started = pttStartRef.current();
+        pttActiveRef.current = started;
       }
     };
 
@@ -1012,9 +1010,26 @@ function App() {
   // Keep PTT refs pointing to latest function instances to avoid stale closures
   pttStartRef.current = () => {
     setSpeechError(null);
+    if (isCharacterSlide) {
+      if (isCharacterRecording || isCharacterThinking) {
+        return false;
+      }
+      startCharacterRecording();
+      return true;
+    }
+    if (isRecording || isTranscribing) {
+      return false;
+    }
     startBackendRecording();
+    return true;
   };
   pttStopRef.current = () => {
+    if (isCharacterSlide) {
+      if (isCharacterRecording) {
+        stopCharacterRecording();
+      }
+      return;
+    }
     recognitionRef.current?.stop();
     if (mediaRecorderRef.current?.state === 'recording') {
       mediaRecorderRef.current.stop();
