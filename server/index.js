@@ -1098,6 +1098,48 @@ app.post('/api/chat', aiLimiter, async (req, res) => {
   }
 });
 
+// ─── Logging ──────────────────────────────────────────────────────────────────
+const LOG_KEY = 'logs:all';
+const LOG_MAX = 10_000;
+
+app.post('/api/log', async (req, res) => {
+  if (useRedis) {
+    try {
+      const event = String(req.body?.event ?? '').trim().slice(0, 100);
+      const data = req.body?.data && typeof req.body.data === 'object' ? req.body.data : {};
+      const timestamp = String(req.body?.timestamp ?? new Date().toISOString());
+      if (event) {
+        const entry = JSON.stringify({ event, data, timestamp });
+        await redis.lpush(LOG_KEY, entry);
+        await redis.ltrim(LOG_KEY, 0, LOG_MAX - 1);
+      }
+    } catch (err) {
+      console.warn('[log] write failed:', err?.message);
+    }
+  }
+  return res.json({ ok: true });
+});
+
+app.get('/api/logs', async (req, res) => {
+  if (!useRedis) return res.json([]);
+  try {
+    const limit = Math.min(Number(req.query?.limit ?? 500), 2000);
+    const eventFilter = String(req.query?.event ?? '').trim();
+    const fetchCount = eventFilter ? LOG_MAX : limit;
+    const raw = await redis.lrange(LOG_KEY, 0, fetchCount - 1);
+    let entries = raw.map((r) => {
+      try { return JSON.parse(r); } catch { return null; }
+    }).filter(Boolean);
+    if (eventFilter) {
+      entries = entries.filter((e) => e.event === eventFilter).slice(0, limit);
+    }
+    return res.json(entries);
+  } catch (err) {
+    console.warn('[logs] read failed:', err?.message);
+    return res.json([]);
+  }
+});
+
 // ─── Start (local dev only) ───────────────────────────────────────────────────
 if (!process.env.VERCEL) {
   const port = process.env.PORT || 8787;

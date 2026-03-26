@@ -99,8 +99,13 @@ function App() {
   const characterOpenedAtRef = useRef<number | null>(null);
   const hasLoggedFirstPromptRef = useRef(false);
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const logEvent = (_event: string, _data: Record<string, unknown>) => {};
+  const logEvent = (event: string, data: Record<string, unknown>) => {
+    fetch('/api/log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event, data, timestamp: new Date().toISOString() }),
+    }).catch(() => undefined);
+  };
 
   const logFirstPromptIfNeeded = (characterId: string, characterName: string, inputMethod: string) => {
     if (!hasLoggedFirstPromptRef.current && characterOpenedAtRef.current !== null) {
