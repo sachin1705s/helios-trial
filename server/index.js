@@ -208,7 +208,7 @@ const redisCountSlots = async (keyIndex) => {
   do {
     const [nextCursor, keys] = await redis.scan(cursor, { match: `odyssey:slot:${keyIndex}:*`, count: 100 });
     total += keys.length;
-    cursor = nextCursor;
+    cursor = Number(nextCursor);
   } while (cursor !== 0);
   return total;
 };
@@ -222,7 +222,7 @@ const resetOdysseyPool = async (keys) => {
     do {
       const [nextCursor, keys] = await redis.scan(cursor, { match: 'odyssey:*', count: 100 });
       toDelete.push(...keys);
-      cursor = nextCursor;
+      cursor = Number(nextCursor);
     } while (cursor !== 0);
     if (toDelete.length) await redis.del(...toDelete);
   }
