@@ -59,7 +59,6 @@ function App() {
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
-  const [isListeningBrowser, setIsListeningBrowser] = useState(false);
   const [textPrompt, setTextPrompt] = useState('');
   const [isCharacterRecording, setIsCharacterRecording] = useState(false);
   const [isCharacterThinking, setIsCharacterThinking] = useState(false);
@@ -981,16 +980,13 @@ function App() {
 
     recognition.onerror = () => {
       setSpeechError('Browser speech failed.');
-      setIsListeningBrowser(false);
     };
 
     recognition.onend = () => {
-      setIsListeningBrowser(false);
     };
 
     recognitionRef.current = recognition;
     setSpeechText('');
-    setIsListeningBrowser(true);
     recognition.start();
     return true;
   };
@@ -1002,7 +998,6 @@ function App() {
   };
   pttStopRef.current = () => {
     recognitionRef.current?.stop();
-    setIsListeningBrowser(false);
     if (mediaRecorderRef.current?.state === 'recording') {
       mediaRecorderRef.current.stop();
     }
