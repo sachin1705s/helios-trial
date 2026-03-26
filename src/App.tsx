@@ -1295,6 +1295,10 @@ function App() {
             <div className="landing-footer-links">
               <span>Join our community:</span>
               <a href="https://discord.gg/bSx4Vhyc" target="_blank" rel="noreferrer">Discord</a>
+              <span className="footer-sep">•</span>
+              <a href="https://x.com/interact_studio" target="_blank" rel="noreferrer">X</a>
+              <span className="footer-sep">•</span>
+              <a href="https://www.instagram.com/iinteractstudio/" target="_blank" rel="noreferrer">Instagram</a>
             </div>
             <div className="landing-footer-line" />
           </footer>
