@@ -201,30 +201,27 @@ const memPool = {
   leases: new Map(),
 };
 
-// Count active slot keys for a given key index (Redis TTL handles expiry automatically)
-const redisCountSlots = async (keyIndex) => {
-  let cursor = 0;
-  let total = 0;
-  do {
-    const [nextCursor, keys] = await redis.scan(cursor, { match: `odyssey:slot:${keyIndex}:*`, count: 100 });
-    total += keys.length;
-    cursor = Number(nextCursor);
-  } while (cursor !== 0);
-  return total;
-};
+// Sorted set key per Odyssey API key index — score = expiry timestamp (ms)
+// ZCOUNT key now +inf  → active leases (O(log n), no SCAN)
+// ZADD key score member → add lease
+// ZREM key member       → remove lease
+const slotSetKey = (keyIndex) => `odyssey:slots:${keyIndex}`;
 
 const resetOdysseyPool = async (keys) => {
   memPool.inUse = keys.map(() => 0);
   memPool.leases.clear();
   if (useRedis) {
+    const toDelete = keys.map((_, i) => slotSetKey(i));
+    // Also delete lease lookup keys — scan only runs on manual reset, not on every request
     let cursor = 0;
-    const toDelete = [];
+    const leaseKeys = [];
     do {
-      const [nextCursor, keys] = await redis.scan(cursor, { match: 'odyssey:*', count: 100 });
-      toDelete.push(...keys);
+      const [nextCursor, found] = await redis.scan(cursor, { match: 'odyssey:lease:*', count: 100 });
+      leaseKeys.push(...found);
       cursor = Number(nextCursor);
     } while (cursor !== 0);
-    if (toDelete.length) await redis.del(...toDelete);
+    const all = [...toDelete, ...leaseKeys].filter(Boolean);
+    if (all.length) await redis.del(...all);
   }
 };
 
@@ -233,12 +230,17 @@ const allocateOdysseyLease = async () => {
   if (!keys.length) return null;
 
   if (useRedis) {
+    const now = Date.now();
+    const expiry = now + ODYSSEY_LEASE_TTL_MS;
     for (let keyIndex = 0; keyIndex < keys.length; keyIndex++) {
-      const count = await redisCountSlots(keyIndex);
+      const setKey = slotSetKey(keyIndex);
+      // Remove expired entries then count active — 2 commands, no SCAN
+      await redis.zremrangebyscore(setKey, '-inf', now - 1);
+      const count = await redis.zcount(setKey, now, '+inf');
       if (count >= ODYSSEY_KEY_LIMIT) continue;
       const leaseId = randomUUID();
       await Promise.all([
-        redis.set(`odyssey:slot:${keyIndex}:${leaseId}`, 1, { ex: ODYSSEY_LEASE_TTL_S }),
+        redis.zadd(setKey, { score: expiry, member: leaseId }),
         redis.set(`odyssey:lease:${leaseId}`, keyIndex, { ex: ODYSSEY_LEASE_TTL_S }),
       ]);
       return { leaseId, apiKey: keys[keyIndex], keyIndex };
@@ -267,7 +269,7 @@ const releaseOdysseyLease = async (leaseId) => {
     const keyIndex = await redis.get(`odyssey:lease:${leaseId}`);
     if (keyIndex === null) return false;
     await Promise.all([
-      redis.del(`odyssey:slot:${keyIndex}:${leaseId}`),
+      redis.zrem(slotSetKey(Number(keyIndex)), leaseId),
       redis.del(`odyssey:lease:${leaseId}`),
     ]);
     return true;
@@ -284,8 +286,9 @@ const touchOdysseyLease = async (leaseId) => {
   if (useRedis) {
     const keyIndex = await redis.get(`odyssey:lease:${leaseId}`);
     if (keyIndex === null) return false;
+    const expiry = Date.now() + ODYSSEY_LEASE_TTL_MS;
     await Promise.all([
-      redis.expire(`odyssey:slot:${keyIndex}:${leaseId}`, ODYSSEY_LEASE_TTL_S),
+      redis.zadd(slotSetKey(Number(keyIndex)), { score: expiry, member: leaseId }),
       redis.expire(`odyssey:lease:${leaseId}`, ODYSSEY_LEASE_TTL_S),
     ]);
     return true;
