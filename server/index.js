@@ -1121,6 +1121,10 @@ app.post('/api/log', async (req, res) => {
 });
 
 app.get('/api/logs', async (req, res) => {
+  const logsSecret = process.env.LOGS_SECRET_KEY;
+  if (logsSecret && req.query?.key !== logsSecret) {
+    return res.status(401).json({ error: 'Unauthorized.' });
+  }
   if (!useRedis) return res.json([]);
   try {
     const limit = Math.min(Number(req.query?.limit ?? 500), 2000);
