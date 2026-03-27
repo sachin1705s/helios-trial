@@ -232,6 +232,7 @@
   height: 18px;
   display: block;
   filter: drop-shadow(0 0 6px rgba(244, 75, 58, 0.35));
+  mix-blend-mode: multiply;
 }
 
 .btn.ghost {
