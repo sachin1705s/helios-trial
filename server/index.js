@@ -1128,6 +1128,7 @@ app.get('/api/logs', async (req, res) => {
     const fetchCount = eventFilter ? LOG_MAX : limit;
     const raw = await redis.lrange(LOG_KEY, 0, fetchCount - 1);
     let entries = raw.map((r) => {
+      if (r && typeof r === 'object') return r;
       try { return JSON.parse(r); } catch { return null; }
     }).filter(Boolean);
     if (eventFilter) {
