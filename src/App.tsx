@@ -1382,12 +1382,26 @@ function App() {
                 className="btn accent"
                 onClick={isCharacterRecording ? stopCharacterRecording : startCharacterRecording}
                 disabled={isCharacterThinking}
+                aria-label={
+                  isCharacterRecording
+                    ? 'Stop recording'
+                    : isCharacterThinking
+                      ? 'Thinking'
+                      : `Start recording for ${activeCharacterName}`
+                }
               >
                 {isCharacterRecording
                   ? 'Stop'
                   : isCharacterThinking
                     ? 'Thinking...'
-                      : `Talk to ${activeCharacterName}`}
+                      : (
+                        <img
+                          className="recording-icon"
+                          src="/images/recording_icon.png"
+                          alt=""
+                          aria-hidden="true"
+                        />
+                      )}
               </button>
             ) : null}
             {isUploadSlide ? (
