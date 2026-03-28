@@ -1397,7 +1397,7 @@ function App() {
                       : (
                         <img
                           className="recording-icon"
-                          src="/images/recording_icon.png"
+                          src="/images/recording_icon_v2.png"
                           alt=""
                           aria-hidden="true"
                         />
