@@ -956,6 +956,7 @@ app.post('/api/character/tts', async (req, res) => {
     }
 
     console.log('[character/tts] Smallest AI status:', response.status, response.statusText);
+    console.log('[character/tts] Smallest AI content-type:', response.headers.get('content-type'));
 
     if (!response.ok) {
       clearTimeout(ttsTimeout);
@@ -974,24 +975,39 @@ app.post('/api/character/tts', async (req, res) => {
     const decoder = new TextDecoder();
     let sseBuffer = '';
     let complete = false;
+    let chunksReceived = 0;
+    let bytesWritten = 0;
+    let firstRawLines = null;
     try {
       while (!complete) {
         const { done, value } = await reader.read();
         if (done) break;
 
         sseBuffer += decoder.decode(value, { stream: true });
+
+        // Log the first raw batch so we can verify the SSE format
+        if (firstRawLines === null) {
+          firstRawLines = sseBuffer.slice(0, 400);
+          console.log('[character/tts] first SSE batch (raw):', JSON.stringify(firstRawLines));
+        }
+
         const lines = sseBuffer.split('\n');
         sseBuffer = lines.pop() ?? '';
 
         for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const jsonStr = line.slice(6).trim();
+          if (!line.startsWith('data:')) continue;
+          const jsonStr = line.slice(line.indexOf(':') + 1).trim();
           if (!jsonStr) continue;
           try {
             const event = JSON.parse(jsonStr);
-            if (event.status === 'chunk' && event.data?.audio) {
-              res.write(Buffer.from(event.data.audio, 'base64'));
-            } else if (event.status === 'complete') {
+            // Handle both {data: {audio}} and {audio} nesting styles
+            const audioB64 = event.data?.audio ?? event.audio ?? null;
+            if (audioB64) {
+              const buf = Buffer.from(audioB64, 'base64');
+              res.write(buf);
+              chunksReceived++;
+              bytesWritten += buf.length;
+            } else if (event.status === 'complete' || event.done === true) {
               complete = true;
               break;
             }
@@ -1000,6 +1016,7 @@ app.post('/api/character/tts', async (req, res) => {
       }
     } finally {
       clearTimeout(ttsTimeout);
+      console.log('[character/tts] stream done — chunks:', chunksReceived, 'bytes:', bytesWritten);
       res.end();
     }
   } catch (err) {
