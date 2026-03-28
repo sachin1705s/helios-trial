@@ -931,6 +931,7 @@ app.post('/api/character/tts', async (req, res) => {
     console.log('[character/tts] voice_id:', voiceId, '| streaming PCM');
     const ttsAbort = new AbortController();
     const ttsTimeout = setTimeout(() => ttsAbort.abort(), 30000);
+
     let response;
     try {
       response = await fetch(endpoint, {
@@ -948,59 +949,64 @@ app.post('/api/character/tts', async (req, res) => {
         }),
         signal: ttsAbort.signal,
       });
+    } catch (fetchErr) {
+      clearTimeout(ttsTimeout);
+      console.error('[character/tts] fetch failed:', fetchErr);
+      return res.status(500).json({ error: 'TTS request failed.' });
+    }
 
-      console.log('[character/tts] Smallest AI status:', response.status, response.statusText);
+    console.log('[character/tts] Smallest AI status:', response.status, response.statusText);
 
-      if (!response.ok) {
-        const message = await response.text();
-        console.error('[character/tts] Smallest AI error body:', message);
-        clearTimeout(ttsTimeout);
-        return res.status(500).json({ error: 'TTS failed.', details: message, voiceIdUsed: voiceId });
-      }
+    if (!response.ok) {
+      clearTimeout(ttsTimeout);
+      const message = await response.text();
+      console.error('[character/tts] Smallest AI error body:', message);
+      return res.status(500).json({ error: 'TTS failed.', details: message, voiceIdUsed: voiceId });
+    }
 
-      res.setHeader('Content-Type', 'audio/pcm');
-      res.setHeader('X-Sample-Rate', '24000');
-      res.setHeader('X-Bit-Depth', '16');
-      res.setHeader('X-Channels', '1');
+    res.setHeader('Content-Type', 'audio/pcm');
+    res.setHeader('X-Sample-Rate', '24000');
+    res.setHeader('X-Bit-Depth', '16');
+    res.setHeader('X-Channels', '1');
 
-      // Parse SSE stream, decode base64 PCM chunks, pipe to client as they arrive
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let sseBuffer = '';
-      let complete = false;
-      try {
-        while (!complete) {
-          const { done, value } = await reader.read();
-          if (done) break;
+    // Parse SSE stream, decode base64 PCM chunks, pipe to client as they arrive
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let sseBuffer = '';
+    let complete = false;
+    try {
+      while (!complete) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-          sseBuffer += decoder.decode(value, { stream: true });
-          const lines = sseBuffer.split('\n');
-          sseBuffer = lines.pop() ?? '';
+        sseBuffer += decoder.decode(value, { stream: true });
+        const lines = sseBuffer.split('\n');
+        sseBuffer = lines.pop() ?? '';
 
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const jsonStr = line.slice(6).trim();
-            if (!jsonStr) continue;
-            try {
-              const event = JSON.parse(jsonStr);
-              if (event.status === 'chunk' && event.data?.audio) {
-                res.write(Buffer.from(event.data.audio, 'base64'));
-              } else if (event.status === 'complete') {
-                complete = true;
-                break;
-              }
-            } catch { /* ignore malformed SSE event */ }
-          }
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const jsonStr = line.slice(6).trim();
+          if (!jsonStr) continue;
+          try {
+            const event = JSON.parse(jsonStr);
+            if (event.status === 'chunk' && event.data?.audio) {
+              res.write(Buffer.from(event.data.audio, 'base64'));
+            } else if (event.status === 'complete') {
+              complete = true;
+              break;
+            }
+          } catch { /* ignore malformed SSE event */ }
         }
-      } finally {
-        clearTimeout(ttsTimeout);
-        res.end();
       }
-      return;
-
+    } finally {
+      clearTimeout(ttsTimeout);
+      res.end();
+    }
   } catch (err) {
     console.error('[character/tts] exception:', err);
-    return res.status(500).json({ error: 'TTS failed.' });
+    if (!res.headersSent) {
+      return res.status(500).json({ error: 'TTS failed.' });
+    }
   }
 });
 
