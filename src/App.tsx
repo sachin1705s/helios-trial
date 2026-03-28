@@ -667,32 +667,73 @@ function App() {
         console.error('[tts] server error body:', errBody);
         return;
       }
-      const arrayBuffer = await ttsRes.arrayBuffer();
-      console.log('[tts] arrayBuffer size:', arrayBuffer.byteLength, 'bytes');
-      if (arrayBuffer.byteLength < 200) {
-        const text = new TextDecoder().decode(arrayBuffer);
-        console.warn('[tts] suspiciously small buffer — raw content:', text);
-      }
-      try {
-        const decoded = await ctx.decodeAudioData(arrayBuffer);
-        console.log('[tts] decoded audio duration:', decoded.duration.toFixed(2), 's');
-        const source = ctx.createBufferSource();
-        source.buffer = decoded;
-        source.connect(ctx.destination);
-        source.start();
-        console.log('[tts] audio playback started');
-      } catch (err) {
-        console.warn('[tts] decodeAudioData failed, falling back to HTMLAudioElement', err);
-        const mime = ttsRes.headers.get('content-type') || 'audio/wav';
-        const blob = new Blob([arrayBuffer], { type: mime });
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        audio.onended = () => URL.revokeObjectURL(url);
+      const contentType = ttsRes.headers.get('content-type') ?? '';
+      if (contentType.includes('audio/pcm') && ttsRes.body) {
+        // Streaming PCM — schedule chunks for playback as they arrive
+        const sampleRate = parseInt(ttsRes.headers.get('x-sample-rate') ?? '24000', 10);
+        const reader = ttsRes.body.getReader();
+        let playbackTime = ctx.currentTime + 0.05; // 50ms initial buffer
+        let leftover = new Uint8Array(0);
+        console.log('[tts] streaming PCM playback started, sampleRate:', sampleRate);
         try {
-          await audio.play();
-          console.log('[tts] fallback audio playback started');
-        } catch (playErr) {
-          console.error('[tts] fallback audio play failed', playErr);
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            // Combine leftover odd byte from previous chunk
+            let data: Uint8Array;
+            if (leftover.length > 0) {
+              data = new Uint8Array(leftover.length + value.length);
+              data.set(leftover);
+              data.set(value, leftover.length);
+            } else {
+              data = value;
+            }
+            // Int16 PCM — process in 2-byte pairs
+            const usable = data.length - (data.length % 2);
+            leftover = data.slice(usable);
+            if (usable === 0) continue;
+            const int16 = new Int16Array(data.buffer, data.byteOffset, usable / 2);
+            const float32 = new Float32Array(int16.length);
+            for (let i = 0; i < int16.length; i++) {
+              float32[i] = int16[i] / 32768;
+            }
+            const audioBuffer = ctx.createBuffer(1, float32.length, sampleRate);
+            audioBuffer.copyToChannel(float32, 0);
+            const source = ctx.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(ctx.destination);
+            source.start(playbackTime);
+            playbackTime += audioBuffer.duration;
+          }
+          console.log('[tts] streaming playback scheduled, total duration:', (playbackTime - ctx.currentTime).toFixed(2), 's');
+        } catch (err) {
+          console.error('[tts] streaming playback error:', err);
+        }
+      } else {
+        // Fallback: buffer full response (WAV or other format)
+        const arrayBuffer = await ttsRes.arrayBuffer();
+        console.log('[tts] arrayBuffer size:', arrayBuffer.byteLength, 'bytes');
+        try {
+          const decoded = await ctx.decodeAudioData(arrayBuffer);
+          console.log('[tts] decoded audio duration:', decoded.duration.toFixed(2), 's');
+          const source = ctx.createBufferSource();
+          source.buffer = decoded;
+          source.connect(ctx.destination);
+          source.start();
+          console.log('[tts] audio playback started');
+        } catch (err) {
+          console.warn('[tts] decodeAudioData failed, falling back to HTMLAudioElement', err);
+          const mime = contentType || 'audio/wav';
+          const blob = new Blob([arrayBuffer], { type: mime });
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          audio.onended = () => URL.revokeObjectURL(url);
+          try {
+            await audio.play();
+            console.log('[tts] fallback audio playback started');
+          } catch (playErr) {
+            console.error('[tts] fallback audio play failed', playErr);
+          }
         }
       }
     } catch (err) {

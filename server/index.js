@@ -926,12 +926,9 @@ app.post('/api/character/tts', async (req, res) => {
     }
 
     const voiceId = String(req.body?.voiceId ?? '').trim() || 'magnus';
-    const endpoint = 'https://api.smallest.ai/waves/v1/lightning-v3.1/get_speech';
+    const endpoint = 'https://api.smallest.ai/waves/v1/lightning-v3.1/stream';
 
-    console.log('[character/tts] voice_id:', voiceId, '| model:', model);
-    // Single abort controller covers both header wait AND body read.
-    // Previous bug: timeout was cleared after headers, leaving body read unprotected
-    // which caused indefinite hang when Smallest AI streams chunks slowly.
+    console.log('[character/tts] voice_id:', voiceId, '| streaming PCM');
     const ttsAbort = new AbortController();
     const ttsTimeout = setTimeout(() => ttsAbort.abort(), 30000);
     let response;
@@ -940,13 +937,14 @@ app.post('/api/character/tts', async (req, res) => {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${smallestApiKey}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream',
         },
         body: JSON.stringify({
           text,
           voice_id: voiceId,
           sample_rate: 24000,
-          output_format: 'wav',
+          output_format: 'pcm',
         }),
         signal: ttsAbort.signal,
       });
@@ -956,16 +954,49 @@ app.post('/api/character/tts', async (req, res) => {
       if (!response.ok) {
         const message = await response.text();
         console.error('[character/tts] Smallest AI error body:', message);
+        clearTimeout(ttsTimeout);
         return res.status(500).json({ error: 'TTS failed.', details: message, voiceIdUsed: voiceId });
       }
 
-      const buffer = Buffer.from(await response.arrayBuffer());
-      console.log('[character/tts] audio buffer size:', buffer.length, 'bytes');
-      res.setHeader('Content-Type', 'audio/wav');
-      return res.send(buffer);
-    } finally {
-      clearTimeout(ttsTimeout);
-    }
+      res.setHeader('Content-Type', 'audio/pcm');
+      res.setHeader('X-Sample-Rate', '24000');
+      res.setHeader('X-Bit-Depth', '16');
+      res.setHeader('X-Channels', '1');
+
+      // Parse SSE stream, decode base64 PCM chunks, pipe to client as they arrive
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let sseBuffer = '';
+      let complete = false;
+      try {
+        while (!complete) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          sseBuffer += decoder.decode(value, { stream: true });
+          const lines = sseBuffer.split('\n');
+          sseBuffer = lines.pop() ?? '';
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const jsonStr = line.slice(6).trim();
+            if (!jsonStr) continue;
+            try {
+              const event = JSON.parse(jsonStr);
+              if (event.status === 'chunk' && event.data?.audio) {
+                res.write(Buffer.from(event.data.audio, 'base64'));
+              } else if (event.status === 'complete') {
+                complete = true;
+                break;
+              }
+            } catch { /* ignore malformed SSE event */ }
+          }
+        }
+      } finally {
+        clearTimeout(ttsTimeout);
+        res.end();
+      }
+      return;
 
   } catch (err) {
     console.error('[character/tts] exception:', err);
