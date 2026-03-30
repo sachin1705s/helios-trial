@@ -98,6 +98,13 @@ function App() {
   const ttsAudioCtxRef = useRef<AudioContext | null>(null);
   const characterOpenedAtRef = useRef<number | null>(null);
   const hasLoggedFirstPromptRef = useRef(false);
+  // Gemini Live session state
+  const geminiLiveWsRef = useRef<WebSocket | null>(null);
+  const geminiLiveCaptureCtxRef = useRef<AudioContext | null>(null);
+  const geminiLiveGenerationRef = useRef(0);
+  const geminiLiveActiveRef = useRef(false);
+  const geminiLivePlaybackTimeRef = useRef(0);
+  const geminiLiveSourceNodesRef = useRef<AudioBufferSourceNode[]>([]);
 
   const logEvent = (event: string, data: Record<string, unknown>) => {
     fetch('/api/log', {
@@ -168,6 +175,7 @@ function App() {
   };
   const activeVoiceAgent = slide ? VOICE_AGENT_ID_BY_SLIDE[slide.id] : null;
   const isVoiceAgentSlide = Boolean(activeVoiceAgent);
+  const GEMINI_LIVE_SLIDES = new Set(['einstein']);
   const activeCharacterName = slide?.title ?? 'Character';
   const activeCharacterHistory = slide ? characterHistory[slide.id] ?? [] : [];
   const slideCtaRef = useRef('');
@@ -442,13 +450,18 @@ function App() {
   // End the stream when the user navigates back to the landing page so the session isn't consumed idle.
   useEffect(() => {
     if (!showLanding) return;
+    // Stop any active Gemini Live session (audio + WebSocket + mic)
+    if (geminiLiveActiveRef.current) {
+      stopGeminiLiveAudio();
+      stopGeminiLiveSession();
+    }
     ++requestIdRef.current; // Invalidate any pending retry closure
     retryStreamRef.current = null;
     if (streamActiveRef.current) {
       streamActiveRef.current = false;
       serviceRef.current?.endStream().catch(() => undefined);
     }
-  }, [showLanding]);
+  }, [showLanding]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
   useEffect(() => {
@@ -627,6 +640,261 @@ function App() {
     'einstein': 'magnus',
     'steve-jobs': 'alex',
     'da-vinci': 'magnus'
+  };
+
+  // --- Gemini Live helpers ---
+
+  const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  };
+
+  const base64ToUint8Array = (base64: string): Uint8Array => {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  };
+
+  // Schedules a 16-bit PCM chunk for gapless playback via the shared ttsAudioCtxRef.
+  // Safe to call from WebSocket message handlers — uses refs, never stale state.
+  const enqueuePCMChunk = (data: Uint8Array, sampleRate: number) => {
+    if (!ttsAudioCtxRef.current) return;
+    const ctx = ttsAudioCtxRef.current;
+    const usable = data.length - (data.length % 2);
+    if (usable === 0) return;
+    const int16 = new Int16Array(data.buffer, data.byteOffset, usable / 2);
+    const float32 = new Float32Array(int16.length);
+    for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+    const audioBuffer = ctx.createBuffer(1, float32.length, sampleRate);
+    audioBuffer.copyToChannel(float32, 0);
+    const source = ctx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(ctx.destination);
+    // Keep playback time from falling behind (e.g. after a pause or barge-in reset)
+    if (geminiLivePlaybackTimeRef.current < ctx.currentTime + 0.05) {
+      geminiLivePlaybackTimeRef.current = ctx.currentTime + 0.05;
+    }
+    geminiLiveSourceNodesRef.current.push(source);
+    source.onended = () => {
+      const idx = geminiLiveSourceNodesRef.current.indexOf(source);
+      if (idx !== -1) geminiLiveSourceNodesRef.current.splice(idx, 1);
+    };
+    source.start(geminiLivePlaybackTimeRef.current);
+    geminiLivePlaybackTimeRef.current += audioBuffer.duration;
+  };
+
+  // Flush all queued Gemini Live audio (e.g. on barge-in). Does NOT close the session.
+  const stopGeminiLiveAudio = () => {
+    for (const source of geminiLiveSourceNodesRef.current) {
+      try { source.stop(); } catch { /* already ended */ }
+    }
+    geminiLiveSourceNodesRef.current = [];
+    geminiLivePlaybackTimeRef.current = 0;
+  };
+
+  const GEMINI_LIVE_ACTION_MAP: Array<[RegExp, string]> = [
+    [/\b(yes|correct|exactly|absolutely|indeed)\b/i, 'nod enthusiastically'],
+    [/\b(no|wrong|incorrect|not quite)\b/i, 'shake head and gesture correction'],
+    [/\b(imagine|picture|think of|consider)\b/i, 'gesture thoughtfully and look upward'],
+    [/\b(look at|observe|see|notice)\b/i, 'point and gesture toward viewer'],
+    [/\b(discovered|found|realized|eureka)\b/i, 'gesture excitedly and look animated'],
+    [/\b(simple|easy|basic)\b/i, 'nod and gesture simply'],
+  ];
+
+  const deriveOdysseyAction = (transcript: string): string => {
+    for (const [pattern, action] of GEMINI_LIVE_ACTION_MAP) {
+      if (pattern.test(transcript)) return action;
+    }
+    return 'nod thoughtfully and gesture gently';
+  };
+
+  const GEMINI_LIVE_SYSTEM_PROMPTS: Record<string, string> = {
+    einstein: 'You are Albert Einstein. Respond as Einstein would — curious, imaginative, with dry wit. Keep replies under 30 words. Speak naturally. Explain ideas simply and vividly.',
+  };
+
+  const buildSystemPrompt = (slideId: string): string =>
+    GEMINI_LIVE_SYSTEM_PROMPTS[slideId] ?? 'You are a helpful character. Keep replies brief.';
+
+  // Routes a parsed server message for the current Gemini Live session.
+  const handleGeminiLiveMessage = (msg: Record<string, unknown>, myGeneration: number) => {
+    if (geminiLiveGenerationRef.current !== myGeneration) return;
+
+    const content = msg.serverContent as Record<string, unknown> | undefined;
+    if (!content) return;
+
+    // Barge-in: server detected user speaking mid-response
+    if (content.interrupted) {
+      stopGeminiLiveAudio();
+      handleInteractRef.current('stand idle');
+      return;
+    }
+
+    // Audio chunks from model turn
+    const parts = ((content.modelTurn as Record<string, unknown> | undefined)?.parts ?? []) as Array<Record<string, unknown>>;
+    for (const part of parts) {
+      const inlineData = part.inlineData as Record<string, string> | undefined;
+      if (inlineData?.mimeType?.startsWith('audio/pcm')) {
+        enqueuePCMChunk(base64ToUint8Array(inlineData.data), 24000);
+      }
+    }
+
+    // Transcript alongside audio — use to derive Odyssey avatar action
+    const transcription = (content.outputTranscription as Record<string, string> | undefined)?.text;
+    if (transcription) {
+      handleInteractRef.current(deriveOdysseyAction(transcription));
+    }
+
+    if (content.turnComplete) setIsCharacterThinking(false);
+  };
+
+  // Closes the Gemini Live WebSocket, releases mic, and resets all session state.
+  // Safe to call multiple times (guarded by geminiLiveActiveRef).
+  const stopGeminiLiveSession = () => {
+    if (!geminiLiveActiveRef.current) return;
+    geminiLiveActiveRef.current = false;       // synchronous — same pattern as streamActiveRef
+    geminiLiveGenerationRef.current++;          // invalidate any in-flight message handlers
+    stopGeminiLiveAudio();
+    geminiLiveWsRef.current?.close();
+    geminiLiveWsRef.current = null;
+    geminiLiveCaptureCtxRef.current?.close().catch(() => undefined);
+    geminiLiveCaptureCtxRef.current = null;
+    characterStreamRef.current?.getTracks().forEach(t => t.stop());
+    characterStreamRef.current = null;
+    setIsCharacterRecording(false);
+  };
+
+  // Loads the AudioWorklet and begins streaming 16kHz PCM to the open WebSocket.
+  // Called only after the server sends setupComplete.
+  const startGeminiLiveMicStream = async (
+    ws: WebSocket,
+    myGeneration: number,
+    stream: MediaStream
+  ) => {
+    try {
+      const captureCtx = new AudioContext({ sampleRate: 16000 });
+      geminiLiveCaptureCtxRef.current = captureCtx;
+
+      // iOS Safari: kick the audio graph with a silent buffer to force activation
+      const silenceBuf = captureCtx.createBuffer(1, 1, captureCtx.sampleRate);
+      const silenceNode = captureCtx.createBufferSource();
+      silenceNode.buffer = silenceBuf;
+      silenceNode.connect(captureCtx.destination);
+      silenceNode.start();
+
+      await captureCtx.audioWorklet.addModule('/audio-processor.worklet.js');
+      const micSource = captureCtx.createMediaStreamSource(stream);
+      const workletNode = new AudioWorkletNode(captureCtx, 'pcm-processor');
+
+      workletNode.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        if (geminiLiveGenerationRef.current !== myGeneration) return;
+        ws.send(JSON.stringify({
+          realtimeInput: { audio: { data: arrayBufferToBase64(e.data), mimeType: 'audio/pcm;rate=16000' } }
+        }));
+      };
+
+      // Connect mic → worklet; intentionally NOT connected to destination (prevents echo)
+      micSource.connect(workletNode);
+      console.log('[gemini-live] mic stream started');
+    } catch (err) {
+      console.error('[gemini-live] mic stream setup error', err);
+      stopGeminiLiveSession();
+    }
+  };
+
+  // Starts a Gemini Live speech-to-speech session for the current slide (Einstein only).
+  // Fetches an ephemeral token, opens a WebSocket to Gemini, and streams mic audio.
+  const startGeminiLiveSession = async () => {
+    if (geminiLiveActiveRef.current) return;
+    geminiLiveActiveRef.current = true;        // synchronous guard
+    setIsCharacterRecording(true);
+    setCharacterError(null);
+    setCharacterReply(null);
+
+    // Unlock AudioContext during user gesture so playback works after async awaits
+    if (!ttsAudioCtxRef.current) {
+      ttsAudioCtxRef.current = new AudioContext();
+    } else {
+      ttsAudioCtxRef.current.resume().catch(() => undefined);
+    }
+
+    // Acquire mic before any awaits to stay within user gesture context
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+      });
+    } catch (err) {
+      console.error('[gemini-live] getUserMedia error', err);
+      setCharacterError(err instanceof Error ? err.message : 'Microphone access was blocked.');
+      stopGeminiLiveSession();
+      return;
+    }
+    characterStreamRef.current = stream;
+
+    // Fetch short-lived ephemeral token (API key stays server-side)
+    let token: string;
+    try {
+      const tokenRes = await fetch('/api/gemini-live-token', { method: 'POST' });
+      if (!tokenRes.ok) throw new Error(`Token endpoint returned ${tokenRes.status}`);
+      const data = await tokenRes.json() as { token?: string };
+      if (!data.token) throw new Error('Empty token from server');
+      token = data.token;
+    } catch (err) {
+      console.error('[gemini-live] token fetch error', err);
+      setCharacterError('Could not connect to Gemini Live. Try again.');
+      stopGeminiLiveSession();
+      return;
+    }
+
+    const myGeneration = ++geminiLiveGenerationRef.current;
+    const ws = new WebSocket(
+      `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${token}`
+    );
+    geminiLiveWsRef.current = ws;
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = () => {
+      console.log('[gemini-live] ws open, sending setup');
+      ws.send(JSON.stringify({
+        setup: {
+          model: 'models/gemini-3.1-flash-live-preview',
+          generationConfig: {
+            responseModalities: ['AUDIO'],
+            outputAudioTranscription: {},
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } }
+          },
+          systemInstruction: { parts: [{ text: buildSystemPrompt(slide.id) }] }
+        }
+      }));
+    };
+
+    ws.onmessage = (event) => {
+      let msg: Record<string, unknown>;
+      try { msg = JSON.parse(event.data as string) as Record<string, unknown>; }
+      catch { return; }
+
+      if (msg.setupComplete !== undefined) {
+        console.log('[gemini-live] setup complete, starting mic stream');
+        void startGeminiLiveMicStream(ws, myGeneration, stream);
+        return;
+      }
+
+      handleGeminiLiveMessage(msg, myGeneration);
+    };
+
+    ws.onerror = (e) => {
+      console.error('[gemini-live] ws error', e);
+      stopGeminiLiveSession();
+    };
+
+    ws.onclose = () => {
+      console.log('[gemini-live] ws closed');
+      stopGeminiLiveSession();
+    };
   };
 
   const playCharacterTTS = async (text: string, slideId?: string) => {
@@ -1421,7 +1689,11 @@ function App() {
             {isCharacterSlide ? (
               <button
                 className="btn accent"
-                onClick={isCharacterRecording ? stopCharacterRecording : startCharacterRecording}
+                onClick={
+                  GEMINI_LIVE_SLIDES.has(slide.id)
+                    ? (isCharacterRecording ? stopGeminiLiveSession : startGeminiLiveSession)
+                    : (isCharacterRecording ? stopCharacterRecording : startCharacterRecording)
+                }
                 disabled={isCharacterThinking}
                 aria-label={
                   isCharacterRecording
