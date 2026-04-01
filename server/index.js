@@ -467,29 +467,10 @@ app.post('/api/smallest/webcall', aiLimiter, async (req, res) => {
   }
 });
 
-app.post('/api/gemini-live-token', async (req, res) => {
-  try {
-    const apiKey = runtimeConfig.geminiApiKey;
-    if (!apiKey) return res.status(503).json({ error: 'Gemini API key not configured.' });
-    const response = await fetch(
-      'https://generativelanguage.googleapis.com/v1beta/ephemeralApiKeys',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-        body: JSON.stringify({ model: 'models/gemini-3.1-flash-live-preview' }),
-      }
-    );
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error('[gemini-live-token] upstream error', response.status, errText);
-      return res.status(502).json({ error: 'Failed to issue token.' });
-    }
-    const data = await response.json();
-    return res.json({ token: data.ephemeralKey ?? data.key ?? '' });
-  } catch (err) {
-    console.error('[gemini-live-token] error', err);
-    return res.status(500).json({ error: 'Failed to issue token.' });
-  }
+app.post('/api/gemini-live-token', (req, res) => {
+  const apiKey = runtimeConfig.geminiApiKey;
+  if (!apiKey) return res.status(503).json({ error: 'Gemini API key not configured.' });
+  return res.json({ token: apiKey });
 });
 
 app.post('/api/character/stt', upload.single('audio'), async (req, res) => {
