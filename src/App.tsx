@@ -871,13 +871,11 @@ function App() {
     ws.onopen = () => {
       console.log('[gemini-live] ws open, sending setup');
       ws.send(JSON.stringify({
-        setup: {
+        config: {
           model: 'models/gemini-3.1-flash-live-preview',
-          generationConfig: {
-            responseModalities: ['AUDIO'],
-            outputAudioTranscription: {},
-            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } }
-          },
+          responseModalities: ['AUDIO'],
+          outputAudioTranscription: {},
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
           systemInstruction: { parts: [{ text: buildSystemPrompt(slide.id) }] }
         }
       }));
