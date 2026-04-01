@@ -1372,7 +1372,11 @@ function App() {
       if (isCharacterRecording || isCharacterThinking) {
         return false;
       }
-      startCharacterRecording();
+      if (GEMINI_LIVE_SLIDES.has(slide?.id ?? '')) {
+        void startGeminiLiveSession();
+      } else {
+        startCharacterRecording();
+      }
       return true;
     }
     if (isRecording || isTranscribing) {
@@ -1383,7 +1387,8 @@ function App() {
   };
   pttStopRef.current = () => {
     if (isCharacterSlide) {
-      if (isCharacterRecording) {
+      // Gemini Live uses VAD — don't stop on key release, session stays open until toggled off
+      if (!GEMINI_LIVE_SLIDES.has(slide?.id ?? '') && isCharacterRecording) {
         stopCharacterRecording();
       }
       return;
