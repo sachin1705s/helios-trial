@@ -6,6 +6,17 @@ import charactersData from './data/characters.json';
 import { OdysseyService, loadImageFile, type StreamState } from './lib/odyssey';
 import './App.css';
 
+// Debug logger — silent by default in production.
+// To enable in any environment, open DevTools console and run:
+//   localStorage.setItem('debug', 'true')  then refresh
+// To disable:
+//   localStorage.removeItem('debug')       then refresh
+const debug = (...args: unknown[]) => {
+  if (import.meta.env.DEV || localStorage.getItem('debug') === 'true') {
+    console.log(...args);
+  }
+};
+
 interface Character {
   id: string;
   title: string;
@@ -291,7 +302,7 @@ function App() {
     service
       .connect({
         onConnected: (stream) => {
-          console.log('[odyssey] onConnected — stream:', stream);
+          debug('[odyssey] onConnected — stream:', stream);
           odysseyStreamRef.current = stream;
           const attach = () => {
             if (videoRef.current) {
@@ -306,24 +317,24 @@ function App() {
           attach();
         },
         onStatusChange: (status) => {
-          console.log('[odyssey] status:', status);
+          debug('[odyssey] status:', status);
           setConnectionStatus(status);
         },
         onStreamStarted: () => {
-          console.log('[odyssey] onStreamStarted');
+          debug('[odyssey] onStreamStarted');
           streamActiveRef.current = true;
           setStreamState('streaming');
           setIsStreamingReady(true);
           setModerationError(null);
         },
         onStreamEnded: () => {
-          console.log('[odyssey] onStreamEnded');
+          debug('[odyssey] onStreamEnded');
           streamActiveRef.current = false;
           setStreamState('ended');
           setIsStreamingReady(false);
           // Auto-restart the stream so interact() keeps working
           if (retryStreamRef.current) {
-            console.log('[odyssey] auto-restarting stream after end');
+            debug('[odyssey] auto-restarting stream after end');
             setStreamState('starting');
             retryStreamRef.current().catch(() => {
               setStreamState('error');
@@ -341,7 +352,7 @@ function App() {
           if (r === 'moderation_failed') {
             if (moderationRetryCountRef.current < 3 && retryStreamRef.current) {
               moderationRetryCountRef.current++;
-              console.log(`[odyssey] moderation_failed — retrying (attempt ${moderationRetryCountRef.current})`);
+              debug(`[odyssey] moderation_failed — retrying (attempt ${moderationRetryCountRef.current})`);
               setStreamState('starting');
               const retry = retryStreamRef.current;
               setTimeout(() => {
@@ -432,9 +443,9 @@ function App() {
       const streamOptions = { prompt: slide.prompt, image: file, portrait: slide.id === 'characters-sudharshan' };
       retryStreamRef.current = () => service.startStream(streamOptions).then(() => undefined);
 
-      console.log('[odyssey] calling startStream — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
+      debug('[odyssey] calling startStream — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
       await service.startStream(streamOptions);
-      console.log('[odyssey] startStream resolved');
+      debug('[odyssey] startStream resolved');
     };
 
     run().catch((err) => {
@@ -902,15 +913,15 @@ function App() {
       ttsAudioCtxRef.current = new AudioContext();
     }
     const ctx = ttsAudioCtxRef.current;
-    console.log('[tts] playCharacterTTS called, text:', text.slice(0, 80));
-    console.log('[tts] AudioContext state:', ctx ? ctx.state : 'null (no ctx)');
+    debug('[tts] playCharacterTTS called, text:', text.slice(0, 80));
+    debug('[tts] AudioContext state:', ctx ? ctx.state : 'null (no ctx)');
     if (!ctx) return;
     try {
       await ctx.resume();
-      console.log('[tts] AudioContext resumed, state:', ctx.state);
+      debug('[tts] AudioContext resumed, state:', ctx.state);
       const slideVoiceId = slideId ? VOICE_BY_SLIDE_ID[slideId] : '';
       const resolvedVoiceId = slideVoiceId || null;
-      console.log('[tts] sending fetch to /api/character/tts, voiceId:', resolvedVoiceId ?? 'default');
+      debug('[tts] sending fetch to /api/character/tts, voiceId:', resolvedVoiceId ?? 'default');
       const ttsAbort = new AbortController();
       const ttsClientTimeout = setTimeout(() => ttsAbort.abort(), 20000);
       let ttsRes: Response;
@@ -928,8 +939,8 @@ function App() {
       } finally {
         clearTimeout(ttsClientTimeout);
       }
-      console.log('[tts] server response status:', ttsRes.status, ttsRes.statusText);
-      console.log('[tts] content-type:', ttsRes.headers.get('content-type'));
+      debug('[tts] server response status:', ttsRes.status, ttsRes.statusText);
+      debug('[tts] content-type:', ttsRes.headers.get('content-type'));
       if (!ttsRes.ok) {
         const errBody = await ttsRes.text();
         console.error('[tts] server error body:', errBody);
@@ -942,7 +953,7 @@ function App() {
         const reader = ttsRes.body.getReader();
         let playbackTime = ctx.currentTime + 0.05; // 50ms initial buffer
         let leftover = new Uint8Array(0);
-        console.log('[tts] streaming PCM playback started, sampleRate:', sampleRate);
+        debug('[tts] streaming PCM playback started, sampleRate:', sampleRate);
         try {
           while (true) {
             const { done, value } = await reader.read();
@@ -973,22 +984,22 @@ function App() {
             source.start(playbackTime);
             playbackTime += audioBuffer.duration;
           }
-          console.log('[tts] streaming playback scheduled, total duration:', (playbackTime - ctx.currentTime).toFixed(2), 's');
+          debug('[tts] streaming playback scheduled, total duration:', (playbackTime - ctx.currentTime).toFixed(2), 's');
         } catch (err) {
           console.error('[tts] streaming playback error:', err);
         }
       } else {
         // Fallback: buffer full response (WAV or other format)
         const arrayBuffer = await ttsRes.arrayBuffer();
-        console.log('[tts] arrayBuffer size:', arrayBuffer.byteLength, 'bytes');
+        debug('[tts] arrayBuffer size:', arrayBuffer.byteLength, 'bytes');
         try {
           const decoded = await ctx.decodeAudioData(arrayBuffer);
-          console.log('[tts] decoded audio duration:', decoded.duration.toFixed(2), 's');
+          debug('[tts] decoded audio duration:', decoded.duration.toFixed(2), 's');
           const source = ctx.createBufferSource();
           source.buffer = decoded;
           source.connect(ctx.destination);
           source.start();
-          console.log('[tts] audio playback started');
+          debug('[tts] audio playback started');
         } catch (err) {
           console.warn('[tts] decodeAudioData failed, falling back to HTMLAudioElement', err);
           const mime = contentType || 'audio/wav';
@@ -998,7 +1009,7 @@ function App() {
           audio.onended = () => URL.revokeObjectURL(url);
           try {
             await audio.play();
-            console.log('[tts] fallback audio playback started');
+            debug('[tts] fallback audio playback started');
           } catch (playErr) {
             console.error('[tts] fallback audio play failed', playErr);
           }
