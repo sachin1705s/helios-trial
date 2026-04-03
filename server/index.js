@@ -1,4 +1,5 @@
 import express from 'express';
+import { Odyssey, credentialsToDict } from '@odysseyml/odyssey';
 import multer from 'multer';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -307,7 +308,7 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-// Odyssey token endpoint — serves API key to authenticated same-origin clients
+// Odyssey token endpoint — mints short-lived client credentials server-side (API key never leaves the server)
 app.get('/api/odyssey/token', async (_req, res) => {
   if (!runtimeConfig.odysseyApiKeys.length) {
     return res.status(503).json({ error: 'Odyssey not configured.' });
@@ -316,7 +317,15 @@ app.get('/api/odyssey/token', async (_req, res) => {
   if (!lease) {
     return res.status(503).json({ error: 'Odyssey is at capacity. Please try again shortly.' });
   }
-  return res.json({ apiKey: lease.apiKey, leaseId: lease.leaseId, keyIndex: lease.keyIndex });
+  try {
+    const serverClient = new Odyssey({ apiKey: lease.apiKey });
+    const credentials = await serverClient.createClientCredentials();
+    return res.json({ credentials: credentialsToDict(credentials), leaseId: lease.leaseId, keyIndex: lease.keyIndex });
+  } catch (err) {
+    await releaseOdysseyLease(lease.leaseId);
+    console.error('[odyssey] createClientCredentials failed:', err);
+    return res.status(503).json({ error: 'Failed to create Odyssey session. Please try again.' });
+  }
 });
 
 app.post('/api/odyssey/heartbeat', async (req, res) => {
@@ -465,6 +474,12 @@ app.post('/api/smallest/webcall', aiLimiter, async (req, res) => {
     console.error('[smallest] webcall error', err);
     return res.status(500).json({ error: 'Smallest webcall failed.' });
   }
+});
+
+app.post('/api/gemini-live-token', (req, res) => {
+  const apiKey = runtimeConfig.geminiApiKey;
+  if (!apiKey) return res.status(503).json({ error: 'Gemini API key not configured.' });
+  return res.json({ token: apiKey });
 });
 
 app.post('/api/character/stt', upload.single('audio'), async (req, res) => {
@@ -926,50 +941,104 @@ app.post('/api/character/tts', async (req, res) => {
     }
 
     const voiceId = String(req.body?.voiceId ?? '').trim() || 'magnus';
-    const endpoint = 'https://api.smallest.ai/waves/v1/lightning-v3.1/get_speech';
+    const endpoint = 'https://api.smallest.ai/waves/v1/lightning-v3.1/stream';
 
-    console.log('[character/tts] voice_id:', voiceId, '| model:', model);
-    // Single abort controller covers both header wait AND body read.
-    // Previous bug: timeout was cleared after headers, leaving body read unprotected
-    // which caused indefinite hang when Smallest AI streams chunks slowly.
+    console.log('[character/tts] voice_id:', voiceId, '| streaming PCM');
     const ttsAbort = new AbortController();
     const ttsTimeout = setTimeout(() => ttsAbort.abort(), 30000);
+
     let response;
     try {
       response = await fetch(endpoint, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${smallestApiKey}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream',
         },
         body: JSON.stringify({
           text,
           voice_id: voiceId,
           sample_rate: 24000,
-          output_format: 'wav',
+          output_format: 'pcm',
         }),
         signal: ttsAbort.signal,
       });
-
-      console.log('[character/tts] Smallest AI status:', response.status, response.statusText);
-
-      if (!response.ok) {
-        const message = await response.text();
-        console.error('[character/tts] Smallest AI error body:', message);
-        return res.status(500).json({ error: 'TTS failed.', details: message, voiceIdUsed: voiceId });
-      }
-
-      const buffer = Buffer.from(await response.arrayBuffer());
-      console.log('[character/tts] audio buffer size:', buffer.length, 'bytes');
-      res.setHeader('Content-Type', 'audio/wav');
-      return res.send(buffer);
-    } finally {
+    } catch (fetchErr) {
       clearTimeout(ttsTimeout);
+      console.error('[character/tts] fetch failed:', fetchErr);
+      return res.status(500).json({ error: 'TTS request failed.' });
     }
 
+    console.log('[character/tts] Smallest AI status:', response.status, response.statusText);
+    console.log('[character/tts] Smallest AI content-type:', response.headers.get('content-type'));
+
+    if (!response.ok) {
+      clearTimeout(ttsTimeout);
+      const message = await response.text();
+      console.error('[character/tts] Smallest AI error body:', message);
+      return res.status(500).json({ error: 'TTS failed.', details: message, voiceIdUsed: voiceId });
+    }
+
+    res.setHeader('Content-Type', 'audio/pcm');
+    res.setHeader('X-Sample-Rate', '24000');
+    res.setHeader('X-Bit-Depth', '16');
+    res.setHeader('X-Channels', '1');
+
+    // Parse SSE stream, decode base64 PCM chunks, pipe to client as they arrive
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let sseBuffer = '';
+    let complete = false;
+    let chunksReceived = 0;
+    let bytesWritten = 0;
+    let firstRawLines = null;
+    try {
+      while (!complete) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        sseBuffer += decoder.decode(value, { stream: true });
+
+        // Log the first raw batch so we can verify the SSE format
+        if (firstRawLines === null) {
+          firstRawLines = sseBuffer.slice(0, 400);
+          console.log('[character/tts] first SSE batch (raw):', JSON.stringify(firstRawLines));
+        }
+
+        const lines = sseBuffer.split('\n');
+        sseBuffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data:')) continue;
+          const jsonStr = line.slice(line.indexOf(':') + 1).trim();
+          if (!jsonStr) continue;
+          try {
+            const event = JSON.parse(jsonStr);
+            // Handle both {data: {audio}} and {audio} nesting styles
+            const audioB64 = event.data?.audio ?? event.audio ?? null;
+            if (audioB64) {
+              const buf = Buffer.from(audioB64, 'base64');
+              res.write(buf);
+              chunksReceived++;
+              bytesWritten += buf.length;
+            } else if (event.status === 'complete' || event.done === true) {
+              complete = true;
+              break;
+            }
+          } catch { /* ignore malformed SSE event */ }
+        }
+      }
+    } finally {
+      clearTimeout(ttsTimeout);
+      console.log('[character/tts] stream done — chunks:', chunksReceived, 'bytes:', bytesWritten);
+      res.end();
+    }
   } catch (err) {
     console.error('[character/tts] exception:', err);
-    return res.status(500).json({ error: 'TTS failed.' });
+    if (!res.headersSent) {
+      return res.status(500).json({ error: 'TTS failed.' });
+    }
   }
 });
 

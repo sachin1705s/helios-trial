@@ -1,18 +1,21 @@
-import { Odyssey, type OdysseyEventHandlers } from '@odysseyml/odyssey';
+import { Odyssey, credentialsFromDict, type ClientCredentials, type OdysseyEventHandlers } from '@odysseyml/odyssey';
 
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 
+export type { ClientCredentials };
 export type StreamState = 'idle' | 'starting' | 'streaming' | 'ended' | 'error';
 
 export class OdysseyService {
   private client: Odyssey;
+  private credentials: ClientCredentials;
 
-  constructor(apiKey: string) {
-    this.client = new Odyssey({ apiKey });
+  constructor(credentials: ClientCredentials) {
+    this.credentials = credentials;
+    this.client = new Odyssey({});
   }
 
   connect(handlers?: OdysseyEventHandlers) {
-    return this.client.connect(handlers);
+    return this.client.connectWithCredentials(this.credentials, handlers);
   }
 
   async startStream(options?: { prompt?: string; portrait?: boolean; image?: File | Blob }) {
@@ -31,6 +34,8 @@ export class OdysseyService {
     return this.client.disconnect();
   }
 }
+
+export { credentialsFromDict };
 
 export async function loadImageFile(url: string, name = 'slide-image') {
   const response = await fetch(encodeURI(url));

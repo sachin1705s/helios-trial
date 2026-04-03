@@ -14,7 +14,7 @@
   "dependencies": {
     "@google/genai": "^1.42.0",
     "@mediapipe/tasks-vision": "^0.10.32",
-    "@odysseyml/odyssey": "^1.0.0",
+    "@odysseyml/odyssey": "^1.2.0",
     "@upstash/redis": "^1.37.0",
     "@vercel/analytics": "^2.0.0",
     "@vercel/speed-insights": "^2.0.0",
