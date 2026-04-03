@@ -58,6 +58,22 @@ function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
   return win.SpeechRecognition ?? win.webkitSpeechRecognition ?? null;
 }
 
+function pcmToWav(pcm: ArrayBuffer, sampleRate: number, channels: number, bitDepth: number): ArrayBuffer {
+  const dataLen = pcm.byteLength;
+  const buf = new ArrayBuffer(44 + dataLen);
+  const v = new DataView(buf);
+  const str = (off: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };
+  str(0, 'RIFF'); v.setUint32(4, 36 + dataLen, true);
+  str(8, 'WAVE'); str(12, 'fmt '); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, channels, true);
+  v.setUint32(24, sampleRate, true);
+  v.setUint32(28, sampleRate * channels * bitDepth / 8, true);
+  v.setUint16(32, channels * bitDepth / 8, true); v.setUint16(34, bitDepth, true);
+  str(36, 'data'); v.setUint32(40, dataLen, true);
+  new Uint8Array(buf, 44).set(new Uint8Array(pcm));
+  return buf;
+}
+
 function App() {
   const [credentials, setCredentials] = useState<ClientCredentials | undefined>(undefined);
   const [showLanding, setShowLanding] = useState(true);
@@ -303,6 +319,9 @@ function App() {
       .connect({
         onConnected: (stream) => {
           debug('[odyssey] onConnected — stream:', stream);
+          // Set 'connected' here (not in onStatusChange) so the startStream
+          // useEffect only fires after the data channel is open and ready.
+          setConnectionStatus('connected');
           odysseyStreamRef.current = stream;
           const attach = () => {
             if (videoRef.current) {
@@ -318,7 +337,9 @@ function App() {
         },
         onStatusChange: (status) => {
           debug('[odyssey] status:', status);
-          setConnectionStatus(status);
+          // 'connected' is set in onConnected instead, which fires only after
+          // both the video track and data channel are ready.
+          if (status !== 'connected') setConnectionStatus(status);
         },
         onStreamStarted: () => {
           debug('[odyssey] onStreamStarted');
@@ -989,11 +1010,18 @@ function App() {
           console.error('[tts] streaming playback error:', err);
         }
       } else {
-        // Fallback: buffer full response (WAV or other format)
+        // Fallback: buffer full response then decode
         const arrayBuffer = await ttsRes.arrayBuffer();
         debug('[tts] arrayBuffer size:', arrayBuffer.byteLength, 'bytes');
+        // Raw PCM can't be decoded directly — wrap it in a WAV container first
+        const sampleRate = parseInt(ttsRes.headers.get('x-sample-rate') ?? '24000', 10);
+        const bitDepth = parseInt(ttsRes.headers.get('x-bit-depth') ?? '16', 10);
+        const channels = parseInt(ttsRes.headers.get('x-channels') ?? '1', 10);
+        const audioData = contentType.includes('audio/pcm')
+          ? pcmToWav(arrayBuffer, sampleRate, channels, bitDepth)
+          : arrayBuffer;
         try {
-          const decoded = await ctx.decodeAudioData(arrayBuffer);
+          const decoded = await ctx.decodeAudioData(audioData);
           debug('[tts] decoded audio duration:', decoded.duration.toFixed(2), 's');
           const source = ctx.createBufferSource();
           source.buffer = decoded;
