@@ -3,7 +3,7 @@ import { Analytics } from '@vercel/analytics/react';
 import { SpeedInsights } from '@vercel/speed-insights/react';
 import type { ConnectionStatus } from '@odysseyml/odyssey';
 import charactersData from './data/characters.json';
-import { OdysseyService, loadImageFile, type StreamState } from './lib/odyssey';
+import { OdysseyService, credentialsFromDict, loadImageFile, type ClientCredentials, type StreamState } from './lib/odyssey';
 import './App.css';
 
 // Debug logger — silent by default in production.
@@ -59,7 +59,7 @@ function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
 }
 
 function App() {
-  const [apiKey, setApiKey] = useState<string | undefined>(undefined);
+  const [credentials, setCredentials] = useState<ClientCredentials | undefined>(undefined);
   const [showLanding, setShowLanding] = useState(true);
   const [showAbout, setShowAbout] = useState(false);
   const [showContact, setShowContact] = useState(false);
@@ -223,10 +223,10 @@ function App() {
         }
         const data = await response.json();
         if (cancelled) return;
-        if (data?.apiKey) {
-          setApiKey(data.apiKey);
+        if (data?.credentials) {
+          setCredentials(credentialsFromDict(data.credentials));
         } else {
-          setError('Missing Odyssey API key. Set ODYSSEY_API_KEYS in your server environment.');
+          setError('Missing Odyssey credentials. Set ODYSSEY_API_KEYS in your server environment.');
         }
         if (data?.leaseId) {
           odysseyLeaseIdRef.current = data.leaseId;
@@ -294,9 +294,9 @@ function App() {
 
 
   useEffect(() => {
-    if (!apiKey) return; // Token not yet fetched — wait for character selection
+    if (!credentials) return; // Credentials not yet fetched — wait for character selection
 
-    const service = new OdysseyService(apiKey);
+    const service = new OdysseyService(credentials);
     serviceRef.current = service;
 
     service
@@ -395,7 +395,7 @@ function App() {
           service.disconnect().catch(() => undefined);
         });
     };
-  }, [apiKey]);
+  }, [credentials]);
 
   useEffect(() => {
     const service = serviceRef.current;
@@ -871,12 +871,14 @@ function App() {
     ws.onopen = () => {
       console.log('[gemini-live] ws open, sending setup');
       ws.send(JSON.stringify({
-        config: {
+        setup: {
           model: 'models/gemini-3.1-flash-live-preview',
-          responseModalities: ['AUDIO'],
+          generationConfig: {
+            responseModalities: ['AUDIO'],
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
+          },
           outputAudioTranscription: {},
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
-          systemInstruction: { parts: [{ text: buildSystemPrompt(slide.id) }] }
+          systemInstruction: { parts: [{ text: buildSystemPrompt(slide.id) }] },
         }
       }));
     };

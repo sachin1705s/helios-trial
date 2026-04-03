@@ -1,4 +1,5 @@
 import express from 'express';
+import { Odyssey, credentialsToDict } from '@odysseyml/odyssey';
 import multer from 'multer';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -307,7 +308,7 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-// Odyssey token endpoint — serves API key to authenticated same-origin clients
+// Odyssey token endpoint — mints short-lived client credentials server-side (API key never leaves the server)
 app.get('/api/odyssey/token', async (_req, res) => {
   if (!runtimeConfig.odysseyApiKeys.length) {
     return res.status(503).json({ error: 'Odyssey not configured.' });
@@ -316,7 +317,15 @@ app.get('/api/odyssey/token', async (_req, res) => {
   if (!lease) {
     return res.status(503).json({ error: 'Odyssey is at capacity. Please try again shortly.' });
   }
-  return res.json({ apiKey: lease.apiKey, leaseId: lease.leaseId, keyIndex: lease.keyIndex });
+  try {
+    const serverClient = new Odyssey({ apiKey: lease.apiKey });
+    const credentials = await serverClient.createClientCredentials();
+    return res.json({ credentials: credentialsToDict(credentials), leaseId: lease.leaseId, keyIndex: lease.keyIndex });
+  } catch (err) {
+    await releaseOdysseyLease(lease.leaseId);
+    console.error('[odyssey] createClientCredentials failed:', err);
+    return res.status(503).json({ error: 'Failed to create Odyssey session. Please try again.' });
+  }
 });
 
 app.post('/api/odyssey/heartbeat', async (req, res) => {
