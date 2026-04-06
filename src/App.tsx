@@ -1449,17 +1449,36 @@ function App() {
           </div>
           <div className="story-actions">
             {isCharacterSlide ? (
-              <button
-                className="btn accent"
-                onClick={isCharacterRecording ? stopCharacterRecording : startCharacterRecording}
-                disabled={isCharacterThinking}
-              >
-                {isCharacterRecording
-                  ? 'Stop'
-                  : isCharacterThinking
-                    ? 'Thinking...'
-                      : `Talk to ${activeCharacterName}`}
-              </button>
+              <div className="ptt-hint">
+                <button
+                  className="btn accent"
+                  onClick={isCharacterRecording ? stopCharacterRecording : startCharacterRecording}
+                  disabled={isCharacterThinking}
+                  aria-label={
+                    isCharacterRecording
+                      ? 'Stop recording'
+                      : isCharacterThinking
+                        ? 'Thinking'
+                        : `Start recording for ${activeCharacterName}`
+                  }
+                >
+                  {isCharacterRecording
+                    ? 'Stop'
+                    : isCharacterThinking
+                      ? 'Thinking...'
+                        : (
+                          <img
+                            className="recording-icon"
+                            src="/images/recording_icon_v3.png"
+                            alt=""
+                            aria-hidden="true"
+                          />
+                        )}
+                </button>
+                {!isCharacterRecording && !isCharacterThinking && (
+                  <span className="ptt-hint-label"><kbd>Ctrl</kbd> + <kbd>Space</kbd></span>
+                )}
+              </div>
             ) : null}
             {isUploadSlide ? (
               <label className="upload-pill">
