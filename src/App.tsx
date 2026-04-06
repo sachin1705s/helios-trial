@@ -1731,40 +1731,36 @@ function App() {
           </div>
           <div className="story-actions">
             {isCharacterSlide ? (
-              <div className="ptt-hint">
-                <button
-                  className="btn accent"
-                  onClick={
-                    GEMINI_LIVE_SLIDES.has(slide.id)
-                      ? (isCharacterRecording ? stopGeminiLiveSession : startGeminiLiveSession)
-                      : (isCharacterRecording ? stopCharacterRecording : startCharacterRecording)
-                  }
-                  disabled={isCharacterThinking}
-                  aria-label={
-                    isCharacterRecording
-                      ? 'Stop recording'
-                      : isCharacterThinking
-                        ? 'Thinking'
-                        : `Start recording for ${activeCharacterName}`
-                  }
-                >
-                  {isCharacterRecording
-                    ? 'Stop'
+              <button
+                className="btn accent ptt-btn"
+                onClick={
+                  GEMINI_LIVE_SLIDES.has(slide.id)
+                    ? (isCharacterRecording ? stopGeminiLiveSession : startGeminiLiveSession)
+                    : (isCharacterRecording ? stopCharacterRecording : startCharacterRecording)
+                }
+                disabled={isCharacterThinking}
+                aria-label={
+                  isCharacterRecording
+                    ? 'Stop recording'
                     : isCharacterThinking
-                      ? 'Thinking...'
-                        : (
-                          <img
-                            className="recording-icon"
-                            src="/images/recording_icon_v3.png"
-                            alt=""
-                            aria-hidden="true"
-                          />
-                        )}
-                </button>
-                {!isCharacterRecording && !isCharacterThinking && (
-                  <span className="ptt-hint-label"><kbd>Ctrl</kbd> + <kbd>Space</kbd></span>
-                )}
-              </div>
+                      ? 'Thinking'
+                      : `Start recording for ${activeCharacterName}`
+                }
+                data-tooltip="Ctrl + Space"
+              >
+                {isCharacterRecording
+                  ? 'Stop'
+                  : isCharacterThinking
+                    ? 'Thinking...'
+                      : (
+                        <img
+                          className="recording-icon"
+                          src="/images/recording_icon_v3.png"
+                          alt=""
+                          aria-hidden="true"
+                        />
+                      )}
+              </button>
             ) : null}
             {isUploadSlide ? (
               <label className="upload-pill">
