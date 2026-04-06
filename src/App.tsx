@@ -896,7 +896,7 @@ function App() {
           model: 'models/gemini-3.1-flash-live-preview',
           generationConfig: {
             responseModalities: ['AUDIO'],
-            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceId: 'Puck' } } },
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
           },
           outputAudioTranscription: {},
           systemInstruction: { parts: [{ text: buildSystemPrompt(slide.id) }] },
