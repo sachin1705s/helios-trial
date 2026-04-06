@@ -25,6 +25,7 @@ interface Character {
   image: string;
   prompt: string;
   cta: string;
+  greeting?: string;
 }
 
 type SpeechRecognitionResultEvent = Event & {
@@ -287,6 +288,18 @@ function App() {
       setVoiceError('Stream stopped.');
     }
   }, [isStreamingReady, voiceStatus]);
+
+  useEffect(() => {
+    if (!isStreamingReady || !isCharacterSlide) return;
+    const greeting = slide.greeting;
+    if (!greeting) return;
+    if ((characterHistory[slide.id] ?? []).length > 0) return;
+    setCharacterHistory((prev) => ({
+      ...prev,
+      [slide.id]: [{ role: 'assistant', content: greeting }],
+    }));
+    playCharacterTTS(greeting, slide.id);
+  }, [isStreamingReady, slide.id]);
 
   useEffect(() => {
     if (isCharacterSlide) {
@@ -789,6 +802,9 @@ function App() {
     geminiLiveActiveRef.current = false;       // synchronous — same pattern as streamActiveRef
     geminiLiveGenerationRef.current++;          // invalidate any in-flight message handlers
     stopGeminiLiveAudio();
+    if (geminiLiveWsRef.current?.readyState === WebSocket.OPEN) {
+      try { geminiLiveWsRef.current.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } })); } catch { /* ignore */ }
+    }
     geminiLiveWsRef.current?.close();
     geminiLiveWsRef.current = null;
     geminiLiveCaptureCtxRef.current?.close().catch(() => undefined);
@@ -842,6 +858,7 @@ function App() {
   const startGeminiLiveSession = async () => {
     if (geminiLiveActiveRef.current) return;
     geminiLiveActiveRef.current = true;        // synchronous guard
+    const myGeneration = ++geminiLiveGenerationRef.current;  // B1: capture before any await
     setIsCharacterRecording(true);
     setCharacterError(null);
     setCharacterReply(null);
@@ -870,7 +887,10 @@ function App() {
     // Fetch short-lived ephemeral token (API key stays server-side)
     let token: string;
     try {
-      const tokenRes = await fetch('/api/gemini-live-token', { method: 'POST' });
+      const tokenRes = await fetch('/api/gemini-live-token', {
+        method: 'POST',
+        signal: AbortSignal.timeout(10000),  // B4: 10s timeout on token fetch
+      });
       if (!tokenRes.ok) throw new Error(`Token endpoint returned ${tokenRes.status}`);
       const data = await tokenRes.json() as { token?: string };
       if (!data.token) throw new Error('Empty token from server');
@@ -882,9 +902,9 @@ function App() {
       return;
     }
 
-    const myGeneration = ++geminiLiveGenerationRef.current;
+    // B1: myGeneration is captured before any await (at top of function)
     const ws = new WebSocket(
-      `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${token}`
+      `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${token}`
     );
     geminiLiveWsRef.current = ws;
     ws.binaryType = 'arraybuffer';
@@ -902,6 +922,15 @@ function App() {
           systemInstruction: { parts: [{ text: buildSystemPrompt(slide.id) }] },
         }
       }));
+
+      // B5: 8s timeout if setupComplete never arrives
+      setTimeout(() => {
+        if (geminiLiveActiveRef.current && geminiLiveGenerationRef.current === myGeneration) {
+          console.error('[gemini-live] setup timed out — no setupComplete received');
+          setCharacterError('Gemini Live setup timed out. Try again.');
+          stopGeminiLiveSession();
+        }
+      }, 8000);
     };
 
     ws.onmessage = (event) => {
@@ -912,6 +941,13 @@ function App() {
       if (msg.setupComplete !== undefined) {
         console.log('[gemini-live] setup complete, starting mic stream');
         void startGeminiLiveMicStream(ws, myGeneration, stream);
+        return;
+      }
+
+      // B6: handle goAway — server wants to close the session gracefully
+      if (msg.goAway !== undefined) {
+        console.warn('[gemini-live] received goAway, closing session');
+        stopGeminiLiveSession();
         return;
       }
 
@@ -1430,6 +1466,7 @@ function App() {
   };
 
   const handleSelectCharacter = (id: string) => {
+    stopGeminiLiveSession();  // B3: clean up any active session before switching characters
     // Log time spent on previous character before switching
     if (selectedCharacterId && characterOpenedAtRef.current !== null) {
       const timeSpentMs = Date.now() - characterOpenedAtRef.current;
