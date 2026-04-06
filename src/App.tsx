@@ -1460,7 +1460,7 @@ function App() {
                       ? 'Thinking'
                       : `Start recording for ${activeCharacterName}`
                 }
-                data-tooltip="Ctrl + Space"
+                data-tooltip="Hold Ctrl + Space to talk"
               >
                 {isCharacterRecording
                   ? 'Stop'

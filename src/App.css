@@ -238,26 +238,28 @@
   position: relative;
 }
 
-.ptt-btn[data-tooltip]:not([disabled])::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(0, 0, 0, 0.75);
-  color: rgba(255, 255, 255, 0.85);
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-  padding: 4px 8px;
-  border-radius: 6px;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
+@media (hover: hover) {
+  .ptt-btn[data-tooltip]:not([disabled])::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.75);
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    padding: 4px 8px;
+    border-radius: 6px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
 
-.ptt-btn[data-tooltip]:not([disabled]):hover::after {
-  opacity: 1;
+  .ptt-btn[data-tooltip]:not([disabled]):hover::after {
+    opacity: 1;
+  }
 }
 
 
