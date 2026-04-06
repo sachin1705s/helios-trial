@@ -884,7 +884,7 @@ function App() {
 
     const myGeneration = ++geminiLiveGenerationRef.current;
     const ws = new WebSocket(
-      `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${token}`
+      `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${token}`
     );
     geminiLiveWsRef.current = ws;
     ws.binaryType = 'arraybuffer';
@@ -896,7 +896,7 @@ function App() {
           model: 'models/gemini-3.1-flash-live-preview',
           generationConfig: {
             responseModalities: ['AUDIO'],
-            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceId: 'Puck' } } },
           },
           outputAudioTranscription: {},
           systemInstruction: { parts: [{ text: buildSystemPrompt(slide.id) }] },
@@ -923,8 +923,8 @@ function App() {
       stopGeminiLiveSession();
     };
 
-    ws.onclose = () => {
-      console.log('[gemini-live] ws closed');
+    ws.onclose = (e) => {
+      console.log('[gemini-live] ws closed', e.code, e.reason);
       stopGeminiLiveSession();
     };
   };
