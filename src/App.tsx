@@ -84,7 +84,6 @@ function App() {
   const [showContact, setShowContact] = useState(false);
   const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(characters[0]?.id ?? null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
-  const [connectionEpoch, setConnectionEpoch] = useState(0); // bumps each time onConnected fires (data channel ready)
   const [streamState, setStreamState] = useState<StreamState>('idle');
   const [_error, setError] = useState<string | null>(null);
   const [isStreamingReady, setIsStreamingReady] = useState(false);
@@ -124,6 +123,7 @@ function App() {
   const isStreamingReadyRef = useRef(false);
   const streamActiveRef = useRef(false); // Set directly in Odyssey callbacks — no React cycle
   const dataChannelReadyRef = useRef(false); // true only after onConnected fires; false when reconnecting
+  const pendingStartRef = useRef<(() => Promise<void>) | null>(null); // startStream fn waiting for onConnected
   const isVoiceAgentSlideRef = useRef(false);
   const lastVoiceActionAtRef = useRef(0);
   const handleInteractRef = useRef<(promptOverride?: string) => void>(() => undefined);
@@ -370,11 +370,15 @@ function App() {
           debug('[odyssey] onConnected — stream:', stream);
           // Set 'connected' here (not in onStatusChange) so the startStream
           // useEffect only fires after the data channel is open and ready.
-          // Also bump connectionEpoch so the effect re-runs even if connectionStatus
-          // was already 'connected' (e.g. slide changed while reconnecting).
           dataChannelReadyRef.current = true;
           setConnectionStatus('connected');
-          setConnectionEpoch((e) => e + 1);
+          // If the effect fired before the data channel was ready (stale connectionStatus),
+          // it stored its start function here. Call it now — no React re-render needed.
+          const pending = pendingStartRef.current;
+          if (pending) {
+            pendingStartRef.current = null;
+            pending().catch(() => undefined);
+          }
           odysseyStreamRef.current = stream;
           const attach = () => {
             if (videoRef.current) {
@@ -545,11 +549,19 @@ function App() {
       retryStreamRef.current = () => service.startStream(streamOptions).then(() => undefined);
 
       // Guard: data channel must be confirmed open (onConnected fired) before startStream.
-      // If not ready, bail out — connectionEpoch will bump when onConnected fires and re-run this effect.
+      // If not ready, store as pending — onConnected will call it directly (no React re-render).
+      // Using pendingStartRef avoids the connectionEpoch feedback loop:
+      // startStream → SDK reconnects → onConnected → epoch bump → second startStream → deadlock.
       if (!dataChannelReadyRef.current) {
-        debug('[odyssey] data channel not ready — skipping startStream, awaiting onConnected');
+        debug('[odyssey] data channel not ready — queuing startStream for onConnected');
+        pendingStartRef.current = async () => {
+          if (requestIdRef.current !== requestId) return;
+          debug('[odyssey] calling startStream (from pending) — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
+          await service.startStream(streamOptions);
+        };
         return;
       }
+      pendingStartRef.current = null;
       if (requestIdRef.current !== requestId) return;
       debug('[odyssey] calling startStream — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
       await service.startStream(streamOptions);
@@ -564,7 +576,7 @@ function App() {
       setIsStreamingReady(false);
       setError(err instanceof Error ? err.message : String(err));
     });
-  }, [connectionStatus, connectionEpoch, showLanding, selectedCharacterId, slide.id, slide.image, slide.prompt, isUploadSlide]);
+  }, [connectionStatus, showLanding, selectedCharacterId, slide.id, slide.image, slide.prompt, isUploadSlide]);
 
   // End the stream when the user navigates back to the landing page so the session isn't consumed idle.
   useEffect(() => {
