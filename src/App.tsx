@@ -54,6 +54,7 @@ function App() {
   const [showContact, setShowContact] = useState(false);
   const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(characters[0]?.id ?? null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
+  const [connectionEpoch, setConnectionEpoch] = useState(0); // bumps each time onConnected fires (data channel ready)
   const [streamState, setStreamState] = useState<StreamState>('idle');
   const [_error, setError] = useState<string | null>(null);
   const [isStreamingReady, setIsStreamingReady] = useState(false);
@@ -92,6 +93,7 @@ function App() {
   const moderationRetryCountRef = useRef(0);
   const isStreamingReadyRef = useRef(false);
   const streamActiveRef = useRef(false); // Set directly in Odyssey callbacks — no React cycle
+  const dataChannelReadyRef = useRef(false); // true only after onConnected fires; false when reconnecting
   const isVoiceAgentSlideRef = useRef(false);
   const lastVoiceActionAtRef = useRef(0);
   const handleInteractRef = useRef<(promptOverride?: string) => void>(() => undefined);
@@ -284,6 +286,13 @@ function App() {
       .connect({
         onConnected: (stream) => {
           console.log('[odyssey] onConnected — stream:', stream);
+          // Set 'connected' here (not in onStatusChange) so the startStream
+          // useEffect only fires after the data channel is open and ready.
+          // Also bump connectionEpoch so the effect re-runs even if connectionStatus
+          // was already 'connected' (e.g. slide changed while reconnecting).
+          dataChannelReadyRef.current = true;
+          setConnectionStatus('connected');
+          setConnectionEpoch((e) => e + 1);
           odysseyStreamRef.current = stream;
           const attach = () => {
             if (videoRef.current) {
@@ -299,7 +308,12 @@ function App() {
         },
         onStatusChange: (status) => {
           console.log('[odyssey] status:', status);
-          setConnectionStatus(status);
+          // 'connected' is set in onConnected instead, which fires only after
+          // both the video track and data channel are ready.
+          if (status !== 'connected') {
+            setConnectionStatus(status);
+            dataChannelReadyRef.current = false; // data channel not ready during reconnect
+          }
         },
         onStreamStarted: () => {
           console.log('[odyssey] onStreamStarted');
@@ -424,6 +438,13 @@ function App() {
       const streamOptions = { prompt: slide.prompt, image: file, portrait: slide.id === 'characters-sudharshan' };
       retryStreamRef.current = () => service.startStream(streamOptions).then(() => undefined);
 
+      // Guard: data channel must be confirmed open (onConnected fired) before startStream.
+      // If not ready, bail out — connectionEpoch will bump when onConnected fires and re-run this effect.
+      if (!dataChannelReadyRef.current) {
+        console.log('[odyssey] data channel not ready — skipping startStream, awaiting onConnected');
+        return;
+      }
+      if (requestIdRef.current !== requestId) return;
       console.log('[odyssey] calling startStream — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
       await service.startStream(streamOptions);
       console.log('[odyssey] startStream resolved');
@@ -437,7 +458,7 @@ function App() {
       setIsStreamingReady(false);
       setError(err instanceof Error ? err.message : String(err));
     });
-  }, [connectionStatus, showLanding, selectedCharacterId, slide.id, slide.image, slide.prompt, isUploadSlide]);
+  }, [connectionStatus, connectionEpoch, showLanding, selectedCharacterId, slide.id, slide.image, slide.prompt, isUploadSlide]);
 
   // End the stream when the user navigates back to the landing page so the session isn't consumed idle.
   useEffect(() => {
