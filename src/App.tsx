@@ -436,7 +436,8 @@ function App() {
       }
 
       const streamOptions = { prompt: slide.prompt, image: file, portrait: slide.id === 'characters-sudharshan' };
-      retryStreamRef.current = () => service.startStream(streamOptions).then(() => undefined);
+      // retryStreamRef is set AFTER startStream resolves — prevents onStreamEnded (macrotask from
+      // previous endStream) from racing with the initial call and triggering a double startStream → deadlock.
 
       // Guard: data channel must be confirmed open (onConnected fired) before startStream.
       // If not ready, bail out — connectionEpoch will bump when onConnected fires and re-run this effect.
@@ -448,6 +449,9 @@ function App() {
       console.log('[odyssey] calling startStream — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
       await service.startStream(streamOptions);
       console.log('[odyssey] startStream resolved');
+      if (requestIdRef.current === requestId) {
+        retryStreamRef.current = () => service.startStream(streamOptions).then(() => undefined);
+      }
     };
 
     run().catch((err) => {
