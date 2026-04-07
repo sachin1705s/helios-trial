@@ -94,6 +94,7 @@ function App() {
   const streamActiveRef = useRef(false); // Set directly in Odyssey callbacks — no React cycle
   const dataChannelReadyRef = useRef(false); // true only after onConnected fires; false when reconnecting
   const pendingStartRef = useRef<(() => Promise<void>) | null>(null); // startStream fn waiting for onConnected
+  const startStreamInFlightRef = useRef(false); // true while startStream is awaited — blocks re-entrant calls
   const isVoiceAgentSlideRef = useRef(false);
   const lastVoiceActionAtRef = useRef(0);
   const handleInteractRef = useRef<(promptOverride?: string) => void>(() => undefined);
@@ -461,8 +462,19 @@ function App() {
       }
       pendingStartRef.current = null;
       if (requestIdRef.current !== requestId) return;
+      // Mutex: if a startStream is already awaiting (e.g. triggered by a stale effect re-run from
+      // onConnected → setConnectionStatus), bail out — the in-flight call will resolve or retry.
+      if (startStreamInFlightRef.current) {
+        console.log('[odyssey] startStream already in flight — skipping duplicate call');
+        return;
+      }
+      startStreamInFlightRef.current = true;
       console.log('[odyssey] calling startStream — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
-      await service.startStream(streamOptions);
+      try {
+        await service.startStream(streamOptions);
+      } finally {
+        startStreamInFlightRef.current = false;
+      }
       console.log('[odyssey] startStream resolved');
       if (requestIdRef.current === requestId) {
         retryStreamRef.current = () => service.startStream(streamOptions).then(() => undefined);
@@ -473,10 +485,16 @@ function App() {
       if (requestIdRef.current !== requestId) {
         return;
       }
+      startStreamInFlightRef.current = false;
       setStreamState('error');
       setIsStreamingReady(false);
       setError(err instanceof Error ? err.message : String(err));
     });
+
+    return () => {
+      startStreamInFlightRef.current = false;
+      pendingStartRef.current = null;
+    };
   }, [connectionStatus, showLanding, selectedCharacterId, slide.id, slide.image, slide.prompt, isUploadSlide]);
 
   // End the stream when the user navigates back to the landing page so the session isn't consumed idle.
