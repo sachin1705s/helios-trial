@@ -123,6 +123,7 @@ function App() {
   const moderationRetryCountRef = useRef(0);
   const isStreamingReadyRef = useRef(false);
   const streamActiveRef = useRef(false); // Set directly in Odyssey callbacks — no React cycle
+  const dataChannelReadyRef = useRef(false); // true only after onConnected fires; false when reconnecting
   const isVoiceAgentSlideRef = useRef(false);
   const lastVoiceActionAtRef = useRef(0);
   const handleInteractRef = useRef<(promptOverride?: string) => void>(() => undefined);
@@ -371,6 +372,7 @@ function App() {
           // useEffect only fires after the data channel is open and ready.
           // Also bump connectionEpoch so the effect re-runs even if connectionStatus
           // was already 'connected' (e.g. slide changed while reconnecting).
+          dataChannelReadyRef.current = true;
           setConnectionStatus('connected');
           setConnectionEpoch((e) => e + 1);
           odysseyStreamRef.current = stream;
@@ -390,7 +392,10 @@ function App() {
           debug('[odyssey] status:', status);
           // 'connected' is set in onConnected instead, which fires only after
           // both the video track and data channel are ready.
-          if (status !== 'connected') setConnectionStatus(status);
+          if (status !== 'connected') {
+            setConnectionStatus(status);
+            dataChannelReadyRef.current = false; // data channel is not ready during reconnect
+          }
         },
         onStreamStarted: () => {
           debug('[odyssey] onStreamStarted');
@@ -539,6 +544,13 @@ function App() {
       const streamOptions = { prompt: slide.prompt, image: file, portrait: slide.id === 'characters-sudharshan' };
       retryStreamRef.current = () => service.startStream(streamOptions).then(() => undefined);
 
+      // Guard: data channel must be confirmed open (onConnected fired) before startStream.
+      // If not ready, bail out — connectionEpoch will bump when onConnected fires and re-run this effect.
+      if (!dataChannelReadyRef.current) {
+        debug('[odyssey] data channel not ready — skipping startStream, awaiting onConnected');
+        return;
+      }
+      if (requestIdRef.current !== requestId) return;
       debug('[odyssey] calling startStream — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
       await service.startStream(streamOptions);
       debug('[odyssey] startStream resolved');
