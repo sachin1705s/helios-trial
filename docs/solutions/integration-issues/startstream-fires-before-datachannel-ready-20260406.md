@@ -74,39 +74,71 @@ onStatusChange: (status) => {
 
 This doesn't reliably prevent the race because the effect could be scheduled in the same render batch in which `connectionStatus` is still `'connected'`.
 
-## Solution
+## First Fix Attempt (Incomplete)
 
-Add a `connectionEpoch` counter that increments **only inside `onConnected`** (i.e., only when the data channel is confirmed ready). Add it to the startStream useEffect's dependency array.
+`connectionEpoch` was added to the dependency array and bumped inside `onConnected`. This ensures a **retry** after the data channel opens, but does not prevent the **premature** `startStream` call from run 1.
 
-This guarantees that every time the data channel opens, the effect re-runs with a fresh `requestId`. The existing `requestId` guard automatically cancels any premature run.
+### Why it was still broken
+
+When a slide dependency changes while `connectionStatus` is already `'connected'`, run 1 fires immediately. If the slide image is cached, `loadImageFile` returns synchronously — run 1 passes the `requestId` check and calls `startStream` before `onConnected` fires. Then `onConnected` bumps `connectionEpoch`, run 2 starts, increments `requestIdRef.current` to 2, and also calls `startStream`. Two concurrent `startStream` calls → same double-startStream hang from the 2026-03-27 incident.
+
+## Solution (Complete — Two Parts)
+
+### Part 1: `connectionEpoch` — guarantees retry after data channel opens
 
 ```tsx
-// 1. Add state
 const [connectionEpoch, setConnectionEpoch] = useState(0);
 
-// 2. Bump it inside onConnected (data channel confirmed ready)
 onConnected: (stream) => {
+  dataChannelReadyRef.current = true;
   setConnectionStatus('connected');
-  setConnectionEpoch((e) => e + 1); // ← forces effect re-run after data channel opens
-  // ...attach stream to video...
+  setConnectionEpoch((e) => e + 1); // forces effect re-run after data channel opens
 },
 
-// 3. Add to dependency array
 }, [connectionStatus, connectionEpoch, showLanding, selectedCharacterId, slide.id, slide.image, slide.prompt, isUploadSlide]);
 ```
 
-## Why This Works
+### Part 2: `dataChannelReadyRef` — blocks premature `startStream` in run 1
 
-1. `connectionEpoch` can only change inside `onConnected`. This makes it a reliable signal that the data channel is open and `startStream` is safe to call.
-2. When a slide dependency changes (e.g., `slide.id`) while `connectionStatus` is already `'connected'`, the effect fires early. `requestId` increments to, say, 2.
-3. `onConnected` fires later → `connectionEpoch` bumps → effect runs again with `requestId = 3`. The new run calls `endStream` (if needed) then `startStream`.
-4. The premature run with `requestId = 2` is abandoned: `requestIdRef.current (3) !== requestId (2)` → returns early without calling `startStream`.
+```tsx
+const dataChannelReadyRef = useRef(false); // true only after onConnected fires
+
+onStatusChange: (status) => {
+  if (status !== 'connected') {
+    setConnectionStatus(status);
+    dataChannelReadyRef.current = false; // reset when reconnecting
+  }
+},
+
+onConnected: (stream) => {
+  dataChannelReadyRef.current = true; // data channel confirmed open
+  setConnectionStatus('connected');
+  setConnectionEpoch((e) => e + 1);
+},
+
+// In run(), right before startStream:
+if (!dataChannelReadyRef.current) {
+  debug('[odyssey] data channel not ready — skipping startStream, awaiting onConnected');
+  return; // connectionEpoch bump from onConnected will re-run this effect
+}
+if (requestIdRef.current !== requestId) return;
+await service.startStream(streamOptions);
+```
+
+## Why the Complete Fix Works
+
+1. Run 1 fires early (slide dependency changed while `connectionStatus` was stale-connected).
+2. `dataChannelReadyRef.current` is `false` (set by `onStatusChange('connecting')`) → run 1 returns early without calling `startStream`.
+3. `onConnected` fires → `dataChannelReadyRef.current = true` → `connectionEpoch` bumps.
+4. Effect re-runs as run 2 → data channel confirmed ready → `startStream` called exactly once.
+
+`dataChannelReadyRef` follows critical-patterns.md #3: written synchronously inside SDK callbacks, never synced via `useEffect`.
 
 ## Prevention
 
-- **Never rely solely on `connectionStatus === 'connected'` to gate `startStream`.** `connectionStatus` may carry over from a previous session and be stale by the time the effect runs. Use a purpose-built counter (`connectionEpoch`) that is incremented exclusively inside `onConnected` to represent "data channel is now ready."
-- **Log call ordering.** The key diagnostic signal here was that `calling startStream` appeared **before** `onConnected` in the console. Any future regression will have the same signature — watch for it.
-- **The `requestId` guard is your safety net, not your primary defense.** It correctly cancels stale runs, but only after the damage (a premature `startStream`) has already been done. The primary defense is ensuring the effect only fires when the data channel is actually ready.
+- **Two defenses are required, not one.** `connectionEpoch` alone only guarantees a retry — it doesn't block the premature call. `dataChannelReadyRef` alone blocks the premature call — but without `connectionEpoch`, the retry might never fire if `connectionStatus` was already `'connected'`. Both are needed.
+- **Log call ordering.** The key diagnostic signal is `calling startStream` appearing **before** `onConnected`. Any future regression will have this same signature.
+- **Follow critical-patterns.md #3 for `dataChannelReadyRef`.** Write it directly and synchronously inside the SDK callbacks that own the transition. Never sync it via `useEffect`.
 
 ## Related Issues
 

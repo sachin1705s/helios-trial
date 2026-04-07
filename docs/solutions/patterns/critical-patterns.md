@@ -131,28 +131,41 @@ useEffect(() => {
 }, [connectionStatus, slide.id, ...]);
 ```
 
-### ✅ CORRECT (add `connectionEpoch` — only bumped inside `onConnected`)
+### ✅ CORRECT (two defenses required: `dataChannelReadyRef` to block + `connectionEpoch` to retry)
 ```tsx
-// Bump a counter each time onConnected fires (data channel confirmed open).
-// Add it to the effect's dependency array so the effect re-runs after the
-// data channel is ready, and the requestId guard cancels any premature run.
+// Both are required. connectionEpoch alone guarantees a retry but doesn't block
+// the premature call. dataChannelReadyRef alone blocks the premature call but
+// won't trigger a retry if connectionStatus was already 'connected'.
 
+const dataChannelReadyRef = useRef(false); // written synchronously in SDK callbacks
 const [connectionEpoch, setConnectionEpoch] = useState(0);
 
+onStatusChange: (status) => {
+  if (status !== 'connected') {
+    setConnectionStatus(status);
+    dataChannelReadyRef.current = false; // data channel not ready during reconnect
+  }
+},
 onConnected: (stream) => {
+  dataChannelReadyRef.current = true;     // data channel confirmed open
   setConnectionStatus('connected');
-  setConnectionEpoch((e) => e + 1); // ← only here — guarantees data channel is open
+  setConnectionEpoch((e) => e + 1);      // forces effect re-run after ready
 },
 
 useEffect(() => {
   if (connectionStatus !== 'connected') return;
-  // connectionEpoch ensures this only fires after the data channel is ready,
-  // even if connectionStatus was already 'connected' from a previous state.
-  service.startStream(...);
+  const run = async () => {
+    // ...load image...
+    if (!dataChannelReadyRef.current) {   // block premature startStream
+      return; // connectionEpoch bump from onConnected will re-run this effect
+    }
+    if (requestIdRef.current !== requestId) return;
+    await service.startStream(...);
+  };
 }, [connectionStatus, connectionEpoch, slide.id, ...]);
 ```
 
-**Why:** `connectionStatus` is React state that can carry over from a previous session. When `slide.id` or another dependency changes while `connectionStatus` is already `'connected'`, the effect fires immediately — before `onConnected` fires for the current connection. `startStream` is sent over the data channel before it's open, the command is silently lost, and `onStreamStarted` never fires. The `connectionEpoch` counter is written exclusively inside `onConnected`, making it a reliable proxy for "data channel is now open." Every `onConnected` bumps it; the effect re-runs; the existing `requestId` guard cancels the premature earlier run.
+**Why:** `connectionStatus` is React state that can carry over from a previous session. When `slide.id` changes while `connectionStatus` is already `'connected'`, the effect fires immediately — before `onConnected` for the current connection. If the image is cached, `loadImageFile` returns synchronously and `startStream` is called before the data channel is open (command silently lost). Then `onConnected` fires, `connectionEpoch` bumps, and a second `startStream` is also called — two concurrent calls, same double-startStream hang as the 2026-03-27 incident. `dataChannelReadyRef` prevents run 1 from calling `startStream`. `connectionEpoch` ensures run 2 fires after the data channel is ready.
 
 **Diagnostic signature:** `calling startStream` appears **before** `onConnected` in the console. Any future regression will have this same ordering — watch for it.
 
