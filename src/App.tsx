@@ -546,18 +546,23 @@ function App() {
       }
 
       const streamOptions = { prompt: slide.prompt, image: file, portrait: slide.id === 'characters-sudharshan' };
-      retryStreamRef.current = () => service.startStream(streamOptions).then(() => undefined);
+      // retryStreamRef is set AFTER startStream resolves, not before.
+      // Setting it before would let onStreamEnded fire a concurrent startStream while the
+      // initial call is still in-flight (endStream → onStreamEnded → retry races run()).
 
       // Guard: data channel must be confirmed open (onConnected fired) before startStream.
       // If not ready, store as pending — onConnected will call it directly (no React re-render).
-      // Using pendingStartRef avoids the connectionEpoch feedback loop:
-      // startStream → SDK reconnects → onConnected → epoch bump → second startStream → deadlock.
+      // Using pendingStartRef avoids a feedback loop:
+      // startStream → SDK reconnects → onConnected → effect re-runs → second startStream → deadlock.
       if (!dataChannelReadyRef.current) {
         debug('[odyssey] data channel not ready — queuing startStream for onConnected');
         pendingStartRef.current = async () => {
           if (requestIdRef.current !== requestId) return;
           debug('[odyssey] calling startStream (from pending) — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
           await service.startStream(streamOptions);
+          if (requestIdRef.current === requestId) {
+            retryStreamRef.current = () => service.startStream(streamOptions).then(() => undefined);
+          }
         };
         return;
       }
@@ -566,6 +571,9 @@ function App() {
       debug('[odyssey] calling startStream — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
       await service.startStream(streamOptions);
       debug('[odyssey] startStream resolved');
+      if (requestIdRef.current === requestId) {
+        retryStreamRef.current = () => service.startStream(streamOptions).then(() => undefined);
+      }
     };
 
     run().catch((err) => {
