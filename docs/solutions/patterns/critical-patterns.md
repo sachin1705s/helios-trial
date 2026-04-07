@@ -115,3 +115,47 @@ onStreamEnded: () => {
 **Placement/Context:** Applies to any ref used as a guard inside SDK event callbacks, WebSocket handlers, `setInterval`/`setTimeout` closures, or any async function where stale state would cause incorrect behavior. Established in the Odyssey stream-hang incident (2026-03-27) and applied consistently to `streamActiveRef`, `geminiLiveActiveRef`, and `isCharacterRecordingRef`.
 
 **Documented in:** `docs/solutions/integration-issues/stream-never-starts-odyssey-switching-20260327.md`
+
+---
+
+## 4. Never Rely Solely on `connectionStatus === 'connected'` to Gate `startStream` (ALWAYS REQUIRED)
+
+### ❌ WRONG (stale `connectionStatus` causes `startStream` before data channel is ready)
+```tsx
+// connectionStatus can be 'connected' from a previous slide/session.
+// When a dependency like slide.id changes, this effect fires immediately —
+// before the SDK's onConnected fires for the current connection.
+useEffect(() => {
+  if (connectionStatus !== 'connected') return;
+  service.startStream(...); // ← data channel may not be open yet → command is silently lost
+}, [connectionStatus, slide.id, ...]);
+```
+
+### ✅ CORRECT (add `connectionEpoch` — only bumped inside `onConnected`)
+```tsx
+// Bump a counter each time onConnected fires (data channel confirmed open).
+// Add it to the effect's dependency array so the effect re-runs after the
+// data channel is ready, and the requestId guard cancels any premature run.
+
+const [connectionEpoch, setConnectionEpoch] = useState(0);
+
+onConnected: (stream) => {
+  setConnectionStatus('connected');
+  setConnectionEpoch((e) => e + 1); // ← only here — guarantees data channel is open
+},
+
+useEffect(() => {
+  if (connectionStatus !== 'connected') return;
+  // connectionEpoch ensures this only fires after the data channel is ready,
+  // even if connectionStatus was already 'connected' from a previous state.
+  service.startStream(...);
+}, [connectionStatus, connectionEpoch, slide.id, ...]);
+```
+
+**Why:** `connectionStatus` is React state that can carry over from a previous session. When `slide.id` or another dependency changes while `connectionStatus` is already `'connected'`, the effect fires immediately — before `onConnected` fires for the current connection. `startStream` is sent over the data channel before it's open, the command is silently lost, and `onStreamStarted` never fires. The `connectionEpoch` counter is written exclusively inside `onConnected`, making it a reliable proxy for "data channel is now open." Every `onConnected` bumps it; the effect re-runs; the existing `requestId` guard cancels the premature earlier run.
+
+**Diagnostic signature:** `calling startStream` appears **before** `onConnected` in the console. Any future regression will have this same ordering — watch for it.
+
+**Placement/Context:** Applies to any SDK integration where a "connected" event has two phases: a status change (connection established) and a ready event (channel open, commands accepted). Do not treat the status change alone as permission to send commands. Use a purpose-built epoch/generation counter tied to the ready event.
+
+**Documented in:** `docs/solutions/integration-issues/startstream-fires-before-datachannel-ready-20260406.md`

@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
+import { GoogleGenAI, Modality, type Session } from '@google/genai';
 import { Analytics } from '@vercel/analytics/react';
 import { SpeedInsights } from '@vercel/speed-insights/react';
 import type { ConnectionStatus } from '@odysseyml/odyssey';
 import charactersData from './data/characters.json';
+import { trackEvent } from './lib/analytics';
 import { OdysseyService, credentialsFromDict, loadImageFile, type ClientCredentials, type StreamState } from './lib/odyssey';
 import './App.css';
 
@@ -82,6 +84,7 @@ function App() {
   const [showContact, setShowContact] = useState(false);
   const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(characters[0]?.id ?? null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
+  const [connectionEpoch, setConnectionEpoch] = useState(0); // bumps each time onConnected fires (data channel ready)
   const [streamState, setStreamState] = useState<StreamState>('idle');
   const [_error, setError] = useState<string | null>(null);
   const [isStreamingReady, setIsStreamingReady] = useState(false);
@@ -126,20 +129,32 @@ function App() {
   const ttsAudioCtxRef = useRef<AudioContext | null>(null);
   const characterOpenedAtRef = useRef<number | null>(null);
   const hasLoggedFirstPromptRef = useRef(false);
+  const currentPageRef = useRef<string | null>(null);
   // Gemini Live session state
-  const geminiLiveWsRef = useRef<WebSocket | null>(null);
+  const geminiLiveSessionRef = useRef<Session | null>(null);
   const geminiLiveCaptureCtxRef = useRef<AudioContext | null>(null);
   const geminiLiveGenerationRef = useRef(0);
   const geminiLiveActiveRef = useRef(false);
   const geminiLivePlaybackTimeRef = useRef(0);
   const geminiLiveSourceNodesRef = useRef<AudioBufferSourceNode[]>([]);
 
-  const logEvent = (event: string, data: Record<string, unknown>) => {
-    fetch('/api/log', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ event, data, timestamp: new Date().toISOString() }),
-    }).catch(() => undefined);
+  const logEvent = (event: string, data: Record<string, unknown>, transport: 'fetch' | 'beacon' = 'fetch') => {
+    trackEvent(event, data, { transport });
+  };
+
+  const closeActiveCharacter = (reason: 'switch' | 'landing_back' | 'page_exit') => {
+    if (!selectedCharacterId || characterOpenedAtRef.current === null) {
+      return;
+    }
+    const timeSpentMs = Date.now() - characterOpenedAtRef.current;
+    const currentCharacter = characters.find((c) => c.id === selectedCharacterId);
+    logEvent('character_closed', {
+      characterId: selectedCharacterId,
+      characterName: currentCharacter?.title ?? selectedCharacterId,
+      timeSpentMs,
+      reason,
+    }, reason === 'page_exit' ? 'beacon' : 'fetch');
+    characterOpenedAtRef.current = null;
   };
 
   const logFirstPromptIfNeeded = (characterId: string, characterName: string, inputMethod: string) => {
@@ -227,6 +242,24 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const pageName = showLanding
+      ? showAbout
+        ? 'about'
+        : showContact
+          ? 'contact'
+          : 'landing'
+      : `character:${selectedCharacterId ?? 'unknown'}`;
+    if (currentPageRef.current === pageName) {
+      return;
+    }
+    currentPageRef.current = pageName;
+    logEvent('page_view', {
+      pageName,
+      characterId: showLanding ? null : selectedCharacterId,
+    });
+  }, [selectedCharacterId, showAbout, showContact, showLanding]);
+
+  useEffect(() => {
     if (showLanding) return; // Wait until user has selected a character before connecting
     let cancelled = false;
     const requestToken = async () => {
@@ -261,14 +294,16 @@ function App() {
 
   useEffect(() => {
     const handleBeforeUnload = () => {
+      closeActiveCharacter('page_exit');
       releaseOdysseyLease();
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
+      closeActiveCharacter('page_exit');
       releaseOdysseyLease();
     };
-  }, []);
+  }, [selectedCharacterId]);
 
 
   useEffect(() => {
@@ -334,7 +369,10 @@ function App() {
           debug('[odyssey] onConnected — stream:', stream);
           // Set 'connected' here (not in onStatusChange) so the startStream
           // useEffect only fires after the data channel is open and ready.
+          // Also bump connectionEpoch so the effect re-runs even if connectionStatus
+          // was already 'connected' (e.g. slide changed while reconnecting).
           setConnectionStatus('connected');
+          setConnectionEpoch((e) => e + 1);
           odysseyStreamRef.current = stream;
           const attach = () => {
             if (videoRef.current) {
@@ -384,6 +422,12 @@ function App() {
           const r = typeof reason === 'string' ? reason : JSON.stringify(reason);
           const m = typeof message === 'string' ? message : JSON.stringify(message);
           if (r === 'moderation_failed') {
+            logEvent('moderation_blocked', {
+              reason: r,
+              message: m,
+              characterId: slide.id,
+              characterName: activeCharacterName,
+            });
             if (moderationRetryCountRef.current < 3 && retryStreamRef.current) {
               moderationRetryCountRef.current++;
               debug(`[odyssey] moderation_failed — retrying (attempt ${moderationRetryCountRef.current})`);
@@ -401,6 +445,12 @@ function App() {
             }
             return;
           }
+          logEvent('stream_error', {
+            reason: r,
+            message: m,
+            characterId: slide.id,
+            characterName: activeCharacterName,
+          });
           setError(`${r}: ${m}`);
         },
         onError: (err) => {
@@ -409,10 +459,22 @@ function App() {
           setStreamState('error');
           setIsStreamingReady(false);
           if (err.message?.includes('moderation_failed')) {
+            logEvent('moderation_blocked', {
+              reason: 'exception',
+              message: err.message,
+              characterId: slide.id,
+              characterName: activeCharacterName,
+            });
             setModerationError('Prompt blocked by moderation. Please try a different request.');
             setError(null);
             return;
           }
+          logEvent('stream_error', {
+            reason: 'client_error',
+            message: err.message,
+            characterId: slide.id,
+            characterName: activeCharacterName,
+          });
           setError(err.message);
         }
       })
@@ -490,7 +552,7 @@ function App() {
       setIsStreamingReady(false);
       setError(err instanceof Error ? err.message : String(err));
     });
-  }, [connectionStatus, showLanding, selectedCharacterId, slide.id, slide.image, slide.prompt, isUploadSlide]);
+  }, [connectionStatus, connectionEpoch, showLanding, selectedCharacterId, slide.id, slide.image, slide.prompt, isUploadSlide]);
 
   // End the stream when the user navigates back to the landing page so the session isn't consumed idle.
   useEffect(() => {
@@ -795,18 +857,16 @@ function App() {
     if (content.turnComplete) setIsCharacterThinking(false);
   };
 
-  // Closes the Gemini Live WebSocket, releases mic, and resets all session state.
+  // Closes the Gemini Live session, releases mic, and resets all session state.
   // Safe to call multiple times (guarded by geminiLiveActiveRef).
   const stopGeminiLiveSession = () => {
     if (!geminiLiveActiveRef.current) return;
-    geminiLiveActiveRef.current = false;       // synchronous — same pattern as streamActiveRef
+    geminiLiveActiveRef.current = false;
     geminiLiveGenerationRef.current++;          // invalidate any in-flight message handlers
     stopGeminiLiveAudio();
-    if (geminiLiveWsRef.current?.readyState === WebSocket.OPEN) {
-      try { geminiLiveWsRef.current.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } })); } catch { /* ignore */ }
-    }
-    geminiLiveWsRef.current?.close();
-    geminiLiveWsRef.current = null;
+    try { geminiLiveSessionRef.current?.sendRealtimeInput({ audioStreamEnd: true }); } catch { /* ignore */ }
+    try { geminiLiveSessionRef.current?.close(); } catch { /* ignore */ }
+    geminiLiveSessionRef.current = null;
     geminiLiveCaptureCtxRef.current?.close().catch(() => undefined);
     geminiLiveCaptureCtxRef.current = null;
     characterStreamRef.current?.getTracks().forEach(t => t.stop());
@@ -814,10 +874,10 @@ function App() {
     setIsCharacterRecording(false);
   };
 
-  // Loads the AudioWorklet and begins streaming 16kHz PCM to the open WebSocket.
-  // Called only after the server sends setupComplete.
+  // Loads the AudioWorklet and begins streaming 16kHz PCM via the SDK session.
+  // Called only after setupComplete is received.
   const startGeminiLiveMicStream = async (
-    ws: WebSocket,
+    session: Session,
     myGeneration: number,
     stream: MediaStream
   ) => {
@@ -837,11 +897,12 @@ function App() {
       const workletNode = new AudioWorkletNode(captureCtx, 'pcm-processor');
 
       workletNode.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
-        if (ws.readyState !== WebSocket.OPEN) return;
         if (geminiLiveGenerationRef.current !== myGeneration) return;
-        ws.send(JSON.stringify({
-          realtimeInput: { audio: { data: arrayBufferToBase64(e.data), mimeType: 'audio/pcm;rate=16000' } }
-        }));
+        try {
+          session.sendRealtimeInput({
+            audio: { data: arrayBufferToBase64(e.data), mimeType: 'audio/pcm;rate=16000' },
+          });
+        } catch { /* session closed */ }
       };
 
       // Connect mic → worklet; intentionally NOT connected to destination (prevents echo)
@@ -854,11 +915,10 @@ function App() {
   };
 
   // Starts a Gemini Live speech-to-speech session for the current slide (Einstein only).
-  // Fetches an ephemeral token, opens a WebSocket to Gemini, and streams mic audio.
   const startGeminiLiveSession = async () => {
     if (geminiLiveActiveRef.current) return;
-    geminiLiveActiveRef.current = true;        // synchronous guard
-    const myGeneration = ++geminiLiveGenerationRef.current;  // B1: capture before any await
+    geminiLiveActiveRef.current = true;
+    const myGeneration = ++geminiLiveGenerationRef.current;
     setIsCharacterRecording(true);
     setCharacterError(null);
     setCharacterReply(null);
@@ -870,7 +930,7 @@ function App() {
       ttsAudioCtxRef.current.resume().catch(() => undefined);
     }
 
-    // Acquire mic before any awaits to stay within user gesture context
+    // Acquire mic before any awaits to stay within the user-gesture context
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -884,17 +944,17 @@ function App() {
     }
     characterStreamRef.current = stream;
 
-    // Fetch short-lived ephemeral token (API key stays server-side)
-    let token: string;
+    // Fetch API key from server (key never sent to browser directly)
+    let apiKey: string;
     try {
-      const tokenRes = await fetch('/api/gemini-live-token', {
+      const res = await fetch('/api/gemini-live-token', {
         method: 'POST',
-        signal: AbortSignal.timeout(10000),  // B4: 10s timeout on token fetch
+        signal: AbortSignal.timeout(10000),
       });
-      if (!tokenRes.ok) throw new Error(`Token endpoint returned ${tokenRes.status}`);
-      const data = await tokenRes.json() as { token?: string };
+      if (!res.ok) throw new Error(`Token endpoint returned ${res.status}`);
+      const data = await res.json() as { token?: string };
       if (!data.token) throw new Error('Empty token from server');
-      token = data.token;
+      apiKey = data.token;
     } catch (err) {
       console.error('[gemini-live] token fetch error', err);
       setCharacterError('Could not connect to Gemini Live. Try again.');
@@ -902,67 +962,65 @@ function App() {
       return;
     }
 
-    // B1: myGeneration is captured before any await (at top of function)
-    const ws = new WebSocket(
-      `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${token}`
-    );
-    geminiLiveWsRef.current = ws;
-    ws.binaryType = 'arraybuffer';
+    // Cancelled while awaiting
+    if (geminiLiveGenerationRef.current !== myGeneration) {
+      stream.getTracks().forEach(t => t.stop());
+      return;
+    }
 
-    ws.onopen = () => {
-      console.log('[gemini-live] ws open, sending setup');
-      ws.send(JSON.stringify({
-        setup: {
-          model: 'models/gemini-3.1-flash-live-preview',
-          generationConfig: {
-            responseModalities: ['AUDIO'],
-            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
+    // Connect via SDK — handles WebSocket protocol, setup message, and message parsing
+    const slideId = slide.id;
+    const ai = new GoogleGenAI({ apiKey });
+    let session: Session;
+    try {
+      session = await ai.live.connect({
+        model: 'gemini-3.1-flash-live-preview',
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
+          systemInstruction: buildSystemPrompt(slideId),
+        },
+        callbacks: {
+          onopen: () => console.log('[gemini-live] connected'),
+          onmessage: (msg) => {
+            if (geminiLiveGenerationRef.current !== myGeneration) return;
+            const raw = msg as unknown as Record<string, unknown>;
+            if (raw.setupComplete !== undefined) {
+              console.log('[gemini-live] setup complete, starting mic stream');
+              void startGeminiLiveMicStream(geminiLiveSessionRef.current!, myGeneration, stream);
+              return;
+            }
+            if (raw.goAway !== undefined) {
+              console.warn('[gemini-live] goAway received');
+              stopGeminiLiveSession();
+              return;
+            }
+            handleGeminiLiveMessage(raw, myGeneration);
           },
-          outputAudioTranscription: {},
-          systemInstruction: { parts: [{ text: buildSystemPrompt(slide.id) }] },
-        }
-      }));
-
-      // B5: 8s timeout if setupComplete never arrives
-      setTimeout(() => {
-        if (geminiLiveActiveRef.current && geminiLiveGenerationRef.current === myGeneration) {
-          console.error('[gemini-live] setup timed out — no setupComplete received');
-          setCharacterError('Gemini Live setup timed out. Try again.');
-          stopGeminiLiveSession();
-        }
-      }, 8000);
-    };
-
-    ws.onmessage = (event) => {
-      let msg: Record<string, unknown>;
-      try { msg = JSON.parse(event.data as string) as Record<string, unknown>; }
-      catch { return; }
-
-      if (msg.setupComplete !== undefined) {
-        console.log('[gemini-live] setup complete, starting mic stream');
-        void startGeminiLiveMicStream(ws, myGeneration, stream);
-        return;
-      }
-
-      // B6: handle goAway — server wants to close the session gracefully
-      if (msg.goAway !== undefined) {
-        console.warn('[gemini-live] received goAway, closing session');
-        stopGeminiLiveSession();
-        return;
-      }
-
-      handleGeminiLiveMessage(msg, myGeneration);
-    };
-
-    ws.onerror = (e) => {
-      console.error('[gemini-live] ws error', e);
+          onerror: (e) => {
+            console.error('[gemini-live] error', e);
+            if (geminiLiveGenerationRef.current === myGeneration) stopGeminiLiveSession();
+          },
+          onclose: (e) => {
+            console.log('[gemini-live] closed', (e as CloseEvent).code, (e as CloseEvent).reason);
+            if (geminiLiveGenerationRef.current === myGeneration) stopGeminiLiveSession();
+          },
+        },
+      });
+    } catch (err) {
+      console.error('[gemini-live] connect error', err);
+      setCharacterError('Could not connect to Gemini Live. Try again.');
       stopGeminiLiveSession();
-    };
+      return;
+    }
 
-    ws.onclose = (e) => {
-      console.log('[gemini-live] ws closed', e.code, e.reason);
-      stopGeminiLiveSession();
-    };
+    // Session may have been cancelled while awaiting connect
+    if (geminiLiveGenerationRef.current !== myGeneration) {
+      try { session.close(); } catch { /* ignore */ }
+      return;
+    }
+
+    geminiLiveSessionRef.current = session;
   };
 
   const playCharacterTTS = async (text: string, slideId?: string) => {
@@ -1098,7 +1156,15 @@ function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: userText, history, character: characterName, enableSearch })
     });
-    if (!chatResponse.ok) throw new Error('Character response failed');
+    if (!chatResponse.ok) {
+      logEvent('response_failed', {
+        characterId: slideId,
+        characterName,
+        latencyMs: Date.now() - chatStartedAt,
+        status: chatResponse.status,
+      });
+      throw new Error('Character response failed');
+    }
 
     const chatData = await chatResponse.json() as { reply?: string; action?: string; objects?: string[]; sources?: { title: string; url: string }[] };
     const reply = String(chatData.reply ?? '').trim() || 'Hmm, fascinating.';
@@ -1190,12 +1256,24 @@ function App() {
             }
             const statusLine = `STT failed (${sttResponse.status})`;
             const message = detail ? `${statusLine}: ${detail}` : statusLine;
+            logEvent('stt_failed', {
+              characterId: slideId,
+              characterName,
+              status: sttResponse.status,
+              detail: detail || null,
+              inputMethod: 'character_voice',
+            });
             throw new Error(message);
           }
 
           const sttData = (await sttResponse.json()) as { text?: string };
           const transcript = (sttData.text ?? '').trim();
           if (!transcript) {
+            logEvent('stt_empty', {
+              characterId: slideId,
+              characterName,
+              inputMethod: 'character_voice',
+            });
             setCharacterError('We did not hear anything. Try again.');
             return;
           }
@@ -1214,6 +1292,11 @@ function App() {
             /stt/i.test(message) ||
             /microphone/i.test(message) ||
             /hear anything/i.test(message);
+          logEvent(isInputError ? 'character_input_error' : 'character_flow_error', {
+            characterId: slideId,
+            characterName,
+            message,
+          });
           if (isInputError) {
             setCharacterError(message);
           } else {
@@ -1229,7 +1312,13 @@ function App() {
       setIsCharacterRecording(true);
       recorder.start();
     } catch (err) {
-      setCharacterError(err instanceof Error ? err.message : 'Microphone access was blocked.');
+      const message = err instanceof Error ? err.message : 'Microphone access was blocked.';
+      logEvent('character_mic_blocked', {
+        characterId: slide.id,
+        characterName: activeCharacterName,
+        message,
+      });
+      setCharacterError(message);
     }
   };
 
@@ -1375,9 +1464,20 @@ function App() {
               handleVoiceUtterance(transcript, 'stt');
             }
           } else {
+            logEvent('stt_empty', {
+              characterId: slide.id,
+              characterName: activeCharacterName,
+              inputMethod: 'world_voice',
+            });
             setSpeechError('We did not hear anything. Try again.');
           }
         } catch (err) {
+          logEvent('stt_failed', {
+            characterId: slide.id,
+            characterName: activeCharacterName,
+            inputMethod: 'world_voice',
+            message: err instanceof Error ? err.message : 'Transcription failed',
+          });
           const browserStarted = startBrowserSTT();
           if (!browserStarted) {
             setSpeechError('Transcription failed. Try again.');
@@ -1392,6 +1492,11 @@ function App() {
       setIsRecording(true);
       recorder.start();
     } catch (err) {
+      logEvent('world_mic_blocked', {
+        characterId: slide.id,
+        characterName: activeCharacterName,
+        message: err instanceof Error ? err.message : 'Microphone access was blocked.',
+      });
       const browserStarted = startBrowserSTT();
       if (!browserStarted) {
         setSpeechError('Microphone access was blocked.');
@@ -1419,6 +1524,10 @@ function App() {
     };
 
     recognition.onerror = () => {
+      logEvent('browser_stt_failed', {
+        characterId: slide.id,
+        characterName: activeCharacterName,
+      });
       setSpeechError('Browser speech failed.');
     };
 
@@ -1467,16 +1576,7 @@ function App() {
 
   const handleSelectCharacter = (id: string) => {
     stopGeminiLiveSession();  // B3: clean up any active session before switching characters
-    // Log time spent on previous character before switching
-    if (selectedCharacterId && characterOpenedAtRef.current !== null) {
-      const timeSpentMs = Date.now() - characterOpenedAtRef.current;
-      const prevCharacter = characters.find((c) => c.id === selectedCharacterId);
-      logEvent('character_closed', {
-        characterId: selectedCharacterId,
-        characterName: prevCharacter?.title ?? selectedCharacterId,
-        timeSpentMs,
-      });
-    }
+    closeActiveCharacter('switch');
     const newCharacter = characters.find((c) => c.id === id);
     logEvent('character_opened', {
       characterId: id,
@@ -1722,7 +1822,10 @@ function App() {
 
       <div className="ui">
         <header className="top-bar">
-          <button className="btn ghost back-to-landing" onClick={() => setShowLanding(true)}>
+          <button className="btn ghost back-to-landing" onClick={() => {
+            closeActiveCharacter('landing_back');
+            setShowLanding(true);
+          }}>
             Back
           </button>
         </header>

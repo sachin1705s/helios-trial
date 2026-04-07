@@ -1174,6 +1174,96 @@ app.post('/api/chat', aiLimiter, async (req, res) => {
 const LOG_KEY = 'logs:all';
 const LOG_MAX = 10_000;
 
+const normalizeLogEntries = (raw) =>
+  raw.map((r) => {
+    if (r && typeof r === 'object') return r;
+    try { return JSON.parse(r); } catch { return null; }
+  }).filter(Boolean);
+
+const mean = (values) => {
+  if (!values.length) return null;
+  return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+};
+
+const incrementCounter = (bucket, key) => {
+  if (!key) return;
+  bucket[key] = (bucket[key] || 0) + 1;
+};
+
+const summarizeLogs = (entries) => {
+  const summary = {
+    totals: {
+      events: entries.length,
+      byEvent: {},
+      uniqueSessions: 0,
+    },
+    pages: {},
+    characters: {},
+    inputMethods: {},
+    failures: {},
+    trends: {},
+  };
+  const sessions = new Set();
+
+  for (const entry of entries) {
+    const event = String(entry.event || '').trim();
+    const data = entry.data && typeof entry.data === 'object' ? entry.data : {};
+    const timestamp = String(entry.timestamp || '');
+    const day = timestamp ? timestamp.slice(0, 10) : 'unknown';
+    const sessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
+    const characterId = typeof data.characterId === 'string' ? data.characterId : '';
+    const pageName = typeof data.pageName === 'string' ? data.pageName : '';
+    const inputMethod = typeof data.inputMethod === 'string' ? data.inputMethod : '';
+
+    incrementCounter(summary.totals.byEvent, event);
+    incrementCounter(summary.trends, day);
+    incrementCounter(summary.pages, pageName);
+    incrementCounter(summary.inputMethods, inputMethod);
+    if (sessionId) sessions.add(sessionId);
+
+    if (event.includes('failed') || event.includes('error') || event.includes('blocked')) {
+      incrementCounter(summary.failures, event);
+    }
+
+    if (!characterId) continue;
+    if (!summary.characters[characterId]) {
+      summary.characters[characterId] = {
+        opened: 0,
+        closed: 0,
+        prompts: 0,
+        responses: 0,
+        avgTimeToFirstPromptMs: null,
+        avgTimeSpentMs: null,
+      };
+    }
+
+    const character = summary.characters[characterId];
+    if (event === 'character_opened') character.opened += 1;
+    if (event === 'character_closed') character.closed += 1;
+    if (event === 'prompt_sent') character.prompts += 1;
+    if (event === 'response_received') character.responses += 1;
+  }
+
+  for (const [characterId, character] of Object.entries(summary.characters)) {
+    const ttfp = [];
+    const dwell = [];
+    for (const entry of entries) {
+      if (entry?.data?.characterId !== characterId) continue;
+      if (entry.event === 'time_to_first_prompt' && Number.isFinite(entry.data?.timeMs)) {
+        ttfp.push(Number(entry.data.timeMs));
+      }
+      if (entry.event === 'character_closed' && Number.isFinite(entry.data?.timeSpentMs)) {
+        dwell.push(Number(entry.data.timeSpentMs));
+      }
+    }
+    character.avgTimeToFirstPromptMs = mean(ttfp);
+    character.avgTimeSpentMs = mean(dwell);
+  }
+
+  summary.totals.uniqueSessions = sessions.size;
+  return summary;
+};
+
 app.post('/api/log', async (req, res) => {
   if (useRedis) {
     try {
@@ -1203,10 +1293,7 @@ app.get('/api/logs', async (req, res) => {
     const eventFilter = String(req.query?.event ?? '').trim();
     const fetchCount = eventFilter ? LOG_MAX : limit;
     const raw = await redis.lrange(LOG_KEY, 0, fetchCount - 1);
-    let entries = raw.map((r) => {
-      if (r && typeof r === 'object') return r;
-      try { return JSON.parse(r); } catch { return null; }
-    }).filter(Boolean);
+    let entries = normalizeLogEntries(raw);
     if (eventFilter) {
       entries = entries.filter((e) => e.event === eventFilter).slice(0, limit);
     }
@@ -1214,6 +1301,49 @@ app.get('/api/logs', async (req, res) => {
   } catch (err) {
     console.warn('[logs] read failed:', err?.message);
     return res.json([]);
+  }
+});
+
+app.get('/api/logs/summary', async (req, res) => {
+  const logsSecret = process.env.LOGS_SECRET_KEY;
+  if (logsSecret && req.query?.key !== logsSecret) {
+    return res.status(401).json({ error: 'Unauthorized.' });
+  }
+  if (!useRedis) return res.json({
+    totals: { events: 0, byEvent: {}, uniqueSessions: 0 },
+    pages: {},
+    characters: {},
+    inputMethods: {},
+    failures: {},
+    trends: {},
+  });
+  try {
+    const days = Math.min(Math.max(Number(req.query?.days ?? 30), 1), 365);
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    const raw = await redis.lrange(LOG_KEY, 0, LOG_MAX - 1);
+    const entries = normalizeLogEntries(raw).filter((entry) => {
+      const ts = Date.parse(String(entry.timestamp || ''));
+      return Number.isFinite(ts) && ts >= cutoff;
+    });
+    return res.json({
+      rangeDays: days,
+      generatedAt: new Date().toISOString(),
+      summary: summarizeLogs(entries),
+    });
+  } catch (err) {
+    console.warn('[logs-summary] read failed:', err?.message);
+    return res.json({
+      rangeDays: 0,
+      generatedAt: new Date().toISOString(),
+      summary: {
+        totals: { events: 0, byEvent: {}, uniqueSessions: 0 },
+        pages: {},
+        characters: {},
+        inputMethods: {},
+        failures: {},
+        trends: {},
+      },
+    });
   }
 });
 
