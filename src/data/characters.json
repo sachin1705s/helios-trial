@@ -7,7 +7,8 @@
       "body": "Alexander the Great, bold strategist and fearless leader.",
       "image": "/images/characters/Alexander.png",
       "prompt": "Animate it",
-      "cta": "Animate it"
+      "cta": "Animate it",
+      "greeting": "I am Alexander, conqueror of worlds. What challenge shall we face together today?"
     },
     {
       "id": "bear",
@@ -16,7 +17,8 @@
       "body": "A wise, gentle bear with a warm, storytime presence.",
       "image": "/images/characters/bear.png",
       "prompt": "Animate it",
-      "cta": "Animate it"
+      "cta": "Animate it",
+      "greeting": "Hello there, friend! Pull up a log and settle in — I've got wonderful stories to share."
     },
     {
       "id": "circus-lion",
@@ -25,7 +27,8 @@
       "body": "A cheerful circus lion grins, ready for the big show.",
       "image": "/images/characters/circus lion.png",
       "prompt": "Animate it",
-      "cta": "Animate it"
+      "cta": "Animate it",
+      "greeting": "Step right up! The show is about to begin — and YOU are the star guest!"
     },
     {
       "id": "cleopatra",
@@ -34,7 +37,8 @@
       "body": "Cleopatra, the last Pharaoh, regal and strategic.",
       "image": "/images/characters/cleopatra.png",
       "prompt": "Animate it",
-      "cta": "Animate it"
+      "cta": "Animate it",
+      "greeting": "Greetings. You stand before the queen of Egypt. Speak wisely and I shall reward your counsel."
     },
     {
       "id": "da-vinci",
@@ -43,7 +47,8 @@
       "body": "Leonardo da Vinci, artist-inventor with boundless curiosity.",
       "image": "/images/characters/da vinci.png",
       "prompt": "Animate it",
-      "cta": "Animate it"
+      "cta": "Animate it",
+      "greeting": "Ah, a curious mind arrives! I have so many sketches to show you — where shall we begin?"
     },
     {
       "id": "einstein",
@@ -52,7 +57,8 @@
       "body": "Albert Einstein appears with curious eyes and a mind full of ideas.",
       "image": "/images/characters/einstein.png",
       "prompt": "Animate it",
-      "cta": "Animate it"
+      "cta": "Animate it",
+      "greeting": "Ah, hello! Imagination is more important than knowledge. What shall we imagine together today?"
     },
     {
       "id": "grandpa-turtle",
@@ -61,7 +67,8 @@
       "body": "Grandpa Turtle, slow and thoughtful, sharing patient wisdom.",
       "image": "/images/characters/grandpa turtle.png",
       "prompt": "Animate it",
-      "cta": "Animate it"
+      "cta": "Animate it",
+      "greeting": "Oh my, a visitor! Come sit a while. Good things are never rushed, and neither is good conversation."
     },
     {
       "id": "steve-jobs",
@@ -70,7 +77,8 @@
       "body": "Steve Jobs, minimalist visionary obsessed with product and craft.",
       "image": "/images/characters/steve jobs.png",
       "prompt": "Animate it",
-      "cta": "Animate it"
+      "cta": "Animate it",
+      "greeting": "Hey. The people who are crazy enough to think they can change the world — are the ones who do. So, what are you building?"
     }
   ]
 }

@@ -15,6 +15,7 @@ interface Character {
   image: string;
   prompt: string;
   cta: string;
+  greeting?: string;
 }
 
 type SpeechRecognitionResultEvent = Event & {
@@ -98,6 +99,7 @@ function App() {
   const startStreamInFlightRef = useRef(false); // true while startStream is awaited — blocks re-entrant calls
   const streamEndResolverRef = useRef<(() => void) | null>(null); // resolves when onStreamEnded fires during a transition
   const isVoiceAgentSlideRef = useRef(false);
+  const greetedCharactersRef = useRef<Set<string>>(new Set()); // tracks which characters have greeted this session
   const lastVoiceActionAtRef = useRef(0);
   const handleInteractRef = useRef<(promptOverride?: string) => void>(() => undefined);
   const ttsAudioCtxRef = useRef<AudioContext | null>(null);
@@ -255,6 +257,25 @@ function App() {
   useEffect(() => {
     isStreamingReadyRef.current = isStreamingReady;
   }, [isStreamingReady]);
+
+  // Fire a character greeting once per session, only after the stream is ready.
+  // greetedCharactersRef guards against re-firing when the effect re-runs.
+  useEffect(() => {
+    if (!isStreamingReady) return;
+    const charId = slide.id;
+    const greeting = slide.greeting;
+    if (!greeting || greetedCharactersRef.current.has(charId)) return;
+
+    greetedCharactersRef.current.add(charId);
+    setCharacterReply(greeting);
+    setCharacterHistory((prev) => ({
+      ...prev,
+      [charId]: [...(prev[charId] ?? []), { role: 'assistant', content: greeting }],
+    }));
+    handleInteractRef.current('smile and wave hello warmly');
+    // TTS is best-effort — AudioContext may be suspended until first user gesture
+    playCharacterTTS(greeting, charId).catch(() => undefined);
+  }, [isStreamingReady, slide.id, slide.greeting]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     isVoiceAgentSlideRef.current = isVoiceAgentSlide;
