@@ -96,6 +96,7 @@ function App() {
   const dataChannelReadyRef = useRef(false); // true only after onConnected fires; false when reconnecting
   const pendingStartRef = useRef<(() => Promise<void>) | null>(null); // startStream fn waiting for onConnected
   const startStreamInFlightRef = useRef(false); // true while startStream is awaited — blocks re-entrant calls
+  const streamEndResolverRef = useRef<(() => void) | null>(null); // resolves when onStreamEnded fires during a transition
   const isVoiceAgentSlideRef = useRef(false);
   const lastVoiceActionAtRef = useRef(0);
   const handleInteractRef = useRef<(promptOverride?: string) => void>(() => undefined);
@@ -345,6 +346,14 @@ function App() {
           streamActiveRef.current = false;
           setStreamState('ended');
           setIsStreamingReady(false);
+          // If run() is waiting for the previous stream to fully end before calling
+          // startStream on the new character, unblock it now.
+          const resolve = streamEndResolverRef.current;
+          streamEndResolverRef.current = null;
+          if (resolve) {
+            resolve();
+            return; // Skip auto-restart — a new startStream is already queued
+          }
           // Auto-restart the stream so interact() keeps working
           if (retryStreamRef.current) {
             console.log('[odyssey] auto-restarting stream after end');
@@ -358,11 +367,19 @@ function App() {
         onStreamError: (reason, message) => {
           console.error('[odyssey] onStreamError:', reason, message);
           streamActiveRef.current = false;
-          setStreamState('error');
-          setIsStreamingReady(false);
           const r = typeof reason === 'string' ? reason : JSON.stringify(reason);
           const m = typeof message === 'string' ? message : JSON.stringify(message);
           if (r === 'moderation_failed') {
+            // 'Failed to run content moderation' = the moderation service itself failed
+            // (capacity/transition artifact during i2v session setup, not a content rejection).
+            // The SDK will reconnect and Effect 2 will retry — suppress all error UI.
+            if (m === 'Failed to run content moderation') {
+              setStreamState('starting');
+              return;
+            }
+            // Real content moderation rejection — retry silently up to 3×, then surface.
+            setStreamState('error');
+            setIsStreamingReady(false);
             if (moderationRetryCountRef.current < 3 && retryStreamRef.current) {
               moderationRetryCountRef.current++;
               console.log(`[odyssey] moderation_failed — retrying (attempt ${moderationRetryCountRef.current})`);
@@ -380,6 +397,8 @@ function App() {
             }
             return;
           }
+          setStreamState('error');
+          setIsStreamingReady(false);
           setError(`${r}: ${m}`);
         },
         onError: (err) => {
@@ -441,7 +460,17 @@ function App() {
       }
 
       if (hadActiveStream) {
-        await service.endStream().catch(() => undefined);
+        // Wait for onStreamEnded, not just endStream() — the SDK needs the stream fully
+        // torn down before it can accept a new startStream. Calling startStream while the
+        // previous stream is still cleaning up internally causes an extra reconnect cycle.
+        await new Promise<void>((resolve) => {
+          streamEndResolverRef.current = resolve;
+          service.endStream().catch(() => {
+            // endStream failed — clear resolver and unblock immediately
+            streamEndResolverRef.current = null;
+            resolve();
+          });
+        });
       }
 
       const cached = imageCacheRef.current.get(slide.id);
