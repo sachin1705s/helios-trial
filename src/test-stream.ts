@@ -156,7 +156,7 @@ credRunBtn.addEventListener('click', async () => {
 
 credStopBtn.addEventListener('click', async () => {
   if (credClient) {
-    await credClient.disconnect().catch(() => undefined);
+    try { credClient.disconnect(); } catch { /* ignore */ }
     credClient = null;
   }
   if (credLeaseId) {
@@ -269,7 +269,7 @@ keyRunBtn.addEventListener('click', async () => {
 
 keyStopBtn.addEventListener('click', async () => {
   if (keyClient) {
-    await keyClient.disconnect().catch(() => undefined);
+    try { keyClient.disconnect(); } catch { /* ignore */ }
     keyClient = null;
   }
   keyVideo.srcObject = null;
