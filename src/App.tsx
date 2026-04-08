@@ -101,6 +101,8 @@ function App() {
   const streamEndResolverRef = useRef<(() => void) | null>(null); // resolves when onStreamEnded fires during a transition
   const isVoiceAgentSlideRef = useRef(false);
   const greetedCharactersRef = useRef<Set<string>>(new Set()); // tracks which characters have greeted this session
+  const ttsSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const ttsAbortRef = useRef<AbortController | null>(null);
   const lastVoiceActionAtRef = useRef(0);
   const handleInteractRef = useRef<(promptOverride?: string) => void>(() => undefined);
   const ttsAudioCtxRef = useRef<AudioContext | null>(null);
@@ -570,7 +572,17 @@ function App() {
       streamActiveRef.current = false;
       serviceRef.current?.endStream().catch(() => undefined);
     }
-  }, [showLanding]);
+    // Stop any in-flight TTS fetch and active audio playback
+    ttsAbortRef.current?.abort();
+    ttsAbortRef.current = null;
+    try { ttsSourceRef.current?.stop(); } catch { /* already stopped */ }
+    ttsSourceRef.current = null;
+    // Clear the current character's chat state so returning starts fresh
+    const charId = slide.id;
+    setCharacterReply(null);
+    setCharacterHistory((prev) => { const next = { ...prev }; delete next[charId]; return next; });
+    greetedCharactersRef.current.delete(charId);
+  }, [showLanding]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
   useEffect(() => {
@@ -776,7 +788,9 @@ function App() {
       const slideVoiceId = slideId ? VOICE_BY_SLIDE_ID[slideId] : '';
       const resolvedVoiceId = slideVoiceId || null;
       console.log('[tts] sending fetch to /api/character/tts, voiceId:', resolvedVoiceId ?? 'default');
+      ttsAbortRef.current?.abort();
       const ttsAbort = new AbortController();
+      ttsAbortRef.current = ttsAbort;
       const ttsClientTimeout = setTimeout(() => ttsAbort.abort(), 20000);
       let ttsRes: Response;
       try {
@@ -820,6 +834,8 @@ function App() {
         const source = ctx.createBufferSource();
         source.buffer = buffer;
         source.connect(ctx.destination);
+        ttsSourceRef.current = source;
+        source.onended = () => { ttsSourceRef.current = null; };
         source.start();
         console.log('[tts] PCM audio playback started, duration:', (float32.length / sampleRate).toFixed(2), 's');
       } else {
@@ -828,6 +844,8 @@ function App() {
         const source = ctx.createBufferSource();
         source.buffer = decoded;
         source.connect(ctx.destination);
+        ttsSourceRef.current = source;
+        source.onended = () => { ttsSourceRef.current = null; };
         source.start();
         console.log('[tts] audio playback started');
       }
@@ -1488,7 +1506,7 @@ function App() {
           aria-hidden
         />
         <div
-          className={`stream-placeholder ${streamState === 'streaming' ? 'hidden' : ''} ${streamState === 'starting' ? 'is-loading' : ''}`}
+          className={`stream-placeholder ${streamState === 'streaming' ? 'hidden' : ''} ${!isStreamingReady && streamState !== 'error' ? 'is-loading' : ''}`}
           style={{ backgroundImage: `url("${slideImageUrl}")` }}
           aria-hidden
         />
@@ -1500,7 +1518,7 @@ function App() {
           muted
         />
         <div className="video-overlay" />
-        {streamState === 'starting' && (
+        {!isStreamingReady && streamState !== 'error' && (
           <div className="stream-loading-badge" aria-live="polite">
             <span className="stream-loading-dot" aria-hidden />
             Waking up {activeCharacterName}…
