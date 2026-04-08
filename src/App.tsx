@@ -744,7 +744,23 @@ function App() {
         const text = new TextDecoder().decode(arrayBuffer);
         console.warn('[tts] suspiciously small buffer — raw content:', text);
       }
-      try {
+      const contentType = ttsRes.headers.get('content-type') || '';
+      const sampleRate = parseInt(ttsRes.headers.get('x-sample-rate') || '24000', 10);
+      if (contentType.includes('pcm') || contentType.includes('octet-stream')) {
+        // Raw 16-bit signed little-endian PCM — decode manually
+        const samples = new Int16Array(arrayBuffer);
+        const float32 = new Float32Array(samples.length);
+        for (let i = 0; i < samples.length; i++) {
+          float32[i] = samples[i] / 32768;
+        }
+        const buffer = ctx.createBuffer(1, float32.length, sampleRate);
+        buffer.copyToChannel(float32, 0);
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+        source.start();
+        console.log('[tts] PCM audio playback started, duration:', (float32.length / sampleRate).toFixed(2), 's');
+      } else {
         const decoded = await ctx.decodeAudioData(arrayBuffer);
         console.log('[tts] decoded audio duration:', decoded.duration.toFixed(2), 's');
         const source = ctx.createBufferSource();
@@ -752,19 +768,6 @@ function App() {
         source.connect(ctx.destination);
         source.start();
         console.log('[tts] audio playback started');
-      } catch (err) {
-        console.warn('[tts] decodeAudioData failed, falling back to HTMLAudioElement', err);
-        const mime = ttsRes.headers.get('content-type') || 'audio/wav';
-        const blob = new Blob([arrayBuffer], { type: mime });
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        audio.onended = () => URL.revokeObjectURL(url);
-        try {
-          await audio.play();
-          console.log('[tts] fallback audio playback started');
-        } catch (playErr) {
-          console.error('[tts] fallback audio play failed', playErr);
-        }
       }
     } catch (err) {
       console.error('[tts] error', err);
@@ -1467,12 +1470,17 @@ function App() {
                   : isCharacterThinking
                     ? 'Thinking...'
                       : (
-                        <img
+                        <svg
                           className="recording-icon"
-                          src="/images/recording_icon_v3.png"
-                          alt=""
                           aria-hidden="true"
-                        />
+                          xmlns="http://www.w3.org/2000/svg"
+                          viewBox="0 0 24 24"
+                          fill="currentColor"
+                          width="20"
+                          height="20"
+                        >
+                          <path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm-1 18.93V22h2v-2.07A8.001 8.001 0 0 0 20 12h-2a6 6 0 0 1-12 0H4a8.001 8.001 0 0 0 7 7.93z"/>
+                        </svg>
                       )}
               </button>
             ) : null}
