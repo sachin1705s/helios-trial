@@ -276,7 +276,7 @@ function App() {
     handleInteractRef.current('smile and wave hello warmly');
     // TTS is best-effort — AudioContext may be suspended until first user gesture
     playCharacterTTS(greeting, charId).catch(() => undefined);
-  }, [isStreamingReady, slide.id, slide.greeting]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isStreamingReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     isVoiceAgentSlideRef.current = isVoiceAgentSlide;
