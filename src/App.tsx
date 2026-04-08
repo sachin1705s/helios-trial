@@ -1487,6 +1487,7 @@ function App() {
                 className="video-modal-player"
                 src="/Starter-Demo.mp4"
                 autoPlay
+                muted
                 controls
                 playsInline
                 onEnded={handleCloseVideoModal}
