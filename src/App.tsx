@@ -54,6 +54,7 @@ function App() {
   const [showLanding, setShowLanding] = useState(true);
   const [showAbout, setShowAbout] = useState(false);
   const [showContact, setShowContact] = useState(false);
+  const [showVideoModal, setShowVideoModal] = useState(false);
   const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(characters[0]?.id ?? null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [streamState, setStreamState] = useState<StreamState>('idle');
@@ -603,6 +604,17 @@ function App() {
       characterStreamRef.current?.getTracks().forEach((track) => track.stop());
     };
   }, []);
+
+  useEffect(() => {
+    if (!localStorage.getItem('tutorial-seen')) {
+      setShowVideoModal(true);
+    }
+  }, []);
+
+  const handleCloseVideoModal = () => {
+    localStorage.setItem('tutorial-seen', '1');
+    setShowVideoModal(false);
+  };
 
   // If the Odyssey stream connected while the landing page was showing (video element
   // didn't exist yet), attach the stream now that the story view is rendered.
@@ -1396,6 +1408,17 @@ function App() {
               <div>
                 <h2>Characters</h2>
               </div>
+              <button
+                type="button"
+                className="how-it-works-btn"
+                onClick={() => setShowVideoModal(true)}
+              >
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+                  <circle cx="7" cy="7" r="6.5" stroke="currentColor"/>
+                  <path d="M5.5 4.5L10 7L5.5 9.5V4.5Z" fill="currentColor"/>
+                </svg>
+                How it works
+              </button>
             </div>
             <div className="card-grid">
               {characters.map((character) => (
@@ -1430,6 +1453,28 @@ function App() {
             <div className="landing-footer-line" />
           </footer>
         </main>
+
+        {showVideoModal && (
+          <div className="video-modal-overlay" onClick={handleCloseVideoModal}>
+            <div className="video-modal" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                className="video-modal-close"
+                onClick={handleCloseVideoModal}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+              <video
+                className="video-modal-player"
+                src="/Starter-Demo.mp4"
+                autoPlay
+                controls
+                playsInline
+              />
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -1443,7 +1488,7 @@ function App() {
           aria-hidden
         />
         <div
-          className={`stream-placeholder ${streamState === 'streaming' ? 'hidden' : ''}`}
+          className={`stream-placeholder ${streamState === 'streaming' ? 'hidden' : ''} ${streamState === 'starting' ? 'is-loading' : ''}`}
           style={{ backgroundImage: `url("${slideImageUrl}")` }}
           aria-hidden
         />
@@ -1455,6 +1500,12 @@ function App() {
           muted
         />
         <div className="video-overlay" />
+        {streamState === 'starting' && (
+          <div className="stream-loading-badge" aria-live="polite">
+            <span className="stream-loading-dot" aria-hidden />
+            Waking up {activeCharacterName}…
+          </div>
+        )}
       </div>
 
       <div className="ui">
