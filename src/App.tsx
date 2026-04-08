@@ -1489,6 +1489,7 @@ function App() {
                 autoPlay
                 controls
                 playsInline
+                onEnded={handleCloseVideoModal}
               />
             </div>
           </div>
