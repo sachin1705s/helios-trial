@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Odyssey Stream Test</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: monospace; background: #0d0d0d; color: #e0e0e0; padding: 24px; }
+    h1 { color: #fff; margin-bottom: 20px; font-size: 18px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .panel { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 16px; }
+    .panel h2 { font-size: 14px; color: #aaa; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+    button {
+      background: #2563eb; color: #fff; border: none; border-radius: 6px;
+      padding: 8px 16px; cursor: pointer; font-family: monospace; font-size: 13px;
+      margin-right: 8px; margin-bottom: 8px;
+    }
+    button:disabled { background: #333; color: #666; cursor: not-allowed; }
+    button.danger { background: #dc2626; }
+    input {
+      background: #111; color: #e0e0e0; border: 1px solid #444; border-radius: 4px;
+      padding: 6px 10px; font-family: monospace; font-size: 13px; width: 100%;
+      margin-bottom: 8px;
+    }
+    label { font-size: 12px; color: #888; display: block; margin-bottom: 4px; }
+    .log {
+      background: #111; border: 1px solid #333; border-radius: 4px;
+      padding: 10px; height: 260px; overflow-y: auto; font-size: 12px; line-height: 1.6;
+    }
+    .log .ts { color: #555; }
+    .log .info { color: #60a5fa; }
+    .log .ok { color: #4ade80; }
+    .log .warn { color: #fbbf24; }
+    .log .err { color: #f87171; }
+    .verdict { font-size: 14px; margin: 10px 0; padding: 8px 12px; border-radius: 4px; display: none; }
+    .verdict.pass { background: #14532d; color: #4ade80; display: block; }
+    .verdict.fail { background: #450a0a; color: #f87171; display: block; }
+    video { width: 100%; height: 220px; background: #000; border-radius: 4px; object-fit: contain; }
+    .status-badge {
+      display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px;
+      background: #333; color: #888; margin-left: 8px; vertical-align: middle;
+    }
+    .status-badge.connected { background: #14532d; color: #4ade80; }
+    .status-badge.streaming { background: #1e3a5f; color: #60a5fa; }
+    .status-badge.error { background: #450a0a; color: #f87171; }
+  </style>
+</head>
+<body>
+  <h1>Odyssey Stream Isolator
+    <span class="status-badge" id="global-status">idle</span>
+  </h1>
+
+  <div class="grid">
+
+    <!-- LEFT: connectWithCredentials test -->
+    <div class="panel">
+      <h2>Test A — connectWithCredentials <span class="status-badge" id="cred-status">idle</span></h2>
+      <p style="font-size:12px;color:#888;margin-bottom:10px;">
+        Fetches <code>/api/odyssey/token</code> → <code>connectWithCredentials</code> → <code>startStream</code>
+      </p>
+      <button id="cred-run">Run Test A</button>
+      <button id="cred-stop" class="danger" disabled>Stop</button>
+      <div class="verdict" id="cred-verdict"></div>
+      <video id="cred-video" autoplay playsinline muted></video>
+      <div class="log" id="cred-log"></div>
+    </div>
+
+    <!-- RIGHT: apiKey test -->
+    <div class="panel">
+      <h2>Test B — new Odyssey({ apiKey }) <span class="status-badge" id="key-status">idle</span></h2>
+      <p style="font-size:12px;color:#888;margin-bottom:10px;">
+        Uses raw API key directly → <code>client.connect(handlers)</code> → <code>startStream</code>
+      </p>
+      <label>Paste API key (stays client-side only)</label>
+      <input type="password" id="key-input" placeholder="sk-..." autocomplete="off" />
+      <button id="key-run">Run Test B</button>
+      <button id="key-stop" class="danger" disabled>Stop</button>
+      <div class="verdict" id="key-verdict"></div>
+      <video id="key-video" autoplay playsinline muted></video>
+      <div class="log" id="key-log"></div>
+    </div>
+
+  </div>
+
+  <script type="module" src="/src/test-stream.ts"></script>
+</body>
+</html>
