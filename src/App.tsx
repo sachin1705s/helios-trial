@@ -817,7 +817,10 @@ function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: userText, history, character: characterName, enableSearch })
     });
-    if (!chatResponse.ok) throw new Error('Character response failed');
+    if (!chatResponse.ok) {
+      const errBody = await chatResponse.json().catch(() => ({})) as { error?: string; detail?: string };
+      throw new Error(`Character response failed: ${errBody.detail || errBody.error || chatResponse.status}`);
+    }
 
     const chatData = await chatResponse.json() as { reply?: string; action?: string; objects?: string[]; sources?: { title: string; url: string }[] };
     const reply = String(chatData.reply ?? '').trim() || 'Hmm, fascinating.';

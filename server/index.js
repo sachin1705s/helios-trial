@@ -810,8 +810,14 @@ app.post('/api/character/chat', aiLimiter, async (req, res) => {
 
     return res.json({ reply, action, objects, sources, searchUsed: enableSearch });
   } catch (err) {
-    console.error('[character/chat] error:', err?.message || err, err?.stack);
-    return res.status(500).json({ error: 'Chat failed.' });
+    const message = err?.message || String(err);
+    console.error('[character/chat] error:', message, err?.stack);
+    // Surface Gemini quota/rate-limit errors as a soft reply so the UI stays functional
+    if (/quota|rate.?limit|resource.?exhausted|429/i.test(message)) {
+      return res.json({ reply: "I'm a bit overloaded right now — try again in a moment!", action: '', objects: [], sources: [], searchUsed: false });
+    }
+    // All other unexpected errors: return a graceful reply + log details
+    return res.status(500).json({ error: 'Chat failed.', detail: isProduction ? undefined : message });
   }
 });
 
