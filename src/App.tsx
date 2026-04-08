@@ -4,6 +4,7 @@ import { SpeedInsights } from '@vercel/speed-insights/react';
 import type { ConnectionStatus } from '@odysseyml/odyssey';
 import charactersData from './data/characters.json';
 import { OdysseyService, credentialsFromDict, loadImageFile, type ClientCredentials, type StreamState } from './lib/odyssey';
+import { SEO_PAGES, applySeo } from './lib/seo';
 import './App.css';
 
 interface Character {
@@ -192,6 +193,18 @@ function App() {
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
+
+  useEffect(() => {
+    if (showAbout) {
+      applySeo(SEO_PAGES.about);
+      return;
+    }
+    if (showContact) {
+      applySeo(SEO_PAGES.contact);
+      return;
+    }
+    applySeo(SEO_PAGES.home);
+  }, [showAbout, showContact]);
 
   useEffect(() => {
     if (showLanding) return; // Wait until user has selected a character before connecting

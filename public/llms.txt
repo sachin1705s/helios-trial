@@ -1,0 +1,13 @@
+# Interact Studio
+
+> Interact Studio is a website where users talk to interactive AI characters in real time.
+
+## Primary pages
+
+- https://interactstudio.space/
+- https://interactstudio.space/about-us
+- https://interactstudio.space/contact
+
+## Summary
+
+Interact Studio combines live voice, generative media, and character-driven storytelling.

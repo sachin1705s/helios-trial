@@ -2,7 +2,10 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/server" }
+    { "source": "/api/(.*)", "destination": "/api/server" },
+    { "source": "/about-us", "destination": "/index.html" },
+    { "source": "/contact", "destination": "/index.html" },
+    { "source": "/", "destination": "/index.html" }
   ],
   "functions": {
     "api/server.js": {
