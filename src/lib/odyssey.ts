@@ -12,6 +12,10 @@ export class OdysseyService {
   constructor(credentials: ClientCredentials) {
     this.credentials = credentials;
     this.client = new Odyssey({});
+    // connectWithCredentials doesn't propagate session capabilities from the API response
+    // (SDK gap — createClientCredentials() drops the capabilities field). Our server always
+    // provisions i2v-capable sessions, so pre-set this to unblock startStream({ image }).
+    (this.client as unknown as { capabilities: { image_to_video: boolean } }).capabilities.image_to_video = true;
   }
 
   connect(handlers?: OdysseyEventHandlers) {
