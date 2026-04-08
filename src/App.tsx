@@ -1479,15 +1479,30 @@ function App() {
           <div className="story-actions">
             {isCharacterSlide ? (
               <button
-                className="btn accent"
+                className="btn accent ptt-btn"
                 onClick={isCharacterRecording ? stopCharacterRecording : startCharacterRecording}
                 disabled={isCharacterThinking}
+                aria-label={
+                  isCharacterRecording
+                    ? 'Stop recording'
+                    : isCharacterThinking
+                      ? 'Thinking'
+                      : `Start recording for ${activeCharacterName}`
+                }
+                data-tooltip="Hold Ctrl + Space to talk"
               >
                 {isCharacterRecording
                   ? 'Stop'
                   : isCharacterThinking
                     ? 'Thinking...'
-                      : `Talk to ${activeCharacterName}`}
+                      : (
+                        <img
+                          className="recording-icon"
+                          src="/images/recording_icon_v3.png"
+                          alt=""
+                          aria-hidden="true"
+                        />
+                      )}
               </button>
             ) : null}
             {isUploadSlide ? (
