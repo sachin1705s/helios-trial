@@ -260,8 +260,53 @@ function App() {
     const audio = backgroundAudioRef.current;
     if (!audio) return;
 
-    audio.volume = 0.02;
+    audio.volume = 1; // gain is controlled by the Web Audio graph below
     audio.loop = true;
+
+    // Shape the background music to feel ambient and non-intrusive:
+    // - Low gain so it sits well beneath any foreground sound
+    // - Low-shelf cut reduces boomy low-end that feels imposing
+    // - High-shelf cut softens brightness that draws attention
+    // - Mid scoop pulls back the 1–3kHz "presence" range so it
+    //   doesn't compete with voices or feel like it's "speaking"
+    const ctx = new AudioContext();
+    const source = ctx.createMediaElementSource(audio);
+
+    const gain = ctx.createGain();
+    gain.gain.value = 0.18;
+
+    const lowShelf = ctx.createBiquadFilter();
+    lowShelf.type = 'lowshelf';
+    lowShelf.frequency.value = 220;
+    lowShelf.gain.value = -9;
+
+    const highShelf = ctx.createBiquadFilter();
+    highShelf.type = 'highshelf';
+    highShelf.frequency.value = 5500;
+    highShelf.gain.value = -11;
+
+    const midScoop = ctx.createBiquadFilter();
+    midScoop.type = 'peaking';
+    midScoop.frequency.value = 1800;
+    midScoop.Q.value = 0.8;
+    midScoop.gain.value = -6;
+
+    source.connect(lowShelf);
+    lowShelf.connect(midScoop);
+    midScoop.connect(highShelf);
+    highShelf.connect(gain);
+    gain.connect(ctx.destination);
+
+    // AudioContext may be suspended until a user gesture — resume on first interaction
+    const resume = () => { void ctx.resume(); };
+    document.addEventListener('click', resume, { once: true });
+    document.addEventListener('keydown', resume, { once: true });
+
+    return () => {
+      document.removeEventListener('click', resume);
+      document.removeEventListener('keydown', resume);
+      ctx.close();
+    };
   }, []);
 
   useEffect(() => {
@@ -1403,38 +1448,30 @@ function App() {
             </h1>
             <div className="about-content">
               <p className="about-lead">
-                right now content is becoming abundant but it’s still static
-                <br />
-                you just sit there and watch
+                Content is becoming abundant, but it is still static. You sit there and watch.
               </p>
-              <p className="about-copy">we think that breaks</p>
+              <p className="about-copy">We think that model is running out of road.</p>
               <p className="about-copy">
-                we’re building real time interactive video where you can talk to characters and
-                change what happens
-                <br />
-                the story the environment the flow
+                We are building real-time interactive video where you can talk to characters and
+                change what happens as the experience unfolds.
               </p>
               <p className="about-copy">
-                it feels less like watching something and more like being inside it
+                The story shifts. The environment reacts. The flow changes with you.
               </p>
               <p className="about-copy">
-                we’re a small team building fast working across world models synthetic data and
-                real time systems
-                <br />
-                getting early versions into users hands and iterating quickly
+                It feels less like watching something and more like being inside it.
+              </p>
+              <p className="about-copy">
+                We are a small team building quickly across world models, synthetic data, and
+                real-time systems, getting early versions into people&apos;s hands and iterating
+                fast.
               </p>
               <div className="about-why">
-                <h2 className="about-why-title">why we’re building this</h2>
+                <h2 className="about-why-title">why we're building this</h2>
                 <p className="about-copy">
-                  content is becoming abundant
-                  <br />
-                  but the way we experience it hasn’t changed
+                  Content is becoming abundant, but the way we experience it has barely changed.
                 </p>
-                <p className="about-copy">
-                  we think media should respond
-                  <br />
-                  not just play
-                </p>
+                <p className="about-copy">We think media should respond, not just play.</p>
               </div>
               <p className="about-copy">
                 <a
