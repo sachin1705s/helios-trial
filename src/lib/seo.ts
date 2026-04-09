@@ -19,7 +19,7 @@ export const SEO_PAGES = {
   about: {
     title: 'About Interact Studio',
     description:
-      'Learn how Interact Studio builds interactive AI characters with real-time voice, generative media, and live storytelling systems.',
+      'Interact Studio is building real-time interactive video where media responds, characters talk back, and viewers can change what happens.',
     path: '/about-us',
     type: 'article',
   },
