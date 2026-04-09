@@ -204,7 +204,6 @@ function App() {
       ref={backgroundAudioRef}
       src="/background-music.mpeg"
       preload="auto"
-      volume={0.18}
       aria-hidden="true"
     />
   );
@@ -261,7 +260,7 @@ function App() {
     const audio = backgroundAudioRef.current;
     if (!audio) return;
 
-    audio.volume = 0.08;
+    audio.volume = 0.06;
     audio.loop = true;
   }, []);
 
