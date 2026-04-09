@@ -1388,14 +1388,7 @@ function App() {
             <div className="landing-actions">
               <a
                 className="btn primary"
-                href="/contact"
-                onClick={(event) => {
-                  event.preventDefault();
-                  setShowContact(true);
-                  setShowAbout(false);
-                  setShowLanding(true);
-                  window.history.pushState({}, '', '/contact');
-                }}
+                href="mailto:hello.interactstudio@gmail.com"
               >
                 Get in touch
               </a>
@@ -1551,14 +1544,7 @@ function App() {
               </a>
               <a
                 className="btn primary"
-                href="/contact"
-                onClick={(event) => {
-                  event.preventDefault();
-                  setShowContact(true);
-                  setShowAbout(false);
-                  setShowLanding(true);
-                  window.history.pushState({}, '', '/contact');
-                }}
+                href="mailto:hello.interactstudio@gmail.com"
               >
                 Get in touch
               </a>
@@ -1566,10 +1552,10 @@ function App() {
           </header>
 
           <section className="landing-intro">
-            <p className="eyebrow">Interactive media</p>
-            <h1 className="hero-title">Talk to characters</h1>
+            <p className="eyebrow">real time interactive videos</p>
+            <h1 className="hero-title">Talk to the characters, what you say changes what happens</h1>
             <p className="landing-subtitle">
-              Watch the world respond in real time.
+              conversations control the story, the environment, everything
             </p>
           </section>
           {musicToggleButton}
