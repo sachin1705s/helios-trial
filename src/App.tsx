@@ -75,6 +75,8 @@ function App() {
   const [uploadImage, setUploadImage] = useState<File | null>(null);
   const [_uploadError, setUploadError] = useState<string | null>(null);
   const [voiceStatus, setVoiceStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
+  const [isMusicEnabled, setIsMusicEnabled] = useState(true);
+  const [isMusicPlaying, setIsMusicPlaying] = useState(false);
   const [, setVoiceError] = useState<string | null>(null);
   const [, setLastVoiceText] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -86,6 +88,7 @@ function App() {
   const characterChunksRef = useRef<Blob[]>([]);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const backgroundAudioRef = useRef<HTMLAudioElement | null>(null);
   const serviceRef = useRef<OdysseyService | null>(null);
   const odysseyLeaseIdRef = useRef<string | null>(null);
   const odysseyHeartbeatRef = useRef<number | null>(null);
@@ -182,6 +185,47 @@ function App() {
   const activeCharacterHistory = slide ? characterHistory[slide.id] ?? [] : [];
   const slideCtaRef = useRef('');
 
+  const handleMusicToggle = () => {
+    const audio = backgroundAudioRef.current;
+    if (!audio) return;
+
+    if (isMusicEnabled) {
+      setIsMusicEnabled(false);
+      audio.pause();
+      return;
+    }
+
+    setIsMusicEnabled(true);
+    void audio.play().catch(() => undefined);
+  };
+
+  const backgroundMusicNode = (
+    <audio
+      ref={backgroundAudioRef}
+      src="/background-music.mpeg"
+      preload="auto"
+      aria-hidden="true"
+    />
+  );
+
+  const musicToggleButton = (
+    <button
+      type="button"
+      className={`music-toggle ${isMusicPlaying ? 'is-playing' : 'is-paused'}`}
+      onClick={handleMusicToggle}
+      aria-label={isMusicPlaying ? 'Pause background music' : 'Play background music'}
+      aria-pressed={isMusicPlaying}
+    >
+      <span className="music-toggle-bars" aria-hidden="true">
+        <span className="music-bar" />
+        <span className="music-bar" />
+        <span className="music-bar" />
+        <span className="music-bar" />
+        <span className="music-bar" />
+      </span>
+    </button>
+  );
+
 
   useEffect(() => {
     const syncFromLocation = () => {
@@ -211,6 +255,66 @@ function App() {
     }
     applySeo(SEO_PAGES.home);
   }, [showAbout, showContact]);
+
+  useEffect(() => {
+    const audio = backgroundAudioRef.current;
+    if (!audio) return;
+
+    audio.volume = 0.08;
+    audio.loop = true;
+  }, []);
+
+  useEffect(() => {
+    const audio = backgroundAudioRef.current;
+    if (!audio) return;
+
+    const syncPlaybackState = () => {
+      setIsMusicPlaying(!audio.paused);
+    };
+
+    audio.addEventListener('play', syncPlaybackState);
+    audio.addEventListener('pause', syncPlaybackState);
+    audio.addEventListener('ended', syncPlaybackState);
+
+    return () => {
+      audio.removeEventListener('play', syncPlaybackState);
+      audio.removeEventListener('pause', syncPlaybackState);
+      audio.removeEventListener('ended', syncPlaybackState);
+    };
+  }, []);
+
+  useEffect(() => {
+    const audio = backgroundAudioRef.current;
+    if (!audio) return;
+
+    const shouldPlay = showLanding && isMusicEnabled;
+    if (!shouldPlay) {
+      audio.pause();
+      return;
+    }
+
+    const attemptPlay = () => {
+      void audio.play().catch(() => undefined);
+    };
+
+    attemptPlay();
+
+    const retryOnInteraction = () => {
+      attemptPlay();
+      if (!audio.paused) {
+        window.removeEventListener('pointerdown', retryOnInteraction);
+        window.removeEventListener('keydown', retryOnInteraction);
+      }
+    };
+
+    window.addEventListener('pointerdown', retryOnInteraction);
+    window.addEventListener('keydown', retryOnInteraction);
+
+    return () => {
+      window.removeEventListener('pointerdown', retryOnInteraction);
+      window.removeEventListener('keydown', retryOnInteraction);
+    };
+  }, [showLanding, isMusicEnabled]);
 
   useEffect(() => {
     if (showLanding) return; // Wait until user has selected a character before connecting
@@ -1262,6 +1366,7 @@ function App() {
   if (showLanding && showAbout) {
     return (
       <div className="app landing-shell about-page">
+        {backgroundMusicNode}
         <div className="landing-hero">
           <div className="landing-hero-bg" aria-hidden />
           <header className="landing-topbar">
@@ -1298,7 +1403,11 @@ function App() {
           </header>
           <section className="landing-intro">
             <p className="eyebrow">About us</p>
-            <h1 className="hero-title">we’re building media that actually responds</h1>
+            <h1 className="hero-title">
+              we’re building media
+              <br />
+              that actually responds
+            </h1>
             <div className="about-content">
               <p className="about-lead">
                 right now content is becoming abundant but it’s still static
@@ -1322,8 +1431,7 @@ function App() {
                 getting early versions into users hands and iterating quickly
               </p>
               <div className="about-why">
-                <p className="about-why-label">why we’re building this</p>
-                <h2 className="about-why-title">big</h2>
+                <h2 className="about-why-title">why we’re building this</h2>
                 <p className="about-copy">
                   content is becoming abundant
                   <br />
@@ -1347,6 +1455,7 @@ function App() {
               </p>
             </div>
           </section>
+          {musicToggleButton}
         </div>
       </div>
     );
@@ -1356,6 +1465,7 @@ function App() {
     const contactEmail = 'hello.interactstudio@gmail.com';
     return (
       <div className="app landing-shell contact-page">
+        {backgroundMusicNode}
         <div className="landing-hero">
           <div className="landing-hero-bg" aria-hidden />
           <header className="landing-topbar">
@@ -1397,6 +1507,7 @@ function App() {
               Email us at <span className="contact-email">{contactEmail}</span> and we will get back to you.
             </p>
           </section>
+          {musicToggleButton}
         </div>
       </div>
     );
@@ -1405,6 +1516,7 @@ function App() {
   if (showLanding) {
     return (
       <div className="app landing-shell">
+        {backgroundMusicNode}
         <div className="landing-hero">
           <div className="landing-hero-bg" aria-hidden />
           <header className="landing-topbar">
@@ -1460,6 +1572,7 @@ function App() {
               Watch the world respond in real time.
             </p>
           </section>
+          {musicToggleButton}
         </div>
 
         <main className="landing-body">
