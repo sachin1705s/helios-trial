@@ -1298,12 +1298,54 @@ function App() {
           </header>
           <section className="landing-intro">
             <p className="eyebrow">About us</p>
-            <h1 className="hero-title">We build worlds that listen.</h1>
-            <p className="landing-subtitle">
-              Interact Studio is an experiment in live storytelling. We blend world models,
-              generative media, and voice to create characters that feel present, responsive,
-              and emotionally expressive. Our goal is simple: make conversation move the world.
-            </p>
+            <h1 className="hero-title">we’re building media that actually responds</h1>
+            <div className="about-content">
+              <p className="about-lead">
+                right now content is becoming abundant but it’s still static
+                <br />
+                you just sit there and watch
+              </p>
+              <p className="about-copy">we think that breaks</p>
+              <p className="about-copy">
+                we’re building real time interactive video where you can talk to characters and
+                change what happens
+                <br />
+                the story the environment the flow
+              </p>
+              <p className="about-copy">
+                it feels less like watching something and more like being inside it
+              </p>
+              <p className="about-copy">
+                we’re a small team building fast working across world models synthetic data and
+                real time systems
+                <br />
+                getting early versions into users hands and iterating quickly
+              </p>
+              <div className="about-why">
+                <p className="about-why-label">why we’re building this</p>
+                <h2 className="about-why-title">big</h2>
+                <p className="about-copy">
+                  content is becoming abundant
+                  <br />
+                  but the way we experience it hasn’t changed
+                </p>
+                <p className="about-copy">
+                  we think media should respond
+                  <br />
+                  not just play
+                </p>
+              </div>
+              <p className="about-copy">
+                <a
+                  className="about-link"
+                  href="https://open.substack.com/pub/maxmill06/p/everything-youve-ever-watched-is?r=3xodvz&utm_campaign=post&utm_medium=web&showWelcomeOnShare=true"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  read more
+                </a>
+              </p>
+            </div>
           </section>
         </div>
       </div>

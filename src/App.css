@@ -1096,6 +1096,62 @@
   text-shadow: 0 2px 10px rgba(255, 255, 255, 0.35);
 }
 
+.about-content {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 58ch;
+}
+
+.about-lead,
+.about-copy,
+.about-why-label,
+.about-why-title {
+  margin: 0;
+}
+
+.about-lead,
+.about-copy {
+  color: var(--forest);
+  font-size: 1.05rem;
+  line-height: 1.7;
+  text-shadow: 0 2px 10px rgba(255, 255, 255, 0.35);
+}
+
+.about-why {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 10px;
+}
+
+.about-why-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(15, 27, 25, 0.62);
+}
+
+.about-why-title {
+  font-family: 'Fraunces', serif;
+  font-size: clamp(2.4rem, 6vw, 5rem);
+  line-height: 0.95;
+  color: var(--forest);
+  text-shadow: 0 4px 24px rgba(255, 255, 255, 0.4);
+}
+
+.about-link {
+  color: var(--forest);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+.about-link:hover {
+  color: rgba(15, 27, 25, 0.82);
+}
+
 .landing-body {
   padding: 80px clamp(20px, 4vw, 80px) 180px;
   display: flex;
