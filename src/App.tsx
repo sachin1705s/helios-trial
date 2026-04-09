@@ -204,6 +204,7 @@ function App() {
       ref={backgroundAudioRef}
       src="/background-music.mpeg"
       preload="auto"
+      volume={0.18}
       aria-hidden="true"
     />
   );
