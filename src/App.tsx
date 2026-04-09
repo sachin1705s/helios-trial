@@ -260,7 +260,7 @@ function App() {
     const audio = backgroundAudioRef.current;
     if (!audio) return;
 
-    audio.volume = 0.06;
+    audio.volume = 0.02;
     audio.loop = true;
   }, []);
 
