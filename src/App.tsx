@@ -1596,6 +1596,17 @@ function App() {
             <p className="landing-subtitle">
               Speak to characters, shift the scene, and shape the experience as it unfolds.
             </p>
+            <button
+              type="button"
+              className="hero-demo-btn"
+              onClick={() => setShowVideoModal(true)}
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+                <circle cx="7" cy="7" r="6.5" stroke="currentColor"/>
+                <path d="M5.5 4.5L10 7L5.5 9.5V4.5Z" fill="currentColor"/>
+              </svg>
+              Watch a conversation
+            </button>
           </section>
           {musicToggleButton}
         </div>
@@ -1606,17 +1617,6 @@ function App() {
               <div>
                 <h2>Characters</h2>
               </div>
-              <button
-                type="button"
-                className="how-it-works-btn"
-                onClick={() => setShowVideoModal(true)}
-              >
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
-                  <circle cx="7" cy="7" r="6.5" stroke="currentColor"/>
-                  <path d="M5.5 4.5L10 7L5.5 9.5V4.5Z" fill="currentColor"/>
-                </svg>
-                How it works
-              </button>
             </div>
             <div className="card-grid">
               {characters.map((character) => (
