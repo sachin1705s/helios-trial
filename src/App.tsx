@@ -273,7 +273,7 @@ function App() {
     const source = ctx.createMediaElementSource(audio);
 
     const gain = ctx.createGain();
-    gain.gain.value = 0.18;
+    gain.gain.value = 0.10;
 
     const lowShelf = ctx.createBiquadFilter();
     lowShelf.type = 'lowshelf';
@@ -283,7 +283,7 @@ function App() {
     const highShelf = ctx.createBiquadFilter();
     highShelf.type = 'highshelf';
     highShelf.frequency.value = 5500;
-    highShelf.gain.value = -11;
+    highShelf.gain.value = -16;
 
     const midScoop = ctx.createBiquadFilter();
     midScoop.type = 'peaking';
