@@ -1190,7 +1190,7 @@
 .about-content {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 20px;
   max-width: min(1100px, 88vw);
 }
 
@@ -1206,14 +1206,15 @@
   color: var(--forest);
   font-size: clamp(1.15rem, 1.5vw, 1.35rem);
   line-height: 1.65;
+  max-width: 72ch;
   text-shadow: 0 2px 10px rgba(255, 255, 255, 0.35);
 }
 
 .about-why {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding-top: 10px;
+  gap: 12px;
+  padding-top: 18px;
   max-width: min(1100px, 88vw);
 }
 
@@ -1225,6 +1226,10 @@
   white-space: nowrap;
   color: var(--forest);
   text-shadow: 0 4px 24px rgba(255, 255, 255, 0.4);
+}
+
+.about-why .about-copy {
+  max-width: 72ch;
 }
 
 .about-link {

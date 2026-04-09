@@ -1469,9 +1469,11 @@ function App() {
               <div className="about-why">
                 <h2 className="about-why-title">why we're building this</h2>
                 <p className="about-copy">
-                  Content is becoming abundant, but the way we experience it has barely changed.
+                  Content is exploding, but the experience of it is still mostly passive.
                 </p>
-                <p className="about-copy">We think media should respond, not just play.</p>
+                <p className="about-copy">
+                  We think the next step is media that listens, reacts, and changes with you.
+                </p>
               </div>
               <p className="about-copy">
                 <a
