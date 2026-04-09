@@ -1552,10 +1552,10 @@ function App() {
           </header>
 
           <section className="landing-intro">
-            <p className="eyebrow">real time interactive videos</p>
-            <h1 className="hero-title">Talk to the characters, what you say changes what happens</h1>
+            <p className="eyebrow">REAL-TIME INTERACTIVE VIDEO</p>
+            <h1 className="hero-title">Media that responds to you</h1>
             <p className="landing-subtitle">
-              conversations control the story, the environment, everything
+              Speak to characters, shift the scene, and shape the experience as it unfolds.
             </p>
           </section>
           {musicToggleButton}

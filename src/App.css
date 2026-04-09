@@ -1221,7 +1221,7 @@
   font-family: 'Fraunces', serif;
   font-size: clamp(2.8rem, 6vw, 5.4rem);
   line-height: 0.98;
-  max-width: 9ch;
+  max-width: 14ch;
   color: var(--forest);
   text-shadow: 0 4px 24px rgba(255, 255, 255, 0.4);
 }
