@@ -1214,14 +1214,15 @@
   flex-direction: column;
   gap: 10px;
   padding-top: 10px;
-  max-width: 72ch;
+  max-width: min(1100px, 88vw);
 }
 
 .about-why-title {
   font-family: 'Fraunces', serif;
   font-size: clamp(2.8rem, 6vw, 5.4rem);
   line-height: 0.98;
-  max-width: 18ch;
+  max-width: none;
+  white-space: nowrap;
   color: var(--forest);
   text-shadow: 0 4px 24px rgba(255, 255, 255, 0.4);
 }
