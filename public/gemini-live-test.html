@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gemini Live — Isolation Test</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: monospace; background: #0d0d0d; color: #e0e0e0; padding: 24px; max-width: 900px; }
+    h1 { color: #fff; margin-bottom: 6px; font-size: 18px; }
+    .subtitle { color: #666; font-size: 12px; margin-bottom: 24px; }
+    .section { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    .section h2 { font-size: 13px; color: #aaa; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+    label { font-size: 12px; color: #888; display: block; margin-bottom: 4px; }
+    input[type="password"], input[type="text"], select {
+      background: #111; color: #e0e0e0; border: 1px solid #444; border-radius: 4px;
+      padding: 6px 10px; font-family: monospace; font-size: 13px; width: 100%; margin-bottom: 8px;
+    }
+    .row { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+    button {
+      background: #2563eb; color: #fff; border: none; border-radius: 6px;
+      padding: 8px 16px; cursor: pointer; font-family: monospace; font-size: 13px;
+    }
+    button:disabled { background: #333; color: #555; cursor: not-allowed; }
+    button.red { background: #dc2626; }
+    button.green { background: #16a34a; }
+    button.grey { background: #374151; }
+    .log {
+      background: #0a0a0a; border: 1px solid #2a2a2a; border-radius: 4px;
+      padding: 10px; height: 320px; overflow-y: auto; font-size: 11px; line-height: 1.7;
+    }
+    .log .ts { color: #444; }
+    .log .info { color: #60a5fa; }
+    .log .ok   { color: #4ade80; }
+    .log .warn { color: #fbbf24; }
+    .log .err  { color: #f87171; }
+    .log .msg  { color: #a78bfa; }
+    .log .audio { color: #fb923c; }
+    .badge {
+      display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px;
+      background: #333; color: #888; margin-left: 8px; vertical-align: middle;
+    }
+    .badge.on  { background: #14532d; color: #4ade80; }
+    .badge.err { background: #450a0a; color: #f87171; }
+    .badge.mid { background: #1e3a5f; color: #60a5fa; }
+    .hint { font-size: 11px; color: #555; margin-bottom: 4px; }
+    .chunks { font-size: 11px; color: #555; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Gemini Live — Isolation Test <span class="badge" id="ws-badge">disconnected</span></h1>
+  <p class="subtitle">
+    Pure WebSocket test (no SDK, no Vite build). Served from /public by Vite.<br>
+    Proxy: Vite forwards /api → server, so /api/gemini-live-token works without CORS.
+  </p>
+
+  <!-- CONFIG -->
+  <div class="section">
+    <h2>Config</h2>
+    <div class="row">
+      <div style="flex:1">
+        <label>API Key source</label>
+        <select id="key-source">
+          <option value="server">Fetch from server (/api/gemini-live-token) — recommended</option>
+          <option value="manual">Paste key manually</option>
+        </select>
+      </div>
+      <div style="flex:1" id="manual-key-wrap" style="display:none">
+        <label>API Key (manual)</label>
+        <input type="password" id="api-key" placeholder="AIzaSy..." />
+      </div>
+    </div>
+    <div class="row">
+      <div style="flex:1">
+        <label>Model</label>
+        <select id="model-sel">
+          <option value="models/gemini-live-2.5-flash-preview">gemini-live-2.5-flash-preview (recommended)</option>
+          <option value="models/gemini-3.1-flash-live-preview" selected>gemini-3.1-flash-live-preview</option>
+          <option value="models/gemini-2.0-flash-live-preview-04-09">gemini-2.0-flash-live-preview-04-09</option>
+        </select>
+      </div>
+      <div style="flex:1">
+        <label>Voice</label>
+        <select id="voice-sel">
+          <option value="Puck">Puck</option>
+          <option value="Zephyr">Zephyr</option>
+          <option value="Charon">Charon</option>
+          <option value="Kore">Kore</option>
+          <option value="Fenrir">Fenrir</option>
+          <option value="Aoede">Aoede</option>
+        </select>
+      </div>
+    </div>
+    <div class="row">
+      <div style="flex:1">
+        <label>System prompt</label>
+        <input type="text" id="sys-prompt" value="You are a helpful voice assistant. Keep replies short." />
+      </div>
+    </div>
+  </div>
+
+  <!-- CONTROLS -->
+  <div class="section">
+    <h2>Controls</h2>
+    <div class="row">
+      <button id="btn-connect" onclick="doConnect()">Connect</button>
+      <button id="btn-mic-start" onclick="doStartMic()" disabled class="green">Start Mic</button>
+      <button id="btn-mic-stop"  onclick="doStopMic()"  disabled class="red">Stop Mic</button>
+      <button id="btn-disconnect" onclick="doDisconnect()" disabled class="grey">Disconnect</button>
+      <button onclick="clearLog()" class="grey">Clear Log</button>
+    </div>
+    <div class="chunks" id="chunk-count"></div>
+  </div>
+
+  <!-- LOG -->
+  <div class="section">
+    <h2>Log</h2>
+    <div class="log" id="log"></div>
+  </div>
+
+  <script>
+  // ── State ─────────────────────────────────────────────────────────────────────
+  let ws = null;
+  let sessionReady = false;
+  let captureCtx = null;
+  let playCtx = null;
+  let micStream = null;
+  let scriptNode = null;
+  let pcmSentCount = 0;
+  let pcmRecvCount = 0;
+  let nextPlayAt = 0;
+
+  // ── Logging ───────────────────────────────────────────────────────────────────
+  function log(level, msg) {
+    const el = document.getElementById('log');
+    const now = new Date().toISOString().slice(11, 23);
+    const line = document.createElement('div');
+    line.innerHTML = `<span class="ts">${now}</span> <span class="${level}">${esc(msg)}</span>`;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+    console.log(`[gemini-live-test][${level}] ${msg}`);
+  }
+  function clearLog() { document.getElementById('log').innerHTML = ''; }
+  function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function badge(txt, cls) {
+    const el = document.getElementById('ws-badge');
+    el.textContent = txt; el.className = 'badge ' + cls;
+  }
+  function updateChunks() {
+    document.getElementById('chunk-count').textContent =
+      `Audio sent: ${pcmSentCount} chunks | Audio received: ${pcmRecvCount} chunks`;
+  }
+
+  // ── Key source toggle ─────────────────────────────────────────────────────────
+  document.getElementById('key-source').addEventListener('change', e => {
+    document.getElementById('manual-key-wrap').style.display =
+      e.target.value === 'manual' ? 'block' : 'none';
+  });
+
+  // ── Connect ───────────────────────────────────────────────────────────────────
+  async function doConnect() {
+    document.getElementById('btn-connect').disabled = true;
+    badge('fetching key…', 'mid');
+
+    // Get API key
+    let apiKey;
+    const keySource = document.getElementById('key-source').value;
+    if (keySource === 'server') {
+      try {
+        log('info', 'Fetching API key from /api/gemini-live-token…');
+        const res = await fetch('/api/gemini-live-token', { method: 'POST' });
+        if (!res.ok) throw new Error(`Server returned ${res.status}: ${await res.text()}`);
+        const data = await res.json();
+        if (!data.token) throw new Error('Empty token from server');
+        apiKey = data.token;
+        log('ok', `Got API key from server (length: ${apiKey.length})`);
+      } catch (err) {
+        log('err', `Token fetch failed: ${err.message}`);
+        badge('token failed', 'err');
+        document.getElementById('btn-connect').disabled = false;
+        return;
+      }
+    } else {
+      apiKey = document.getElementById('api-key').value.trim();
+      if (!apiKey) { log('err', 'Paste an API key first'); document.getElementById('btn-connect').disabled = false; return; }
+    }
+
+    // Build WebSocket URL
+    // v1beta = standard Google AI endpoint for regular API keys
+    const model = document.getElementById('model-sel').value;
+    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+    log('info', `Opening WebSocket…`);
+    log('info', `  URL: …BidiGenerateContent?key=***`);
+    log('info', `  Model: ${model}`);
+    badge('connecting…', 'mid');
+
+    ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      log('ok', 'WebSocket OPEN — sending setup message');
+      badge('sending setup…', 'mid');
+
+      const voice = document.getElementById('voice-sel').value;
+      const sysPrompt = document.getElementById('sys-prompt').value;
+
+      // ── SETUP MESSAGE (exact wire format) ─────────────────────────────────
+      // Root key: "setup" (NOT "config")
+      // speechConfig: inside generationConfig (NOT top-level of setup)
+      // systemInstruction: top-level of setup, Content object
+      // All keys: camelCase
+      const setupMsg = {
+        setup: {
+          model: model,
+          generationConfig: {
+            responseModalities: ['AUDIO'],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName: voice }
+              }
+            }
+          },
+          systemInstruction: {
+            parts: [{ text: sysPrompt }]
+          }
+        }
+      };
+
+      const json = JSON.stringify(setupMsg);
+      log('msg', `Sending setup: ${json.slice(0, 200)}${json.length > 200 ? '…' : ''}`);
+      ws.send(json);
+    };
+
+    ws.onmessage = async (event) => {
+      let text;
+      if (event.data instanceof Blob) {
+        text = await event.data.text();
+      } else {
+        text = event.data;
+      }
+
+      let msg;
+      try { msg = JSON.parse(text); }
+      catch { log('warn', `Non-JSON from server: ${text}`); return; }
+
+      // ── setupComplete ─────────────────────────────────────────────────────
+      if (msg.setupComplete !== undefined) {
+        log('ok', '✓ setupComplete received — session is ready');
+        badge('ready', 'on');
+        sessionReady = true;
+        document.getElementById('btn-mic-start').disabled = false;
+        document.getElementById('btn-disconnect').disabled = false;
+        return;
+      }
+
+      // ── serverContent ─────────────────────────────────────────────────────
+      if (msg.serverContent) {
+        const sc = msg.serverContent;
+
+        if (sc.modelTurn?.parts) {
+          for (const part of sc.modelTurn.parts) {
+            if (part.inlineData?.data) {
+              pcmRecvCount++;
+              updateChunks();
+              const mimeType = part.inlineData.mimeType || 'audio/pcm;rate=24000';
+              const sampleRate = parseInt(mimeType.match(/rate=(\d+)/)?.[1] ?? '24000', 10);
+              log('audio', `Audio chunk #${pcmRecvCount}: ${part.inlineData.data.length} base64 chars, ${mimeType}`);
+              playPCMChunk(part.inlineData.data, sampleRate);
+            }
+            if (part.text) {
+              log('info', `Text: ${part.text}`);
+            }
+          }
+        }
+
+        if (sc.outputTranscription?.text) {
+          log('info', `Transcription: "${sc.outputTranscription.text}"`);
+        }
+
+        if (sc.interrupted) {
+          log('warn', 'Model interrupted (barge-in)');
+          nextPlayAt = 0; // reset playback queue
+        }
+
+        if (sc.turnComplete) {
+          log('ok', 'Turn complete');
+        }
+      }
+
+      // ── other messages ────────────────────────────────────────────────────
+      if (msg.goAway) {
+        log('warn', `goAway received: ${JSON.stringify(msg.goAway)}`);
+      }
+
+      // Log any unexpected messages
+      const knownKeys = ['setupComplete', 'serverContent', 'goAway'];
+      const unknown = Object.keys(msg).filter(k => !knownKeys.includes(k));
+      if (unknown.length) {
+        log('warn', `Unknown message keys: ${unknown.join(', ')} — ${text.slice(0, 200)}`);
+      }
+    };
+
+    ws.onerror = (e) => {
+      log('err', `WebSocket error: ${e.message ?? JSON.stringify(e)}`);
+      badge('error', 'err');
+    };
+
+    ws.onclose = (e) => {
+      log(e.code === 1000 ? 'ok' : 'err',
+        `WebSocket closed — code=${e.code} reason="${e.reason || '(none)'}"`);
+      if (e.code !== 1000) {
+        // Common codes:
+        // 1007 = invalid payload (bad field names / camelCase issue)
+        // 1003 = unsupported data (bad model?)
+        // 1008 = policy violation (bad API key)
+        // 4xx via URL = auth failure
+        const hints = {
+          1007: 'Invalid payload — likely camelCase field name issue or bad setup format',
+          1003: 'Unsupported data — model may not support Live API',
+          1008: 'Policy violation — check API key and model permissions',
+        };
+        if (hints[e.code]) log('warn', `Hint: ${hints[e.code]}`);
+      }
+      badge('disconnected', '');
+      sessionReady = false;
+      ws = null;
+      document.getElementById('btn-connect').disabled = false;
+      document.getElementById('btn-mic-start').disabled = true;
+      document.getElementById('btn-mic-stop').disabled = true;
+      document.getElementById('btn-disconnect').disabled = true;
+    };
+  }
+
+  // ── Mic ───────────────────────────────────────────────────────────────────────
+  async function doStartMic() {
+    if (!sessionReady) { log('err', 'Not connected'); return; }
+
+    log('info', 'Requesting mic access…');
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+      });
+    } catch (err) {
+      log('err', `getUserMedia failed: ${err.message}`);
+      return;
+    }
+
+    // 16 kHz AudioContext for capture
+    captureCtx = new AudioContext({ sampleRate: 16000 });
+    const micSource = captureCtx.createMediaStreamSource(micStream);
+
+    // 100ms chunks → 1600 samples @ 16kHz
+    const CHUNK_SAMPLES = 1600;
+    scriptNode = captureCtx.createScriptProcessor(CHUNK_SAMPLES, 1, 1);
+
+    scriptNode.onaudioprocess = (ev) => {
+      if (!sessionReady || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+      const float32 = ev.inputBuffer.getChannelData(0);
+      const int16 = float32ToInt16(float32);
+
+      // base64 the raw PCM bytes
+      const b64 = arrayBufferToBase64(int16.buffer);
+
+      // ── AUDIO INPUT MESSAGE (exact wire format) ───────────────────────────
+      // Root: "realtimeInput" (camelCase)
+      // Field: "audio" (NOT "mediaChunks")
+      // mimeType: "audio/pcm;rate=16000" (include rate parameter)
+      // data: base64-encoded 16-bit LE signed PCM, no headers
+      ws.send(JSON.stringify({
+        realtimeInput: {
+          audio: {
+            data: b64,
+            mimeType: 'audio/pcm;rate=16000'
+          }
+        }
+      }));
+
+      pcmSentCount++;
+      if (pcmSentCount % 10 === 0) updateChunks(); // update every 1s
+    };
+
+    micSource.connect(scriptNode);
+    // connect to destination to keep the graph alive (can be silent)
+    scriptNode.connect(captureCtx.destination);
+
+    badge('mic active', 'on');
+    log('ok', `Mic started — streaming 16kHz PCM (${CHUNK_SAMPLES} samples / 100ms chunks)`);
+    document.getElementById('btn-mic-start').disabled = true;
+    document.getElementById('btn-mic-stop').disabled = false;
+  }
+
+  function doStopMic() {
+    if (scriptNode) { scriptNode.disconnect(); scriptNode.onaudioprocess = null; scriptNode = null; }
+    if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+    if (captureCtx) { captureCtx.close().catch(() => {}); captureCtx = null; }
+    badge('ready', 'on');
+    log('ok', 'Mic stopped');
+    document.getElementById('btn-mic-start').disabled = false;
+    document.getElementById('btn-mic-stop').disabled = true;
+  }
+
+  function doDisconnect() {
+    doStopMic();
+    if (ws) {
+      try {
+        // Signal end of audio stream before closing
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
+        }
+        ws.close(1000, 'user disconnected');
+      } catch { /* ignore */ }
+      ws = null;
+    }
+    sessionReady = false;
+    pcmSentCount = 0; pcmRecvCount = 0;
+    updateChunks();
+  }
+
+  // ── Playback ──────────────────────────────────────────────────────────────────
+  // Gemini outputs 24kHz 16-bit LE signed mono PCM
+  function playPCMChunk(base64Data, sampleRate) {
+    if (!playCtx) {
+      playCtx = new AudioContext({ sampleRate });
+    }
+
+    // Decode base64 → Uint8Array → Int16Array → Float32Array
+    const binary = atob(base64Data);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const int16 = new Int16Array(bytes.buffer);
+    const float32 = new Float32Array(int16.length);
+    for (let i = 0; i < int16.length; i++) {
+      float32[i] = int16[i] / (int16[i] < 0 ? 0x8000 : 0x7FFF);
+    }
+
+    const audioBuffer = playCtx.createBuffer(1, float32.length, sampleRate);
+    audioBuffer.getChannelData(0).set(float32);
+
+    const source = playCtx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(playCtx.destination);
+
+    // Schedule gapless playback
+    const now = playCtx.currentTime;
+    if (nextPlayAt < now + 0.05) nextPlayAt = now + 0.05;
+    source.start(nextPlayAt);
+    nextPlayAt += audioBuffer.duration;
+  }
+
+  // ── PCM utilities ─────────────────────────────────────────────────────────────
+  function float32ToInt16(float32) {
+    const out = new Int16Array(float32.length);
+    for (let i = 0; i < float32.length; i++) {
+      const s = Math.max(-1, Math.min(1, float32[i]));
+      out[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+    return out;
+  }
+
+  function arrayBufferToBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    // Process in chunks to avoid stack overflow on large buffers
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+  }
+  </script>
+</body>
+</html>

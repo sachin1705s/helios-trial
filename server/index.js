@@ -739,7 +739,21 @@ app.post('/api/character/chat', aiLimiter, async (req, res) => {
     if (enableSearch) {
       generateParams.tools = [{ googleSearch: {} }];
     }
-    const response = await ai.models.generateContent(generateParams);
+
+    // Retry once on rate-limit (429 / resource exhausted) before giving up
+    let response;
+    try {
+      response = await ai.models.generateContent(generateParams);
+    } catch (firstErr) {
+      const firstMsg = firstErr?.message || String(firstErr);
+      if (/quota|rate.?limit|resource.?exhausted|429/i.test(firstMsg)) {
+        console.warn('[character/chat] rate-limit on first attempt, retrying in 2s…', firstMsg);
+        await new Promise((r) => setTimeout(r, 2000));
+        response = await ai.models.generateContent(generateParams); // let outer catch handle second failure
+      } else {
+        throw firstErr;
+      }
+    }
 
     let raw = '';
     try {
@@ -814,6 +828,7 @@ app.post('/api/character/chat', aiLimiter, async (req, res) => {
     console.error('[character/chat] error:', message, err?.stack);
     // Surface Gemini quota/rate-limit errors as a soft reply so the UI stays functional
     if (/quota|rate.?limit|resource.?exhausted|429/i.test(message)) {
+      console.warn('[character/chat] Gemini quota/rate-limit hit (retries exhausted). Full error:', message);
       return res.json({ reply: "I'm a bit overloaded right now — try again in a moment!", action: '', objects: [], sources: [], searchUsed: false });
     }
     // All other unexpected errors: return a graceful reply + log details
