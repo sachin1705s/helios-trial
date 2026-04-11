@@ -218,7 +218,7 @@ function App() {
   };
   const activeVoiceAgent = slide ? VOICE_AGENT_ID_BY_SLIDE[slide.id] : null;
   const isVoiceAgentSlide = Boolean(activeVoiceAgent);
-  const GEMINI_LIVE_SLIDES = new Set(['einstein']);
+  const GEMINI_LIVE_SLIDES = new Set(['einstein', 'alexander', 'bear', 'circus-lion', 'cleopatra', 'da-vinci', 'grandpa-turtle', 'steve-jobs']);
   const activeCharacterName = slide?.title ?? 'Character';
   const activeCharacterHistory = slide ? characterHistory[slide.id] ?? [] : [];
   const slideCtaRef = useRef('');
@@ -850,7 +850,14 @@ function App() {
   };
 
   const GEMINI_LIVE_SYSTEM_PROMPTS: Record<string, string> = {
-    einstein: 'You are Albert Einstein. Respond as Einstein would — curious, imaginative, with dry wit. Keep replies under 30 words. Speak naturally. Explain ideas simply and vividly.',
+    einstein:         'You are Albert Einstein. Curious, imaginative, dry wit. Keep replies under 40 words. Explain ideas simply and vividly.',
+    alexander:        'You are Alexander the Great. Bold, strategic, inspiring. Keep replies under 40 words.',
+    bear:             'You are a friendly bear. Warm, playful, gentle. Keep replies under 40 words.',
+    'circus-lion':    'You are a circus lion. Dramatic, proud, theatrical. Keep replies under 40 words.',
+    cleopatra:        'You are Cleopatra. Regal, intelligent, commanding. Keep replies under 40 words.',
+    'da-vinci':       'You are Leonardo da Vinci. Creative, curious, inventive. Keep replies under 40 words.',
+    'grandpa-turtle': 'You are a wise grandpa turtle. Patient, gentle, full of old wisdom. Keep replies under 40 words.',
+    'steve-jobs':     'You are Steve Jobs. Visionary, passionate about simplicity, demanding. Keep replies under 40 words.',
   };
 
   const buildSystemPrompt = (slideId: string): string =>
@@ -1556,11 +1563,7 @@ function App() {
       if (isCharacterRecording || isCharacterThinking) {
         return false;
       }
-      if (GEMINI_LIVE_SLIDES.has(slide?.id ?? '')) {
-        void startGeminiLiveSession();
-      } else {
-        startCharacterRecording();
-      }
+      void startGeminiLiveSession();
       return true;
     }
     if (isRecording || isTranscribing) {
@@ -1571,10 +1574,7 @@ function App() {
   };
   pttStopRef.current = () => {
     if (isCharacterSlide) {
-      // Gemini Live uses VAD — don't stop on key release, session stays open until toggled off
-      if (!GEMINI_LIVE_SLIDES.has(slide?.id ?? '') && isCharacterRecording) {
-        stopCharacterRecording();
-      }
+      // Gemini Live uses server-side VAD — don't stop on key release
       return;
     }
     recognitionRef.current?.stop();
@@ -1882,11 +1882,7 @@ function App() {
             {isCharacterSlide ? (
               <button
                 className="btn accent ptt-btn"
-                onClick={
-                  GEMINI_LIVE_SLIDES.has(slide.id)
-                    ? (isCharacterRecording ? stopGeminiLiveSession : startGeminiLiveSession)
-                    : (isCharacterRecording ? stopCharacterRecording : startCharacterRecording)
-                }
+                onClick={isCharacterRecording ? stopGeminiLiveSession : startGeminiLiveSession}
                 disabled={isCharacterThinking}
                 aria-label={
                   isCharacterRecording
