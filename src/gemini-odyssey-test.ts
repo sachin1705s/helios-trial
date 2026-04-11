@@ -287,10 +287,9 @@ async function doConnect() {
           setTimeout(() => video.play().catch(() => undefined), 150);
         });
 
-        log('ody', 'info', 'Fetching character image and calling startStream…');
+        log('ody', 'info', 'Calling startStream (no image — model does not support i2v)…');
         try {
-          const imgFile = await fetchImageFile(char.image, charId);
-          await odyssey!.startStream({ prompt: char.prompt, image: imgFile });
+          await odyssey!.startStream({ prompt: char.prompt });
           odysseyStreamStarted = true;
           log('ody', 'ok', '✓ startStream resolved');
         } catch (err) {
