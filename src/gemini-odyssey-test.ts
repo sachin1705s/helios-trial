@@ -243,23 +243,12 @@ async function doConnect() {
           setTimeout(() => video.play().catch(() => undefined), 150);
         });
 
-        // Try with image first (same as App.tsx); fall back without if model rejects it
         log('ody','info','Calling startStream…');
         try {
-          const res = await fetch(char.image);
-          const blob = await res.blob();
-          const imgFile = new File([blob], `${charId}.png`, { type: blob.type || 'image/png' });
-          await odyssey!.startStream({ prompt: 'Animate it', image: imgFile });
-          log('ody','ok','✓ startStream (with image) resolved');
-        } catch (imgErr) {
-          log('ody','warn',`startStream with image failed: ${(imgErr as Error).message}`);
-          log('ody','info','Retrying startStream without image…');
-          try {
-            await odyssey!.startStream({ prompt: 'Animate it' });
-            log('ody','ok','✓ startStream (no image) resolved');
-          } catch (err2) {
-            log('ody','err',`startStream failed: ${(err2 as Error).message}`);
-          }
+          await odyssey!.startStream({ prompt: 'Animate it' });
+          log('ody','ok','✓ startStream resolved');
+        } catch (err) {
+          log('ody','err',`startStream failed: ${(err as Error).message}`);
         }
       },
       onStatusChange: (status) => {
@@ -295,8 +284,6 @@ async function doConnect() {
         generationConfig: {
           responseModalities: ['AUDIO'],
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
-          // Request transcription of user's audio — comes back as inputTranscription
-          inputAudioTranscription: {},
         },
         systemInstruction: { parts: [{ text: char.sysPrompt }] },
       },
