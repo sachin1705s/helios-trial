@@ -136,6 +136,9 @@ function App() {
   const geminiLiveActiveRef = useRef(false);
   const geminiLivePlaybackTimeRef = useRef(0);
   const geminiLiveSourceNodesRef = useRef<AudioBufferSourceNode[]>([]);
+  // Two-phase Odyssey transcript buffers — reset each turn
+  const glCurrentUserTextRef = useRef('');
+  const glOutputTranscriptBufferRef = useRef('');
 
   const logEvent = (event: string, data: Record<string, unknown>, transport: 'fetch' | 'beacon' = 'fetch') => {
     trackEvent(event, data, { transport });
@@ -835,8 +838,8 @@ function App() {
     geminiLivePlaybackTimeRef.current = 0;
   };
 
-  // Takes what the user said → asks the LLM for an Odyssey action → drives the avatar.
-  const fetchOdysseyAction = (userText: string, characterName: string, myGeneration: number) => {
+  // Phase 1: user's words → action (avatar gesture, fires immediately on inputTranscription)
+  const glPhase1Action = (userText: string, characterName: string, myGeneration: number) => {
     fetch('/api/character/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -848,7 +851,25 @@ function App() {
         const action = data.action?.trim();
         if (action) handleInteractRef.current(action);
       })
-      .catch(() => undefined); // non-fatal — avatar just won't animate for this turn
+      .catch(() => undefined);
+  };
+
+  // Phase 2: user text + what Gemini actually said → objects (fires at turnComplete)
+  const glPhase2Objects = (userText: string, geminiResponse: string, characterName: string, myGeneration: number) => {
+    if (!geminiResponse.trim()) return;
+    const message = `User asked: "${userText}". You responded: "${geminiResponse}". Based on this, what objects should appear in the scene?`;
+    fetch('/api/character/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, character: characterName, history: [] }),
+    })
+      .then((res) => res.ok ? res.json() as Promise<{ objects?: string[] }> : Promise.reject(new Error(`chat ${res.status}`)))
+      .then((data) => {
+        if (geminiLiveGenerationRef.current !== myGeneration) return;
+        const objects = data.objects?.filter(Boolean) ?? [];
+        if (objects.length) handleInteractRef.current(`add ${objects.join(', ')} to the scene`);
+      })
+      .catch(() => undefined);
   };
 
   const GEMINI_LIVE_SYSTEM_PROMPTS: Record<string, string> = {
@@ -876,6 +897,7 @@ function App() {
     if (content.interrupted) {
       stopGeminiLiveAudio();
       handleInteractRef.current('stand idle');
+      glOutputTranscriptBufferRef.current = '';
       return;
     }
 
@@ -888,13 +910,30 @@ function App() {
       }
     }
 
-    // User's speech transcript → /api/character/chat → Odyssey avatar action
+    // Phase 1: inputTranscription (user's words) → action → odyssey.interact() immediately
     const inputTranscription = (content.inputTranscription as Record<string, string> | undefined)?.text;
     if (inputTranscription) {
-      fetchOdysseyAction(inputTranscription, slide.title, myGeneration);
+      glCurrentUserTextRef.current = inputTranscription;
+      glOutputTranscriptBufferRef.current = '';
+      glPhase1Action(inputTranscription, slide.title, myGeneration);
     }
 
-    if (content.turnComplete) setIsCharacterThinking(false);
+    // Accumulate outputTranscription chunks as Gemini speaks
+    const outputTranscription = (content.outputTranscription as Record<string, string> | undefined)?.text;
+    if (outputTranscription) {
+      glOutputTranscriptBufferRef.current += (glOutputTranscriptBufferRef.current ? ' ' : '') + outputTranscription;
+    }
+
+    // Phase 2: turnComplete — fire with full context to get scene objects
+    if (content.turnComplete) {
+      setIsCharacterThinking(false);
+      const userText = glCurrentUserTextRef.current;
+      const geminiResponse = glOutputTranscriptBufferRef.current;
+      if (userText && geminiResponse) {
+        glPhase2Objects(userText, geminiResponse, slide.title, myGeneration);
+      }
+      glOutputTranscriptBufferRef.current = '';
+    }
   };
 
   // Closes the Gemini Live WebSocket, releases mic, and resets all session state.

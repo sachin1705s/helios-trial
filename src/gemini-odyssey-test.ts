@@ -1,12 +1,15 @@
 /**
  * Gemini Live + Odyssey Integration Test
  *
- * Audio flow being tested:
- *   Mic → [16kHz PCM] → Gemini Live WS (speech-to-speech)
- *                           ↓ audio chunks (24kHz PCM)  ↓ transcript
- *                        Speaker playback          Odyssey.interact(action)
+ * Two-phase Odyssey animation (see docs/architecture-odyssey-character-response.md):
  *
- * The user speaks → Gemini responds with voice → Odyssey avatar animates.
+ *   Phase 1 — fires on inputTranscription (user done speaking, ~immediate)
+ *     → POST /api/character/chat { message: userText }
+ *     → action field → odyssey.interact()   [avatar gesture, low latency]
+ *
+ *   Phase 2 — fires on turnComplete (Gemini done speaking)
+ *     → POST /api/character/chat { message: "User: … You: …" }
+ *     → objects field → odyssey.interact()  [scene props, accurate to what was said]
  */
 import { Odyssey, credentialsFromDict } from '@odysseyml/odyssey';
 
@@ -26,6 +29,10 @@ let odysseyLeaseId: string | null = null;
 let odysseyReady = false;   // true after onStreamStarted
 let currentChar = { chatName: 'Albert Einstein' };
 
+// Two-phase transcript buffers (reset each turn)
+let currentUserText = '';              // from inputTranscription
+let outputTranscriptBuffer = '';       // accumulated outputTranscription chunks
+
 // ── Characters ────────────────────────────────────────────────────────────────
 const CHAR_CONFIG: Record<string, { image: string; sysPrompt: string; chatName: string }> = {
   einstein:   { image: '/images/characters/einstein.png',    sysPrompt: 'You are Albert Einstein. Curious, imaginative, dry wit. Keep replies under 40 words.',           chatName: 'Albert Einstein' },
@@ -35,16 +42,44 @@ const CHAR_CONFIG: Record<string, { image: string; sysPrompt: string; chatName: 
   'da-vinci': { image: '/images/characters/da vinci.png',    sysPrompt: 'You are Leonardo da Vinci. Creative, curious, inventive. Keep replies under 40 words.',           chatName: 'Da Vinci' },
 };
 
-// Takes what the USER said → calls /api/character/chat → returns the `action` field for Odyssey
-async function getOdysseyAction(userText: string, charName: string): Promise<string> {
-  const res = await fetch('/api/character/chat', {
+// Phase 1: user's words → action (avatar gesture, fires immediately)
+function phase1Action(userText: string, charName: string) {
+  if (!odysseyReady || !odyssey) return;
+  log('transcript', 'info', `[Phase 1] POST /api/character/chat — userText: "${userText.slice(0, 60)}"`);
+  fetch('/api/character/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message: userText, character: charName, history: [] }),
-  });
-  if (!res.ok) throw new Error(`chat ${res.status}`);
-  const data = await res.json() as { action?: string };
-  return data.action?.trim() || 'nod thoughtfully';
+  })
+    .then(r => r.ok ? r.json() as Promise<{ action?: string }> : Promise.reject(new Error(`${r.status}`)))
+    .then((data) => {
+      const action = data.action?.trim();
+      if (!action || !odyssey) return;
+      log('transcript', 'ok', `[Phase 1] odyssey.interact("${action}")`);
+      try { odyssey.interact({ prompt: action }); } catch { /* ignore */ }
+    })
+    .catch(err => log('transcript', 'err', `[Phase 1] failed: ${(err as Error).message}`));
+}
+
+// Phase 2: user's words + what Gemini actually said → objects (scene props, fires at turnComplete)
+function phase2Objects(userText: string, geminiResponse: string, charName: string) {
+  if (!odysseyReady || !odyssey || !geminiResponse.trim()) return;
+  const message = `User asked: "${userText}". You responded: "${geminiResponse}". Based on this, what objects should appear in the scene?`;
+  log('transcript', 'info', `[Phase 2] POST /api/character/chat — with full context`);
+  fetch('/api/character/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, character: charName, history: [] }),
+  })
+    .then(r => r.ok ? r.json() as Promise<{ objects?: string[] }> : Promise.reject(new Error(`${r.status}`)))
+    .then((data) => {
+      const objects = data.objects?.filter(Boolean) ?? [];
+      if (!objects.length || !odyssey) return;
+      const prompt = `add ${objects.join(', ')} to the scene`;
+      log('transcript', 'ok', `[Phase 2] odyssey.interact("${prompt}")`);
+      try { odyssey.interact({ prompt }); } catch { /* ignore */ }
+    })
+    .catch(err => log('transcript', 'err', `[Phase 2] failed: ${(err as Error).message}`));
 }
 
 // ── Logging ───────────────────────────────────────────────────────────────────
@@ -325,29 +360,34 @@ async function doConnect() {
 
     // ── Barge-in ───────────────────────────────────────────────────────────
     if (content.interrupted) {
-      log('gl','warn','Barge-in — resetting playback');
+      log('gl', 'warn', 'Barge-in — resetting playback and transcript buffer');
       nextPlayAt = 0;
+      outputTranscriptBuffer = '';
     }
 
-    // ── User input transcript → /api/character/chat → Odyssey action ──────
-    // inputTranscription = what the USER said (requires inputAudioTranscription:{} in setup)
+    // ── Phase 1: inputTranscription → action (immediate) ──────────────────
     const inputTranscript = (content.inputTranscription as Record<string, string> | undefined)?.text;
     if (inputTranscript) {
-      log('transcript','tscript',`User said: "${inputTranscript}"`);
-      log('transcript','info',`→ calling /api/character/chat to get Odyssey action…`);
-      if (odysseyReady && odyssey) {
-        getOdysseyAction(inputTranscript, currentChar.chatName)
-          .then((action) => {
-            log('transcript','ok',`→ odyssey.interact("${action}")`);
-            try { odyssey!.interact({ prompt: action }); } catch (e) { log('transcript','err',`interact() failed: ${(e as Error).message}`); }
-          })
-          .catch((err) => log('transcript','err',`chat API failed: ${(err as Error).message}`));
-      } else {
-        log('transcript','warn',`odysseyReady=${odysseyReady} — skipping interact()`);
-      }
+      currentUserText = inputTranscript;
+      outputTranscriptBuffer = '';
+      log('transcript', 'tscript', `User said: "${inputTranscript}"`);
+      phase1Action(inputTranscript, currentChar.chatName);
     }
 
-    if (content.turnComplete) log('gl','ok','Turn complete');
+    // ── Accumulate outputTranscription chunks ──────────────────────────────
+    const outputTranscript = (content.outputTranscription as Record<string, string> | undefined)?.text;
+    if (outputTranscript) {
+      outputTranscriptBuffer += (outputTranscriptBuffer ? ' ' : '') + outputTranscript;
+    }
+
+    // ── Phase 2: turnComplete → objects (accurate, fires after Gemini done) ─
+    if (content.turnComplete) {
+      log('gl', 'ok', `Turn complete — Gemini said: "${outputTranscriptBuffer.slice(0, 80)}${outputTranscriptBuffer.length > 80 ? '…' : ''}"`);
+      if (currentUserText && outputTranscriptBuffer) {
+        phase2Objects(currentUserText, outputTranscriptBuffer, currentChar.chatName);
+      }
+      outputTranscriptBuffer = '';
+    }
   };
 
   ws.onerror = () => {
