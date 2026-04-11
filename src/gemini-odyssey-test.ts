@@ -24,27 +24,27 @@ let pcmRecv = 0;
 let nextPlayAt = 0;
 let odysseyLeaseId: string | null = null;
 let odysseyReady = false;   // true after onStreamStarted
+let currentChar = { chatName: 'Albert Einstein' };
 
 // ── Characters ────────────────────────────────────────────────────────────────
-const CHAR_CONFIG: Record<string, { image: string; sysPrompt: string }> = {
-  einstein:   { image: '/images/characters/einstein.png',      sysPrompt: 'You are Albert Einstein. Curious, imaginative, dry wit. Keep replies under 40 words.' },
-  alexander:  { image: '/images/characters/Alexander.png',     sysPrompt: 'You are Alexander the Great. Bold, strategic, inspiring. Keep replies under 40 words.' },
-  bear:       { image: '/images/characters/bear.png',          sysPrompt: 'You are a friendly bear named Steve. Warm, playful, gentle. Keep replies under 40 words.' },
-  cleopatra:  { image: '/images/characters/cleopatra.png',     sysPrompt: 'You are Cleopatra. Regal, intelligent, commanding. Keep replies under 40 words.' },
-  'da-vinci': { image: '/images/characters/da vinci.png',      sysPrompt: 'You are Leonardo da Vinci. Creative, curious, inventive. Keep replies under 40 words.' },
+const CHAR_CONFIG: Record<string, { image: string; sysPrompt: string; chatName: string }> = {
+  einstein:   { image: '/images/characters/einstein.png',    sysPrompt: 'You are Albert Einstein. Curious, imaginative, dry wit. Keep replies under 40 words.',           chatName: 'Albert Einstein' },
+  alexander:  { image: '/images/characters/Alexander.png',   sysPrompt: 'You are Alexander the Great. Bold, strategic, inspiring. Keep replies under 40 words.',          chatName: 'Alexander' },
+  bear:       { image: '/images/characters/bear.png',        sysPrompt: 'You are a friendly bear named Steve. Warm, playful, gentle. Keep replies under 40 words.',        chatName: 'Steve the Bear' },
+  cleopatra:  { image: '/images/characters/cleopatra.png',   sysPrompt: 'You are Cleopatra. Regal, intelligent, commanding. Keep replies under 40 words.',                 chatName: 'Cleopatra' },
+  'da-vinci': { image: '/images/characters/da vinci.png',    sysPrompt: 'You are Leonardo da Vinci. Creative, curious, inventive. Keep replies under 40 words.',           chatName: 'Da Vinci' },
 };
 
-const ACTION_MAP: Array<[RegExp, string]> = [
-  [/\b(yes|correct|exactly|absolutely|indeed)\b/i,         'nod enthusiastically'],
-  [/\b(no|wrong|incorrect|not quite)\b/i,                  'shake head'],
-  [/\b(imagine|picture|think of|consider)\b/i,             'gesture thoughtfully and look upward'],
-  [/\b(look at|observe|see|notice)\b/i,                    'point toward viewer'],
-  [/\b(discovered|found|realized|eureka|interesting)\b/i,  'gesture excitedly'],
-  [/\b(simple|easy|basic)\b/i,                             'nod simply'],
-];
-function deriveAction(t: string) {
-  for (const [re, a] of ACTION_MAP) if (re.test(t)) return a;
-  return 'nod thoughtfully and gesture gently';
+// Takes what the USER said → calls /api/character/chat → returns the `action` field for Odyssey
+async function getOdysseyAction(userText: string, charName: string): Promise<string> {
+  const res = await fetch('/api/character/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: userText, character: charName, history: [] }),
+  });
+  if (!res.ok) throw new Error(`chat ${res.status}`);
+  const data = await res.json() as { action?: string };
+  return data.action?.trim() || 'nod thoughtfully';
 }
 
 // ── Logging ───────────────────────────────────────────────────────────────────
@@ -185,7 +185,8 @@ async function doConnect() {
   const char = CHAR_CONFIG[charId];
 
   btn('btn-connect').disabled = true;
-  log('gl','info',`Starting — character: ${charId}`);
+  currentChar = char;
+  log('gl','info',`Starting — character: ${charId} (${char.chatName})`);
   log('ody','info',`Starting — character: ${charId}`);
 
   // ⚠️ Create BOTH AudioContexts here, inside the user gesture click.
@@ -294,6 +295,8 @@ async function doConnect() {
         generationConfig: {
           responseModalities: ['AUDIO'],
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
+          // Request transcription of user's audio — comes back as inputTranscription
+          inputAudioTranscription: {},
         },
         systemInstruction: { parts: [{ text: char.sysPrompt }] },
       },
@@ -339,19 +342,21 @@ async function doConnect() {
       nextPlayAt = 0;
     }
 
-    // ── Transcript → Odyssey interact ──────────────────────────────────────
-    const transcript = (content.outputTranscription as Record<string, string> | undefined)?.text;
-    if (transcript) {
-      const action = deriveAction(transcript);
-      log('transcript','tscript',`Gemini says: "${transcript}"`);
-      log('transcript','info',`→ odyssey.interact("${action}") — odysseyReady=${odysseyReady}`);
+    // ── User input transcript → /api/character/chat → Odyssey action ──────
+    // inputTranscription = what the USER said (requires inputAudioTranscription:{} in setup)
+    const inputTranscript = (content.inputTranscription as Record<string, string> | undefined)?.text;
+    if (inputTranscript) {
+      log('transcript','tscript',`User said: "${inputTranscript}"`);
+      log('transcript','info',`→ calling /api/character/chat to get Odyssey action…`);
       if (odysseyReady && odyssey) {
-        try {
-          odyssey.interact({ prompt: action });
-          log('transcript','ok','interact() sent to Odyssey');
-        } catch (e) {
-          log('transcript','err',`interact() failed: ${(e as Error).message}`);
-        }
+        getOdysseyAction(inputTranscript, currentChar.chatName)
+          .then((action) => {
+            log('transcript','ok',`→ odyssey.interact("${action}")`);
+            try { odyssey!.interact({ prompt: action }); } catch (e) { log('transcript','err',`interact() failed: ${(e as Error).message}`); }
+          })
+          .catch((err) => log('transcript','err',`chat API failed: ${(err as Error).message}`));
+      } else {
+        log('transcript','warn',`odysseyReady=${odysseyReady} — skipping interact()`);
       }
     }
 
