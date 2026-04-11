@@ -1,44 +1,42 @@
 # Interact Studio — Experiments Plan
 
-> Last updated: April 5, 2026
-> Overview: 10-day experiment sprint launching April 13. One experiment every 2 days. Poll on day 11.
+> Last updated: April 11, 2026
+> Overview: 15-day experiment sprint launching April 13. One experiment every 2 days. Poll on day 11.
+> Run each experiment for 3 days
 
 ---
 
 ## Timeline at a Glance
 
-| Date | Action |
-|------|--------|
-| **Apr 6** | LinkedIn announcement post goes live |
-| **Apr 10** | Announcement video drops (experiments preview) |
-| **Apr 13–14** | Experiment 1: Object Detection |
-| **Apr 15–16** | Experiment 2: Gesture Detection |
-| **Apr 17–18** | Experiment 3: Drawing to Live |
-| **Apr 19–20** | Experiment 4: Custom Characters |
-| **Apr 21–22** | Experiment 5: Broadcast |
-| **Apr 23** | Poll goes live across all platforms |
+Action
+LinkedIn announcement post goes live 
+Announcement video drops (experiments preview)
+Experiment 1: Drawing to Live |
+Experiment 2: Gesture Detection |
+Experiment 3: Object Detection|
+Experiment 4: Custom Characters
+Experiment 5: Broadcast
+Poll goes live across all platforms
 
 ---
 
 ## The 5 Experiments
 
-### Experiment 1 — Object Detection
-**Dates:** Mon Apr 13 – Tue Apr 14
+### Experiment 1 — Drawing to Live
 
-**What it does:** MediaPipe webcam detects objects in real time. Character reacts to whatever the user holds up.
+**What it does:** User draws on canvas → image sent as file → `startUploadStream` pipeline → drawing becomes a live animated character.
 
-**Why it opens the sprint:** Strong first impression. Passive "whoa" moment. No user effort required — just hold something up. Highly shareable. Good hook for content ("what does [character] think of my coffee mug?")
+**Notes:** Doesn't naturally slot into the character paradigm — drawing replaces the character rather than augmenting it. Keep as-is for the experiment, observe user reaction, decide on permanent integration after the poll.
 
-**Technical complexity:** Low — MediaPipe already in deps.
+**Technical complexity:** Low — pipeline already exists.
 
-**Content angle:** "I showed [character] everything on my desk. Their reaction to [X] broke me." Post as a Reel, clip the funniest reactions.
+**Content angle:** "I drew [thing] and it came alive." The novelty is the content. Show the before (drawing) and the after (live character) in a tight 15-second Reel.
 
-**Party game tie-in:** Scavenger Hunt — character calls out an object, first player to hold it up wins the round.
+**Party game tie-in:** Pictionary reversed — players draw something, character guesses what it is. Most creative wrong guess from the character wins the round.
 
 ---
 
 ### Experiment 2 — Gesture Detection
-**Dates:** Wed Apr 15 – Thu Apr 16
 
 **What it does:** Webcam loop → `/api/gesture-vision` → character mirrors or reacts to the user's gesture.
 
@@ -53,24 +51,21 @@
 **Party game tie-in:** Simon Says — character calls gestures, players replicate them, character confirms. Miss three = eliminated.
 
 ---
+#### Experiment 3 — Object Detection
 
-### Experiment 3 — Drawing to Live
-**Dates:** Fri Apr 17 – Sat Apr 18
+**What it does:** MediaPipe webcam detects objects in real time. Character reacts to whatever the user holds up.
 
-**What it does:** User draws on canvas → image sent as file → `startUploadStream` pipeline → drawing becomes a live animated character.
+**Why it opens the sprint:** Strong first impression. Passive "whoa" moment. No user effort required — just hold something up. Highly shareable. Good hook for content ("what does [character] think of my coffee mug?")
 
-**Notes:** Doesn't naturally slot into the character paradigm — drawing replaces the character rather than augmenting it. Keep as-is for the experiment, observe user reaction, decide on permanent integration after the poll.
+**Technical complexity:** Low — MediaPipe already in deps.
 
-**Technical complexity:** Low — pipeline already exists.
+**Content angle:** "I showed [character] everything on my desk. Their reaction to [X] broke me." Post as a Reel, clip the funniest reactions.
 
-**Content angle:** "I drew [thing] and it came alive." The novelty is the content. Show the before (drawing) and the after (live character) in a tight 15-second Reel.
-
-**Party game tie-in:** Pictionary reversed — players draw something, character guesses what it is. Most creative wrong guess from the character wins the round.
+**Party game tie-in:** Scavenger Hunt — character calls out an object, first player to hold it up wins the round.
 
 ---
 
 ### Experiment 4 — Custom Characters
-**Dates:** Sun Apr 19 – Mon Apr 20
 
 **What it does:** User uploads an image + provides a voice recording. Voice cloned via Smallest AI. Character rendered via Nano Banana. Result: a fully interactive custom character with the user's chosen face and voice.
 
@@ -87,8 +82,6 @@
 ---
 
 ### Experiment 5 — Broadcast
-**Dates:** Tue Apr 21 – Wed Apr 22
-
 **What it does:** One host creates a room. Audience joins with a room code. Audience submits prompts. Host fires prompts at the character live. Inherently multiplayer — the character is shared.
 
 **Why it's last:** Viral by design, needs the largest possible audience when it launches. Saved for day 9–10 when the sprint audience is at its peak.
@@ -108,8 +101,6 @@
 ---
 
 ## Poll — Day 11
-
-**Date:** Thu Apr 23
 
 **Platforms:** LinkedIn, X/Twitter, Instagram, TikTok — simultaneously
 
