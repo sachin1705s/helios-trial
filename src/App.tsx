@@ -989,7 +989,7 @@ function App() {
     ws.onopen = () => {
       ws.send(JSON.stringify({
         setup: {
-          model: 'models/gemini-live-2.5-flash-preview',
+          model: 'models/gemini-3.1-flash-live-preview',
           generationConfig: {
             responseModalities: ['AUDIO'],
             speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
