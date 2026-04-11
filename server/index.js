@@ -73,7 +73,7 @@ app.use(
         return callback(null, true);
       }
       // Allow all Vercel preview/production URLs for this project
-      if (/^https:\/\/interactive-studio[^.]*\.vercel\.app$/.test(origin)) {
+      if (/^https:\/\/(interactive-studio[^.]*|[^.]*-saitiger)\.vercel\.app$/.test(origin)) {
         return callback(null, true);
       }
       if (allowedOrigins.includes(origin)) {
