@@ -380,8 +380,12 @@ function App() {
           const attach = () => {
             if (videoRef.current) {
               videoRef.current.srcObject = stream;
-              videoRef.current.play().catch((e) => {
+              videoRef.current.play().catch((e: unknown) => {
                 console.warn('[odyssey] video.play failed:', e);
+                // AbortError means play() was interrupted (e.g. mid-render) — retry once
+                if ((e as { name?: string })?.name === 'AbortError') {
+                  setTimeout(() => { videoRef.current?.play().catch(() => undefined); }, 150);
+                }
               });
             } else {
               setTimeout(attach, 100);
@@ -931,6 +935,13 @@ function App() {
       ttsAudioCtxRef.current.resume().catch(() => undefined);
     }
 
+    // Create capture AudioContext HERE (within user gesture) so browser starts it RUNNING.
+    // If created later (inside onmessage), the browser suspends it → onaudioprocess never
+    // fires → Gemini gets no audio → closes 1000 on inactivity.
+    const captureCtx = new AudioContext({ sampleRate: 16000 });
+    captureCtx.resume().catch(() => undefined);
+    geminiLiveCaptureCtxRef.current = captureCtx;
+
     // Acquire mic before any awaits to stay within the user-gesture context
     let stream: MediaStream;
     try {
@@ -978,7 +989,7 @@ function App() {
     ws.onopen = () => {
       ws.send(JSON.stringify({
         setup: {
-          model: 'models/gemini-3.1-flash-live-preview',
+          model: 'models/gemini-live-2.5-flash-preview',
           generationConfig: {
             responseModalities: ['AUDIO'],
             speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
@@ -999,8 +1010,9 @@ function App() {
       // setupComplete — start streaming mic audio
       if (msg.setupComplete !== undefined) {
         try {
-          const captureCtx = new AudioContext({ sampleRate: 16000 });
-          geminiLiveCaptureCtxRef.current = captureCtx;
+          // Use the AudioContext created in user-gesture context (not a new suspended one)
+          const captureCtx = geminiLiveCaptureCtxRef.current;
+          if (!captureCtx) throw new Error('capture context missing');
           const micSrc = captureCtx.createMediaStreamSource(stream);
           // ScriptProcessorNode buffer must be power of 2; 2048 @ 16kHz = 128ms
           const scriptNode = captureCtx.createScriptProcessor(2048, 1, 1);
