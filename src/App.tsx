@@ -109,7 +109,6 @@ function App() {
   const audioChunksRef = useRef<Blob[]>([]);
   const characterRecorderRef = useRef<MediaRecorder | null>(null);
   const characterStreamRef = useRef<MediaStream | null>(null);
-  const characterChunksRef = useRef<Blob[]>([]);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const serviceRef = useRef<OdysseyService | null>(null);
