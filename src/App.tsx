@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
-import { GoogleGenAI, Modality, type Session } from '@google/genai';
 import { Analytics } from '@vercel/analytics/react';
 import { SpeedInsights } from '@vercel/speed-insights/react';
 import type { ConnectionStatus } from '@odysseyml/odyssey';
@@ -132,7 +131,7 @@ function App() {
   const hasLoggedFirstPromptRef = useRef(false);
   const currentPageRef = useRef<string | null>(null);
   // Gemini Live session state
-  const geminiLiveSessionRef = useRef<Session | null>(null);
+  const geminiLiveWsRef = useRef<WebSocket | null>(null);
   const geminiLiveCaptureCtxRef = useRef<AudioContext | null>(null);
   const geminiLiveGenerationRef = useRef(0);
   const geminiLiveActiveRef = useRef(false);
@@ -889,16 +888,20 @@ function App() {
     if (content.turnComplete) setIsCharacterThinking(false);
   };
 
-  // Closes the Gemini Live session, releases mic, and resets all session state.
+  // Closes the Gemini Live WebSocket, releases mic, and resets all session state.
   // Safe to call multiple times (guarded by geminiLiveActiveRef).
   const stopGeminiLiveSession = () => {
     if (!geminiLiveActiveRef.current) return;
     geminiLiveActiveRef.current = false;
-    geminiLiveGenerationRef.current++;          // invalidate any in-flight message handlers
+    geminiLiveGenerationRef.current++;
     stopGeminiLiveAudio();
-    try { geminiLiveSessionRef.current?.sendRealtimeInput({ audioStreamEnd: true }); } catch { /* ignore */ }
-    try { geminiLiveSessionRef.current?.close(); } catch { /* ignore */ }
-    geminiLiveSessionRef.current = null;
+    try {
+      if (geminiLiveWsRef.current?.readyState === WebSocket.OPEN) {
+        geminiLiveWsRef.current.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
+      }
+      geminiLiveWsRef.current?.close();
+    } catch { /* ignore */ }
+    geminiLiveWsRef.current = null;
     geminiLiveCaptureCtxRef.current?.close().catch(() => undefined);
     geminiLiveCaptureCtxRef.current = null;
     characterStreamRef.current?.getTracks().forEach(t => t.stop());
@@ -906,47 +909,8 @@ function App() {
     setIsCharacterRecording(false);
   };
 
-  // Loads the AudioWorklet and begins streaming 16kHz PCM via the SDK session.
-  // Called only after setupComplete is received.
-  const startGeminiLiveMicStream = async (
-    session: Session,
-    myGeneration: number,
-    stream: MediaStream
-  ) => {
-    try {
-      const captureCtx = new AudioContext({ sampleRate: 16000 });
-      geminiLiveCaptureCtxRef.current = captureCtx;
-
-      // iOS Safari: kick the audio graph with a silent buffer to force activation
-      const silenceBuf = captureCtx.createBuffer(1, 1, captureCtx.sampleRate);
-      const silenceNode = captureCtx.createBufferSource();
-      silenceNode.buffer = silenceBuf;
-      silenceNode.connect(captureCtx.destination);
-      silenceNode.start();
-
-      await captureCtx.audioWorklet.addModule('/audio-processor.worklet.js');
-      const micSource = captureCtx.createMediaStreamSource(stream);
-      const workletNode = new AudioWorkletNode(captureCtx, 'pcm-processor');
-
-      workletNode.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
-        if (geminiLiveGenerationRef.current !== myGeneration) return;
-        try {
-          session.sendRealtimeInput({
-            audio: { data: arrayBufferToBase64(e.data), mimeType: 'audio/pcm;rate=16000' },
-          });
-        } catch { /* session closed */ }
-      };
-
-      // Connect mic → worklet; intentionally NOT connected to destination (prevents echo)
-      micSource.connect(workletNode);
-      console.log('[gemini-live] mic stream started');
-    } catch (err) {
-      console.error('[gemini-live] mic stream setup error', err);
-      stopGeminiLiveSession();
-    }
-  };
-
   // Starts a Gemini Live speech-to-speech session for the current slide (Einstein only).
+  // Uses raw WebSocket — exact wire format confirmed working in isolation test.
   const startGeminiLiveSession = async () => {
     if (geminiLiveActiveRef.current) return;
     geminiLiveActiveRef.current = true;
@@ -976,7 +940,7 @@ function App() {
     }
     characterStreamRef.current = stream;
 
-    // Fetch API key from server (key never sent to browser directly)
+    // Fetch API key from server
     let apiKey: string;
     try {
       const res = await fetch('/api/gemini-live-token', {
@@ -994,65 +958,78 @@ function App() {
       return;
     }
 
-    // Cancelled while awaiting
     if (geminiLiveGenerationRef.current !== myGeneration) {
       stream.getTracks().forEach(t => t.stop());
       return;
     }
 
-    // Connect via SDK — handles WebSocket protocol, setup message, and message parsing
+    // Open raw WebSocket — model + URL confirmed in isolation test
     const slideId = slide.id;
-    const ai = new GoogleGenAI({ apiKey });
-    let session: Session;
-    try {
-      session = await ai.live.connect({
-        model: 'gemini-3.1-flash-live-preview',
-        config: {
-          responseModalities: [Modality.AUDIO],
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
-          systemInstruction: buildSystemPrompt(slideId),
-        },
-        callbacks: {
-          onopen: () => console.log('[gemini-live] connected'),
-          onmessage: (msg) => {
-            if (geminiLiveGenerationRef.current !== myGeneration) return;
-            const raw = msg as unknown as Record<string, unknown>;
-            if (raw.setupComplete !== undefined) {
-              console.log('[gemini-live] setup complete, starting mic stream');
-              void startGeminiLiveMicStream(geminiLiveSessionRef.current!, myGeneration, stream);
-              return;
-            }
-            if (raw.goAway !== undefined) {
-              console.warn('[gemini-live] goAway received');
-              stopGeminiLiveSession();
-              return;
-            }
-            handleGeminiLiveMessage(raw, myGeneration);
-          },
-          onerror: (e) => {
-            console.error('[gemini-live] error', e);
-            if (geminiLiveGenerationRef.current === myGeneration) stopGeminiLiveSession();
-          },
-          onclose: (e) => {
-            console.log('[gemini-live] closed', (e as CloseEvent).code, (e as CloseEvent).reason);
-            if (geminiLiveGenerationRef.current === myGeneration) stopGeminiLiveSession();
-          },
-        },
-      });
-    } catch (err) {
-      console.error('[gemini-live] connect error', err);
-      setCharacterError('Could not connect to Gemini Live. Try again.');
-      stopGeminiLiveSession();
-      return;
-    }
+    const ws = new WebSocket(
+      `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`
+    );
+    geminiLiveWsRef.current = ws;
 
-    // Session may have been cancelled while awaiting connect
-    if (geminiLiveGenerationRef.current !== myGeneration) {
-      try { session.close(); } catch { /* ignore */ }
-      return;
-    }
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        setup: {
+          model: 'models/gemini-3.1-flash-live-preview',
+          generationConfig: {
+            responseModalities: ['AUDIO'],
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
+          },
+          systemInstruction: { parts: [{ text: buildSystemPrompt(slideId) }] },
+        },
+      }));
+    };
 
-    geminiLiveSessionRef.current = session;
+    ws.onmessage = async (event) => {
+      if (geminiLiveGenerationRef.current !== myGeneration) return;
+      const text: string = event.data instanceof Blob
+        ? await (event.data as Blob).text()
+        : (event.data as string);
+      let msg: Record<string, unknown>;
+      try { msg = JSON.parse(text) as Record<string, unknown>; } catch { return; }
+
+      // setupComplete — start streaming mic audio
+      if (msg.setupComplete !== undefined) {
+        try {
+          const captureCtx = new AudioContext({ sampleRate: 16000 });
+          geminiLiveCaptureCtxRef.current = captureCtx;
+          const micSrc = captureCtx.createMediaStreamSource(stream);
+          // ScriptProcessorNode buffer must be power of 2; 2048 @ 16kHz = 128ms
+          const scriptNode = captureCtx.createScriptProcessor(2048, 1, 1);
+          scriptNode.onaudioprocess = (ev) => {
+            if (geminiLiveGenerationRef.current !== myGeneration || ws.readyState !== WebSocket.OPEN) return;
+            const f32 = ev.inputBuffer.getChannelData(0);
+            const int16 = new Int16Array(f32.length);
+            for (let i = 0; i < f32.length; i++) {
+              const s = Math.max(-1, Math.min(1, f32[i]));
+              int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            }
+            ws.send(JSON.stringify({
+              realtimeInput: { audio: { data: arrayBufferToBase64(int16.buffer), mimeType: 'audio/pcm;rate=16000' } },
+            }));
+          };
+          micSrc.connect(scriptNode);
+          scriptNode.connect(captureCtx.destination);
+        } catch (err) {
+          console.error('[gemini-live] mic setup error', err);
+          stopGeminiLiveSession();
+        }
+        return;
+      }
+
+      if (msg.goAway !== undefined) { stopGeminiLiveSession(); return; }
+
+      handleGeminiLiveMessage(msg, myGeneration);
+    };
+
+    ws.onerror = () => { if (geminiLiveGenerationRef.current === myGeneration) stopGeminiLiveSession(); };
+    ws.onclose = (e) => {
+      console.log('[gemini-live] closed', e.code, e.reason);
+      if (geminiLiveGenerationRef.current === myGeneration) stopGeminiLiveSession();
+    };
   };
 
   const playCharacterTTS = async (text: string, slideId?: string) => {
