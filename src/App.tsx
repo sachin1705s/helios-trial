@@ -835,20 +835,20 @@ function App() {
     geminiLivePlaybackTimeRef.current = 0;
   };
 
-  const GEMINI_LIVE_ACTION_MAP: Array<[RegExp, string]> = [
-    [/\b(yes|correct|exactly|absolutely|indeed)\b/i, 'nod enthusiastically'],
-    [/\b(no|wrong|incorrect|not quite)\b/i, 'shake head and gesture correction'],
-    [/\b(imagine|picture|think of|consider)\b/i, 'gesture thoughtfully and look upward'],
-    [/\b(look at|observe|see|notice)\b/i, 'point and gesture toward viewer'],
-    [/\b(discovered|found|realized|eureka)\b/i, 'gesture excitedly and look animated'],
-    [/\b(simple|easy|basic)\b/i, 'nod and gesture simply'],
-  ];
-
-  const deriveOdysseyAction = (transcript: string): string => {
-    for (const [pattern, action] of GEMINI_LIVE_ACTION_MAP) {
-      if (pattern.test(transcript)) return action;
-    }
-    return 'nod thoughtfully and gesture gently';
+  // Takes what the user said → asks the LLM for an Odyssey action → drives the avatar.
+  const fetchOdysseyAction = (userText: string, characterName: string, myGeneration: number) => {
+    fetch('/api/character/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: userText, character: characterName, history: [] }),
+    })
+      .then((res) => res.ok ? res.json() as Promise<{ action?: string }> : Promise.reject(new Error(`chat ${res.status}`)))
+      .then((data) => {
+        if (geminiLiveGenerationRef.current !== myGeneration) return;
+        const action = data.action?.trim();
+        if (action) handleInteractRef.current(action);
+      })
+      .catch(() => undefined); // non-fatal — avatar just won't animate for this turn
   };
 
   const GEMINI_LIVE_SYSTEM_PROMPTS: Record<string, string> = {
@@ -888,10 +888,10 @@ function App() {
       }
     }
 
-    // Transcript alongside audio — use to derive Odyssey avatar action
-    const transcription = (content.outputTranscription as Record<string, string> | undefined)?.text;
-    if (transcription) {
-      handleInteractRef.current(deriveOdysseyAction(transcription));
+    // User's speech transcript → /api/character/chat → Odyssey avatar action
+    const inputTranscription = (content.inputTranscription as Record<string, string> | undefined)?.text;
+    if (inputTranscription) {
+      fetchOdysseyAction(inputTranscription, slide.title, myGeneration);
     }
 
     if (content.turnComplete) setIsCharacterThinking(false);
