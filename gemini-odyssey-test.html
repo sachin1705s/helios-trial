@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gemini Live + Odyssey — Integration Test</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: monospace; background: #0d0d0d; color: #e0e0e0; padding: 20px; }
+    h1 { color: #fff; font-size: 17px; margin-bottom: 4px; }
+    .subtitle { color: #555; font-size: 11px; margin-bottom: 20px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+    .panel { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 14px; }
+    .panel h2 { font-size: 12px; color: #aaa; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px; }
+    .badge { display: inline-block; font-size: 10px; padding: 1px 7px; border-radius: 10px; background: #333; color: #888; margin-left: 6px; vertical-align: middle; }
+    .badge.ok  { background: #14532d; color: #4ade80; }
+    .badge.err { background: #450a0a; color: #f87171; }
+    .badge.mid { background: #1e3a5f; color: #60a5fa; }
+    .row { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; align-items: center; }
+    button { background: #2563eb; color: #fff; border: none; border-radius: 5px; padding: 7px 14px; cursor: pointer; font-family: monospace; font-size: 12px; }
+    button:disabled { background: #2a2a2a; color: #555; cursor: not-allowed; }
+    button.red { background: #dc2626; }
+    button.green { background: #16a34a; }
+    button.grey { background: #374151; }
+    label { font-size: 11px; color: #777; }
+    select, input[type=text] { background: #111; color: #e0e0e0; border: 1px solid #444; border-radius: 4px; padding: 5px 8px; font-family: monospace; font-size: 12px; width: 100%; margin-top: 3px; }
+    .log { background: #0a0a0a; border: 1px solid #222; border-radius: 4px; padding: 8px; height: 220px; overflow-y: auto; font-size: 10px; line-height: 1.7; margin-top: 8px; }
+    .log .ts { color: #444; }
+    .log .info { color: #60a5fa; }
+    .log .ok   { color: #4ade80; }
+    .log .warn { color: #fbbf24; }
+    .log .err  { color: #f87171; }
+    .log .msg  { color: #a78bfa; }
+    .log .audio { color: #fb923c; }
+    .log .tscript { color: #34d399; }
+    video { width: 100%; aspect-ratio: 9/16; background: #111; border-radius: 6px; display: block; }
+    .video-wrap { position: relative; }
+    .video-placeholder { width: 100%; aspect-ratio: 9/16; background: #111; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #444; font-size: 12px; }
+    .shared-log { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 14px; }
+    .stat { font-size: 11px; color: #555; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Gemini Live + Odyssey <span class="badge" id="gl-badge">disconnected</span><span class="badge" id="ody-badge">disconnected</span></h1>
+  <p class="subtitle">Integration test — Gemini Live for voice, Odyssey for avatar animation. Port to main once both work here.</p>
+
+  <!-- CONTROLS -->
+  <div class="panel" style="margin-bottom:16px">
+    <h2>Controls</h2>
+    <div class="row">
+      <label style="min-width:80px">Character</label>
+      <select id="char-sel" style="width:auto;flex:1">
+        <option value="einstein">Einstein</option>
+        <option value="alexander">Alexander</option>
+        <option value="bear">Steve the Bear</option>
+        <option value="cleopatra">Cleopatra</option>
+        <option value="da-vinci">Da Vinci</option>
+      </select>
+    </div>
+    <div class="row">
+      <button id="btn-connect" onclick="doConnect()">Connect Both</button>
+      <button id="btn-mic" onclick="doToggleMic()" disabled>Start Mic</button>
+      <button id="btn-disconnect" onclick="doDisconnect()" disabled class="grey">Disconnect</button>
+      <button onclick="clearLogs()" class="grey">Clear Logs</button>
+    </div>
+    <div class="stat" id="stats">Audio sent: 0 chunks | Audio received: 0 chunks</div>
+  </div>
+
+  <div class="grid">
+    <!-- GEMINI PANEL -->
+    <div class="panel">
+      <h2>Gemini Live <span class="badge" id="gl-panel-badge">disconnected</span></h2>
+      <div class="log" id="gl-log"></div>
+    </div>
+
+    <!-- ODYSSEY PANEL -->
+    <div class="panel">
+      <h2>Odyssey Avatar <span class="badge" id="ody-panel-badge">disconnected</span></h2>
+      <div class="video-wrap">
+        <div class="video-placeholder" id="video-placeholder">Waiting for stream…</div>
+        <video id="ody-video" autoplay playsinline muted style="display:none"></video>
+      </div>
+      <div class="log" id="ody-log"></div>
+    </div>
+  </div>
+
+  <!-- TRANSCRIPT LOG -->
+  <div class="shared-log">
+    <h2 style="font-size:12px;color:#aaa;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Transcript / Interaction Log</h2>
+    <div class="log" id="transcript-log" style="height:150px"></div>
+  </div>
+
+  <script type="module" src="/src/gemini-odyssey-test.ts"></script>
+</body>
+</html>
