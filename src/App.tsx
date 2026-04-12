@@ -807,6 +807,7 @@ function App() {
   const enqueuePCMChunk = (data: Uint8Array, sampleRate: number) => {
     if (!geminiLivePlayCtxRef.current) return;
     const ctx = geminiLivePlayCtxRef.current;
+    if (ctx.state === 'suspended') { ctx.resume().catch(() => undefined); }
     const usable = data.length - (data.length % 2);
     if (usable === 0) return;
     const int16 = new Int16Array(data.buffer, data.byteOffset, usable / 2);
@@ -1058,6 +1059,9 @@ function App() {
           // Use the AudioContext created in user-gesture context (not a new suspended one)
           const captureCtx = geminiLiveCaptureCtxRef.current;
           if (!captureCtx) throw new Error('capture context missing');
+          // Resume explicitly here — async ops (getUserMedia, token fetch) can cause
+          // the browser to re-suspend the AudioContext even if resume() was called earlier.
+          if (captureCtx.state === 'suspended') await captureCtx.resume();
           const micSrc = captureCtx.createMediaStreamSource(stream);
           // ScriptProcessorNode buffer must be power of 2; 2048 @ 16kHz = 128ms
           const scriptNode = captureCtx.createScriptProcessor(2048, 1, 1);
