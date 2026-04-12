@@ -132,6 +132,7 @@ function App() {
   // Gemini Live session state
   const geminiLiveWsRef = useRef<WebSocket | null>(null);
   const geminiLiveCaptureCtxRef = useRef<AudioContext | null>(null);
+  const geminiLivePlayCtxRef = useRef<AudioContext | null>(null);
   const geminiLiveGenerationRef = useRef(0);
   const geminiLiveActiveRef = useRef(false);
   const geminiLivePlaybackTimeRef = useRef(0);
@@ -801,11 +802,11 @@ function App() {
     return bytes;
   };
 
-  // Schedules a 16-bit PCM chunk for gapless playback via the shared ttsAudioCtxRef.
+  // Schedules a 16-bit PCM chunk for gapless playback via the dedicated Gemini Live play context.
   // Safe to call from WebSocket message handlers — uses refs, never stale state.
   const enqueuePCMChunk = (data: Uint8Array, sampleRate: number) => {
-    if (!ttsAudioCtxRef.current) return;
-    const ctx = ttsAudioCtxRef.current;
+    if (!geminiLivePlayCtxRef.current) return;
+    const ctx = geminiLivePlayCtxRef.current;
     const usable = data.length - (data.length % 2);
     if (usable === 0) return;
     const int16 = new Int16Array(data.buffer, data.byteOffset, usable / 2);
@@ -952,6 +953,8 @@ function App() {
     geminiLiveWsRef.current = null;
     geminiLiveCaptureCtxRef.current?.close().catch(() => undefined);
     geminiLiveCaptureCtxRef.current = null;
+    geminiLivePlayCtxRef.current?.close().catch(() => undefined);
+    geminiLivePlayCtxRef.current = null;
     characterStreamRef.current?.getTracks().forEach(t => t.stop());
     characterStreamRef.current = null;
     setIsCharacterRecording(false);
@@ -974,12 +977,15 @@ function App() {
       ttsAudioCtxRef.current.resume().catch(() => undefined);
     }
 
-    // Create capture AudioContext HERE (within user gesture) so browser starts it RUNNING.
-    // If created later (inside onmessage), the browser suspends it → onaudioprocess never
-    // fires → Gemini gets no audio → closes 1000 on inactivity.
+    // Create BOTH AudioContexts HERE (within user gesture) so the browser starts them RUNNING.
+    // If created later (inside onmessage), the browser suspends them.
+    // capture: 16kHz — mic → Gemini. play: 24kHz — Gemini audio → speaker (matches Gemini's output rate).
     const captureCtx = new AudioContext({ sampleRate: 16000 });
     captureCtx.resume().catch(() => undefined);
     geminiLiveCaptureCtxRef.current = captureCtx;
+    const playCtx = new AudioContext({ sampleRate: 24000 });
+    playCtx.resume().catch(() => undefined);
+    geminiLivePlayCtxRef.current = playCtx;
 
     // Acquire mic before any awaits to stay within the user-gesture context
     let stream: MediaStream;

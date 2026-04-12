@@ -11,9 +11,9 @@
 Action
 LinkedIn announcement post goes live 
 Announcement video drops (experiments preview)
-Experiment 1: Drawing to Live |
-Experiment 2: Gesture Detection |
-Experiment 3: Object Detection|
+Experiment 1: Drawing to Live
+Experiment 2: Gesture Detection 
+Experiment 3: Object Detection
 Experiment 4: Custom Characters
 Experiment 5: Broadcast
 Poll goes live across all platforms
@@ -22,7 +22,7 @@ Poll goes live across all platforms
 
 ## The 5 Experiments
 
-### Experiment 1 — Drawing to Live
+### Experiment 1 — Drawing to Live (Using Helios)
 
 **What it does:** User draws on canvas → image sent as file → `startUploadStream` pipeline → drawing becomes a live animated character.
 
