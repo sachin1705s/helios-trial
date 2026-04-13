@@ -75,7 +75,7 @@ function App() {
   const [uploadImage, setUploadImage] = useState<File | null>(null);
   const [_uploadError, setUploadError] = useState<string | null>(null);
   const [voiceStatus, setVoiceStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
-  const [isMusicEnabled, setIsMusicEnabled] = useState(true);
+  const [isMusicEnabled, setIsMusicEnabled] = useState(false);
   const [isMusicPlaying, setIsMusicPlaying] = useState(false);
   const [, setVoiceError] = useState<string | null>(null);
   const [, setLastVoiceText] = useState<string | null>(null);
