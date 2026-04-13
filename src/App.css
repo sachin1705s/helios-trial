@@ -238,28 +238,63 @@
   position: relative;
 }
 
-@media (hover: hover) {
-  .ptt-btn[data-tooltip]:not([disabled])::after {
-    content: attr(data-tooltip);
-    position: absolute;
-    bottom: calc(100% + 8px);
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(0, 0, 0, 0.75);
-    color: rgba(255, 255, 255, 0.85);
-    font-size: 11px;
-    letter-spacing: 0.04em;
-    white-space: nowrap;
-    padding: 4px 8px;
-    border-radius: 6px;
-    pointer-events: none;
-    opacity: 0;
-    transition: opacity 0.15s ease;
-  }
+/* ── Pulsing ring animations ─────────────────────────────────────────────── */
+@keyframes ptt-ring-listening {
+  0%   { transform: translate(-50%, -50%) scale(1);    opacity: 0.6; }
+  50%  { transform: translate(-50%, -50%) scale(1.22); opacity: 0;   }
+  100% { transform: translate(-50%, -50%) scale(1);    opacity: 0;   }
+}
 
-  .ptt-btn[data-tooltip]:not([disabled]):hover::after {
-    opacity: 1;
-  }
+@keyframes ptt-ring-thinking {
+  0%   { transform: translate(-50%, -50%) scale(1);    opacity: 0.25; }
+  50%  { transform: translate(-50%, -50%) scale(1.18); opacity: 0;    }
+  100% { transform: translate(-50%, -50%) scale(1);    opacity: 0;    }
+}
+
+@keyframes ptt-ring-speaking {
+  0%   { transform: translate(-50%, -50%) scale(1);    opacity: 0.8; }
+  40%  { transform: translate(-50%, -50%) scale(1.28); opacity: 0;   }
+  100% { transform: translate(-50%, -50%) scale(1);    opacity: 0;   }
+}
+
+/* Ring pseudo-element — shared base */
+.ptt-listening::before,
+.ptt-thinking::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: calc(100% + 20px);
+  height: calc(100% + 20px);
+  border-radius: 50%;
+  border: 2px solid;
+  pointer-events: none;
+}
+
+/* Listening — soft white, slow 2s breath */
+.ptt-listening::before {
+  border-color: rgba(255, 255, 255, 0.6);
+  animation: ptt-ring-listening 2s ease-in-out infinite;
+}
+
+/* Thinking — dim white, same 2s breath but quieter */
+.ptt-thinking::before {
+  border-color: rgba(255, 255, 255, 0.25);
+  animation: ptt-ring-thinking 2s ease-in-out infinite;
+}
+
+/* Character speaking — second faster blue ring layered via ::after */
+.ptt-listening.ptt-speaking::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: calc(100% + 20px);
+  height: calc(100% + 20px);
+  border-radius: 50%;
+  border: 2px solid rgba(100, 160, 255, 0.8);
+  pointer-events: none;
+  animation: ptt-ring-speaking 0.8s ease-out infinite;
 }
 
 .btn.ghost {

@@ -93,6 +93,7 @@ function App() {
   const [textPrompt, setTextPrompt] = useState('');
   const [isCharacterRecording, setIsCharacterRecording] = useState(false);
   const [isCharacterThinking, setIsCharacterThinking] = useState(false);
+  const [isCharacterSpeaking, setIsCharacterSpeaking] = useState(false);
   const [characterReply, setCharacterReply] = useState<string | null>(null);
   const [characterSources, setCharacterSources] = useState<{ title: string; url: string }[]>([]);
   const [characterError, setCharacterError] = useState<string | null>(null);
@@ -889,6 +890,7 @@ function App() {
     // Barge-in: server detected user speaking mid-response
     if (content.interrupted) {
       stopGeminiLiveAudio();
+      setIsCharacterSpeaking(false);
       handleInteractRef.current('stand idle');
       glOutputTranscriptBufferRef.current = '';
       glPhase2FiredRef.current = false;
@@ -897,12 +899,15 @@ function App() {
 
     // Audio chunks from model turn
     const parts = ((content.modelTurn as Record<string, unknown> | undefined)?.parts ?? []) as Array<Record<string, unknown>>;
+    let hasAudio = false;
     for (const part of parts) {
       const inlineData = part.inlineData as Record<string, string> | undefined;
       if (inlineData?.mimeType?.startsWith('audio/pcm')) {
         enqueuePCMChunk(base64ToUint8Array(inlineData.data), 24000);
+        hasAudio = true;
       }
     }
+    if (hasAudio) setIsCharacterSpeaking(true);
 
     // Phase 1: inputTranscription — immediate listening gesture, add user message to chat
     const inputTranscription = (content.inputTranscription as Record<string, string> | undefined)?.text;
@@ -930,6 +935,7 @@ function App() {
     // turnComplete — update chat with full accumulated transcript
     if (content.turnComplete) {
       setIsCharacterThinking(false);
+      setIsCharacterSpeaking(false);
       const geminiResponse = glOutputTranscriptBufferRef.current;
       if (geminiResponse) {
         setCharacterReply(geminiResponse);
@@ -964,6 +970,7 @@ function App() {
     characterStreamRef.current?.getTracks().forEach(t => t.stop());
     characterStreamRef.current = null;
     setIsCharacterRecording(false);
+    setIsCharacterSpeaking(false);
   };
 
   // Starts a Gemini Live speech-to-speech session for the current slide (Einstein only).
@@ -1818,30 +1825,25 @@ function App() {
           <div className="story-actions">
             {isCharacterSlide ? (
               <button
-                className="btn accent ptt-btn"
+                className={[
+                  'btn accent ptt-btn',
+                  isCharacterRecording && !isCharacterThinking ? 'ptt-listening' : '',
+                  isCharacterThinking ? 'ptt-thinking' : '',
+                  isCharacterSpeaking ? 'ptt-speaking' : '',
+                ].filter(Boolean).join(' ')}
                 onClick={isCharacterRecording ? stopGeminiLiveSession : startGeminiLiveSession}
-                disabled={isCharacterThinking}
                 aria-label={
                   isCharacterRecording
-                    ? 'Stop recording'
-                    : isCharacterThinking
-                      ? 'Thinking'
-                      : `Start recording for ${activeCharacterName}`
+                    ? `Talking with ${activeCharacterName} — click to end`
+                    : `Talk to ${activeCharacterName}`
                 }
-                data-tooltip="Hold Ctrl + Space to talk"
               >
-                {isCharacterRecording
-                  ? 'Stop'
-                  : isCharacterThinking
-                    ? 'Thinking...'
-                      : (
-                        <img
-                          className="recording-icon"
-                          src="/images/recording_icon_v3.png"
-                          alt=""
-                          aria-hidden="true"
-                        />
-                      )}
+                <img
+                  className="recording-icon"
+                  src="/images/recording_icon_v3.png"
+                  alt=""
+                  aria-hidden="true"
+                />
               </button>
             ) : null}
             {isUploadSlide ? (
