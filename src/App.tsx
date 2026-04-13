@@ -867,14 +867,14 @@ function App() {
   };
 
   const GEMINI_LIVE_SYSTEM_PROMPTS: Record<string, string> = {
-    einstein:         'You are Albert Einstein. Curious, imaginative, dry wit. Keep replies under 40 words. Explain ideas simply and vividly.',
-    alexander:        'You are Alexander the Great. Bold, strategic, inspiring. Keep replies under 40 words.',
-    bear:             'You are a friendly bear. Warm, playful, gentle. Keep replies under 40 words.',
-    'circus-lion':    'You are a circus lion. Dramatic, proud, theatrical. Keep replies under 40 words.',
-    cleopatra:        'You are Cleopatra. Regal, intelligent, commanding. Keep replies under 40 words.',
-    'da-vinci':       'You are Leonardo da Vinci. Creative, curious, inventive. Keep replies under 40 words.',
-    'grandpa-turtle': 'You are a wise grandpa turtle. Patient, gentle, full of old wisdom. Keep replies under 40 words.',
-    'steve-jobs':     'You are Steve Jobs. Visionary, passionate about simplicity, demanding. Keep replies under 40 words.',
+    einstein:         'You are Albert Einstein. Curious, imaginative, dry wit. Keep replies under 40 words. Explain ideas using concrete objects — name specific things (a ball, a clock, a beam of light) and they will appear on screen as you speak.',
+    alexander:        'You are Alexander the Great. Bold, strategic, inspiring. Keep replies under 40 words. Name specific objects (a sword, a map, a horse) and they will appear on screen as you speak.',
+    bear:             'You are a friendly bear. Warm, playful, gentle. Keep replies under 40 words. Name specific things (a berry, a fish, a honeycomb) and they will actually appear on screen — you can show your friend, not just imagine it.',
+    'circus-lion':    'You are a circus lion. Dramatic, proud, theatrical. Keep replies under 40 words. Name specific props (a hoop, a ball, a spotlight) and they will appear on screen as you perform.',
+    cleopatra:        'You are Cleopatra. Regal, intelligent, commanding. Keep replies under 40 words. Name specific objects (a scroll, a crown, a lotus) and they will appear on screen as you speak.',
+    'da-vinci':       'You are Leonardo da Vinci. Creative, curious, inventive. Keep replies under 40 words. Name specific things (a gear, a wing, a paintbrush) and they will appear on screen as you describe them.',
+    'grandpa-turtle': 'You are a wise grandpa turtle. Patient, gentle, full of old wisdom. Keep replies under 40 words. Name specific things (a leaf, a stone, a shell) and they will appear on screen as you tell your story.',
+    'steve-jobs':     'You are Steve Jobs. Visionary, passionate about simplicity, demanding. Keep replies under 40 words. Name specific objects (a device, a chip, an apple) and they will appear on screen as you speak.',
   };
 
   const buildSystemPrompt = (slideId: string): string =>
@@ -922,17 +922,13 @@ function App() {
       glPhase1Action(myGeneration);
     }
 
-    // Accumulate outputTranscription chunks — fire Phase 2 on first chunk
+    // Accumulate outputTranscription chunks
     const outputTranscription = (content.outputTranscription as Record<string, string> | undefined)?.text;
     if (outputTranscription) {
       glOutputTranscriptBufferRef.current += (glOutputTranscriptBufferRef.current ? ' ' : '') + outputTranscription;
-      if (!glPhase2FiredRef.current) {
-        glPhase2FiredRef.current = true;
-        glPhase2Objects(glCurrentUserTextRef.current, glOutputTranscriptBufferRef.current, slide.title, myGeneration);
-      }
     }
 
-    // turnComplete — update chat with full accumulated transcript
+    // turnComplete — update chat and fire Phase 2 with full response
     if (content.turnComplete) {
       setIsCharacterThinking(false);
       setIsCharacterSpeaking(false);
@@ -943,6 +939,8 @@ function App() {
           ...prev,
           [slide.id]: [...(prev[slide.id] ?? []), { role: 'assistant' as const, content: geminiResponse }],
         }));
+        // Fire Phase 2 with the complete response so object detection has full context
+        glPhase2Objects(glCurrentUserTextRef.current, geminiResponse, slide.title, myGeneration);
       }
       glOutputTranscriptBufferRef.current = '';
       glPhase2FiredRef.current = false;
@@ -1824,27 +1822,38 @@ function App() {
           </div>
           <div className="story-actions">
             {isCharacterSlide ? (
-              <button
-                className={[
-                  'btn accent ptt-btn',
-                  isCharacterRecording && !isCharacterThinking ? 'ptt-listening' : '',
-                  isCharacterThinking ? 'ptt-thinking' : '',
-                  isCharacterSpeaking ? 'ptt-speaking' : '',
-                ].filter(Boolean).join(' ')}
-                onClick={isCharacterRecording ? stopGeminiLiveSession : startGeminiLiveSession}
-                aria-label={
-                  isCharacterRecording
-                    ? `Talking with ${activeCharacterName} — click to end`
-                    : `Talk to ${activeCharacterName}`
-                }
-              >
-                <img
-                  className="recording-icon"
-                  src="/images/recording_icon_v3.png"
-                  alt=""
-                  aria-hidden="true"
-                />
-              </button>
+              isCharacterRecording ? (
+                <div className="voice-orb-wrap">
+                  <div
+                    className={[
+                      'voice-orb',
+                      isCharacterThinking ? 'voice-orb--thinking' : '',
+                      isCharacterSpeaking ? 'voice-orb--speaking' : 'voice-orb--listening',
+                    ].filter(Boolean).join(' ')}
+                    aria-label={isCharacterSpeaking ? `${activeCharacterName} is speaking` : 'Listening…'}
+                  >
+                    <span className="voice-orb__core" />
+                  </div>
+                  <button
+                    className="voice-orb__end"
+                    onClick={stopGeminiLiveSession}
+                    aria-label="End conversation"
+                  >✕</button>
+                </div>
+              ) : (
+                <button
+                  className="btn accent ptt-btn"
+                  onClick={startGeminiLiveSession}
+                  aria-label={`Talk to ${activeCharacterName}`}
+                >
+                  <img
+                    className="recording-icon"
+                    src="/images/recording_icon_v3.png"
+                    alt=""
+                    aria-hidden="true"
+                  />
+                </button>
+              )
             ) : null}
             {isUploadSlide ? (
               <label className="upload-pill">
