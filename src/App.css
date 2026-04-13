@@ -240,42 +240,41 @@
 
 /* ── Voice orb ───────────────────────────────────────────────────────────── */
 @keyframes orb-ripple {
-  0%   { transform: scale(1);    opacity: 0.55; }
-  100% { transform: scale(2.2);  opacity: 0;    }
+  0%   { transform: scale(1);   opacity: 0.5; }
+  100% { transform: scale(2);   opacity: 0;   }
 }
 
 @keyframes orb-ripple-fast {
-  0%   { transform: scale(1);    opacity: 0.7; }
-  100% { transform: scale(2.0);  opacity: 0;   }
+  0%   { transform: scale(1);   opacity: 0.6; }
+  100% { transform: scale(1.9); opacity: 0;   }
 }
 
 @keyframes orb-ripple-dim {
-  0%   { transform: scale(1);    opacity: 0.2; }
-  100% { transform: scale(1.8);  opacity: 0;   }
+  0%   { transform: scale(1);   opacity: 0.2; }
+  100% { transform: scale(1.7); opacity: 0;   }
 }
 
-@keyframes orb-core-speaking {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(100, 160, 255, 0.5),  0 0 16px 4px rgba(100, 160, 255, 0.2); }
-  50%       { box-shadow: 0 0 0 6px rgba(100, 160, 255, 0),  0 0 24px 8px rgba(100, 160, 255, 0.35); }
-}
-
-.voice-orb-wrap {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-}
-
+/* Same shape + color as the accent button — continuity from idle to active */
 .voice-orb {
   position: relative;
-  width: 44px;
-  height: 44px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid rgba(244, 75, 58, 0.6);
+  background: var(--accent-soft);
   display: flex;
   align-items: center;
   justify-content: center;
+  cursor: pointer;
+  transition: background 0.3s ease, border-color 0.3s ease;
+  flex-shrink: 0;
 }
 
-/* Ripple rings — up to 3 staggered via nth pseudo + siblings trick using box approach */
+.voice-orb:hover {
+  background: rgba(244, 75, 58, 0.25);
+}
+
+/* Ripple rings expand from the button edge */
 .voice-orb::before,
 .voice-orb::after {
   content: '';
@@ -283,19 +282,20 @@
   inset: 0;
   border-radius: 50%;
   border: 1.5px solid;
+  pointer-events: none;
 }
 
-/* Listening — white ripples, 2s staggered */
+/* Listening — white rings, slow 2s staggered */
 .voice-orb--listening::before {
-  border-color: rgba(255, 255, 255, 0.55);
+  border-color: rgba(255, 255, 255, 0.5);
   animation: orb-ripple 2s ease-out infinite;
 }
 .voice-orb--listening::after {
-  border-color: rgba(255, 255, 255, 0.35);
-  animation: orb-ripple 2s ease-out infinite 0.7s;
+  border-color: rgba(255, 255, 255, 0.3);
+  animation: orb-ripple 2s ease-out infinite 0.75s;
 }
 
-/* Thinking — dim slow single ripple */
+/* Thinking — single dim ring, slow */
 .voice-orb--thinking::before {
   border-color: rgba(255, 255, 255, 0.2);
   animation: orb-ripple-dim 2.5s ease-out infinite;
@@ -304,48 +304,17 @@
   display: none;
 }
 
-/* Speaking — blue ripples, faster */
+/* Speaking — blue rings, faster. Button border shifts blue too */
+.voice-orb--speaking {
+  border-color: rgba(100, 160, 255, 0.6);
+}
 .voice-orb--speaking::before {
-  border-color: rgba(100, 160, 255, 0.7);
+  border-color: rgba(100, 160, 255, 0.65);
   animation: orb-ripple-fast 1s ease-out infinite;
 }
 .voice-orb--speaking::after {
-  border-color: rgba(100, 160, 255, 0.4);
+  border-color: rgba(100, 160, 255, 0.35);
   animation: orb-ripple-fast 1s ease-out infinite 0.4s;
-}
-
-/* Core dot */
-.voice-orb__core {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.9);
-  display: block;
-  transition: background 0.3s ease;
-}
-
-.voice-orb--speaking .voice-orb__core {
-  background: rgba(100, 160, 255, 0.95);
-  animation: orb-core-speaking 1s ease-in-out infinite;
-}
-
-.voice-orb--thinking .voice-orb__core {
-  background: rgba(255, 255, 255, 0.4);
-}
-
-/* End button */
-.voice-orb__end {
-  background: none;
-  border: none;
-  color: rgba(255, 255, 255, 0.35);
-  font-size: 11px;
-  cursor: pointer;
-  padding: 2px 6px;
-  line-height: 1;
-  transition: color 0.15s ease;
-}
-.voice-orb__end:hover {
-  color: rgba(255, 255, 255, 0.75);
 }
 
 .btn.ghost {

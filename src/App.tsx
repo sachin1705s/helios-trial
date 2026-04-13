@@ -940,8 +940,10 @@ function App() {
     ].join('\n'),
   };
 
-  const buildSystemPrompt = (slideId: string): string =>
-    GEMINI_LIVE_SYSTEM_PROMPTS[slideId] ?? 'You are a helpful character. Keep replies brief.';
+  const buildSystemPrompt = (slideId: string): string => {
+    const base = GEMINI_LIVE_SYSTEM_PROMPTS[slideId] ?? 'You are a helpful character. Keep replies brief.';
+    return base + '\nYou may use *asterisks* to describe physical actions and expressions (e.g. *roars proudly*, *holds up a fish*). These drive the character animation — do not speak them aloud, just include them in your response.';
+  };
 
   // Routes a parsed server message for the current Gemini Live session.
   const handleGeminiLiveMessage = (msg: Record<string, unknown>, myGeneration: number) => {
@@ -997,10 +999,17 @@ function App() {
       setIsCharacterSpeaking(false);
       const geminiResponse = glOutputTranscriptBufferRef.current;
       if (geminiResponse) {
-        setCharacterReply(geminiResponse);
+        // Extract *stage directions* and send each to Odyssey as an action
+        const stageDirections = [...geminiResponse.matchAll(/\*([^*]+)\*/g)].map((m) => m[1].trim());
+        for (const direction of stageDirections) {
+          handleInteractRef.current(direction);
+        }
+        // Strip stage directions from the displayed text
+        const displayResponse = geminiResponse.replace(/\*[^*]+\*/g, '').replace(/\s{2,}/g, ' ').trim();
+        setCharacterReply(displayResponse);
         setCharacterHistory((prev) => ({
           ...prev,
-          [slide.id]: [...(prev[slide.id] ?? []), { role: 'assistant' as const, content: geminiResponse }],
+          [slide.id]: [...(prev[slide.id] ?? []), { role: 'assistant' as const, content: displayResponse }],
         }));
         // Fire Phase 2 with the complete response so object detection has full context
         glPhase2Objects(glCurrentUserTextRef.current, geminiResponse, slide.title, myGeneration);
@@ -1886,23 +1895,22 @@ function App() {
           <div className="story-actions">
             {isCharacterSlide ? (
               isCharacterRecording ? (
-                <div className="voice-orb-wrap">
-                  <div
-                    className={[
-                      'voice-orb',
-                      isCharacterThinking ? 'voice-orb--thinking' : '',
-                      isCharacterSpeaking ? 'voice-orb--speaking' : 'voice-orb--listening',
-                    ].filter(Boolean).join(' ')}
-                    aria-label={isCharacterSpeaking ? `${activeCharacterName} is speaking` : 'Listening…'}
-                  >
-                    <span className="voice-orb__core" />
-                  </div>
-                  <button
-                    className="voice-orb__end"
-                    onClick={stopGeminiLiveSession}
-                    aria-label="End conversation"
-                  >✕</button>
-                </div>
+                <button
+                  className={[
+                    'voice-orb',
+                    isCharacterThinking ? 'voice-orb--thinking' : '',
+                    isCharacterSpeaking ? 'voice-orb--speaking' : 'voice-orb--listening',
+                  ].filter(Boolean).join(' ')}
+                  onClick={stopGeminiLiveSession}
+                  aria-label={isCharacterSpeaking ? `${activeCharacterName} is speaking — click to end` : 'Listening — click to end'}
+                >
+                  <img
+                    className="recording-icon"
+                    src="/images/recording_icon_v3.png"
+                    alt=""
+                    aria-hidden="true"
+                  />
+                </button>
               ) : (
                 <button
                   className="btn accent ptt-btn"
