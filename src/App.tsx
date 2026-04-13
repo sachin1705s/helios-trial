@@ -140,6 +140,7 @@ function App() {
   // Two-phase Odyssey transcript buffers — reset each turn
   const glCurrentUserTextRef = useRef('');
   const glOutputTranscriptBufferRef = useRef('');
+  const glPhase2FiredRef = useRef(false); // prevents duplicate Phase 2 calls per turn
 
   const logEvent = (event: string, data: Record<string, unknown>, transport: 'fetch' | 'beacon' = 'fetch') => {
     trackEvent(event, data, { transport });
@@ -840,20 +841,10 @@ function App() {
     geminiLivePlaybackTimeRef.current = 0;
   };
 
-  // Phase 1: user's words → action (avatar gesture, fires immediately on inputTranscription)
-  const glPhase1Action = (userText: string, characterName: string, myGeneration: number) => {
-    fetch('/api/character/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: userText, character: characterName, history: [] }),
-    })
-      .then((res) => res.ok ? res.json() as Promise<{ action?: string }> : Promise.reject(new Error(`chat ${res.status}`)))
-      .then((data) => {
-        if (geminiLiveGenerationRef.current !== myGeneration) return;
-        const action = data.action?.trim();
-        if (action) handleInteractRef.current(action);
-      })
-      .catch(() => undefined);
+  // Phase 1: user stopped speaking → immediate listening gesture (no LLM call — zero latency).
+  const glPhase1Action = (myGeneration: number) => {
+    if (geminiLiveGenerationRef.current !== myGeneration) return;
+    handleInteractRef.current('listen actively');
   };
 
   // Phase 2: user text + what Gemini actually said → objects (fires at turnComplete)
@@ -900,6 +891,7 @@ function App() {
       stopGeminiLiveAudio();
       handleInteractRef.current('stand idle');
       glOutputTranscriptBufferRef.current = '';
+      glPhase2FiredRef.current = false;
       return;
     }
 
@@ -912,29 +904,42 @@ function App() {
       }
     }
 
-    // Phase 1: inputTranscription (user's words) → action → odyssey.interact() immediately
+    // Phase 1: inputTranscription — immediate listening gesture, add user message to chat
     const inputTranscription = (content.inputTranscription as Record<string, string> | undefined)?.text;
     if (inputTranscription) {
       glCurrentUserTextRef.current = inputTranscription;
       glOutputTranscriptBufferRef.current = '';
-      glPhase1Action(inputTranscription, slide.title, myGeneration);
+      glPhase2FiredRef.current = false;
+      setCharacterHistory((prev) => ({
+        ...prev,
+        [slide.id]: [...(prev[slide.id] ?? []), { role: 'user' as const, content: inputTranscription }],
+      }));
+      glPhase1Action(myGeneration);
     }
 
-    // Accumulate outputTranscription chunks as Gemini speaks
+    // Accumulate outputTranscription chunks — fire Phase 2 on first chunk
     const outputTranscription = (content.outputTranscription as Record<string, string> | undefined)?.text;
     if (outputTranscription) {
       glOutputTranscriptBufferRef.current += (glOutputTranscriptBufferRef.current ? ' ' : '') + outputTranscription;
+      if (!glPhase2FiredRef.current) {
+        glPhase2FiredRef.current = true;
+        glPhase2Objects(glCurrentUserTextRef.current, glOutputTranscriptBufferRef.current, slide.title, myGeneration);
+      }
     }
 
-    // Phase 2: turnComplete — fire with full context to get scene objects
+    // turnComplete — update chat with full accumulated transcript
     if (content.turnComplete) {
       setIsCharacterThinking(false);
-      const userText = glCurrentUserTextRef.current;
       const geminiResponse = glOutputTranscriptBufferRef.current;
-      if (userText && geminiResponse) {
-        glPhase2Objects(userText, geminiResponse, slide.title, myGeneration);
+      if (geminiResponse) {
+        setCharacterReply(geminiResponse);
+        setCharacterHistory((prev) => ({
+          ...prev,
+          [slide.id]: [...(prev[slide.id] ?? []), { role: 'assistant' as const, content: geminiResponse }],
+        }));
       }
       glOutputTranscriptBufferRef.current = '';
+      glPhase2FiredRef.current = false;
     }
   };
 
