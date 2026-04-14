@@ -5,7 +5,6 @@ import type { ConnectionStatus } from '@odysseyml/odyssey';
 import charactersData from './data/characters.json';
 import { trackEvent } from './lib/analytics';
 import { OdysseyService, credentialsFromDict, loadImageFile, type ClientCredentials, type StreamState } from './lib/odyssey';
-import { BroadcastExperiment } from './components/BroadcastExperiment';
 import './App.css';
 
 // Debug logger — silent by default in production.
@@ -82,7 +81,6 @@ function App() {
   const [showLanding, setShowLanding] = useState(true);
   const [showAbout, setShowAbout] = useState(false);
   const [showContact, setShowContact] = useState(false);
-  const [showBroadcast, setShowBroadcast] = useState(false);
   const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(characters[0]?.id ?? null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [streamState, setStreamState] = useState<StreamState>('idle');
@@ -237,10 +235,8 @@ function App() {
       const path = window.location.pathname;
       const isAbout = path === '/about-us';
       const isContact = path === '/contact';
-      const isBroadcast = path === '/broadcast' || path.startsWith('/broadcast/');
       setShowAbout(isAbout);
       setShowContact(isContact);
-      setShowBroadcast(isBroadcast);
       if (isAbout || isContact) {
         setShowLanding(true);
       }
@@ -1959,22 +1955,6 @@ function App() {
     window.history.pushState({}, '', '/');
   };
 
-  if (showBroadcast) {
-    return (
-      <>
-        <BroadcastExperiment
-          onBack={() => {
-            setShowBroadcast(false);
-            setShowLanding(true);
-            window.history.pushState({}, '', '/');
-          }}
-        />
-        <Analytics />
-        <SpeedInsights />
-      </>
-    );
-  }
-
   if (showLanding && showAbout) {
     return (
       <div className="app landing-shell about-page">
@@ -2142,15 +2122,6 @@ function App() {
               <div>
                 <h2>Characters</h2>
               </div>
-              <button
-                className="btn ghost"
-                onClick={() => {
-                  setShowBroadcast(true);
-                  window.history.pushState({}, '', '/broadcast');
-                }}
-              >
-                📡 Broadcast
-              </button>
             </div>
             <div className="card-grid">
               {characters.map((character) => (
