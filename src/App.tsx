@@ -5,6 +5,7 @@ import type { ConnectionStatus } from '@odysseyml/odyssey';
 import charactersData from './data/characters.json';
 import { trackEvent } from './lib/analytics';
 import { OdysseyService, credentialsFromDict, loadImageFile, type ClientCredentials, type StreamState } from './lib/odyssey';
+import { BroadcastExperiment } from './components/BroadcastExperiment';
 import './App.css';
 
 // Debug logger — silent by default in production.
@@ -81,6 +82,7 @@ function App() {
   const [showLanding, setShowLanding] = useState(true);
   const [showAbout, setShowAbout] = useState(false);
   const [showContact, setShowContact] = useState(false);
+  const [showBroadcast, setShowBroadcast] = useState(false);
   const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(characters[0]?.id ?? null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [streamState, setStreamState] = useState<StreamState>('idle');
@@ -142,6 +144,8 @@ function App() {
   const glCurrentUserTextRef = useRef('');
   const glOutputTranscriptBufferRef = useRef('');
   const glPhase2FiredRef = useRef(false); // prevents duplicate Phase 2 calls per turn
+  // Odyssey context tracking — for V8/V9/V10 strategies
+  const glLastAckPromptRef = useRef<string>(''); // populated by SDK's onInteractAcknowledged callback
 
   const logEvent = (event: string, data: Record<string, unknown>, transport: 'fetch' | 'beacon' = 'fetch') => {
     trackEvent(event, data, { transport });
@@ -233,8 +237,10 @@ function App() {
       const path = window.location.pathname;
       const isAbout = path === '/about-us';
       const isContact = path === '/contact';
+      const isBroadcast = path === '/broadcast' || path.startsWith('/broadcast/');
       setShowAbout(isAbout);
       setShowContact(isContact);
+      setShowBroadcast(isBroadcast);
       if (isAbout || isContact) {
         setShowLanding(true);
       }
@@ -468,6 +474,9 @@ function App() {
             characterName: activeCharacterName,
           });
           setError(`${r}: ${m}`);
+        },
+        onInteractAcknowledged: (prompt) => {
+          glLastAckPromptRef.current = prompt;
         },
         onError: (err) => {
           console.error('[odyssey] onError:', err);
@@ -842,28 +851,364 @@ function App() {
     geminiLivePlaybackTimeRef.current = 0;
   };
 
-  // Phase 1: user stopped speaking → immediate listening gesture (no LLM call — zero latency).
-  const glPhase1Action = (myGeneration: number) => {
+  // ─── Object-dispatch strategy ─────────────────────────────────────────────
+  // Switch here to change which strategy runs in production.
+  // Options: 'turn-complete' | 'keyword-stream' | 'stage-dir-stream' |
+  //          'predict-at-input' | 'word-threshold' | 'hybrid' | 'speculative-correct' |
+  //          'odyssey-last-prompt' | 'odyssey-ack-inject' | 'odyssey-video-frame'
+  const GL_OBJECT_STRATEGY = 'speculative-correct' as const;
+
+  // Extended keyword → scene-object map covering all 8 characters.
+  const GL_KEYWORD_MAP: Array<{ keywords: string[]; object: string }> = [
+    // Physics / Einstein
+    { keywords: ['ball', 'bowling ball', 'heavy ball'], object: 'a heavy ball' },
+    { keywords: ['clock', 'watch', 'timepiece'], object: 'a ticking clock' },
+    { keywords: ['light', 'beam', 'laser', 'photon'], object: 'a beam of light' },
+    { keywords: ['trampoline', 'fabric', 'sheet'], object: 'a trampoline' },
+    { keywords: ['rocket', 'spaceship', 'spacecraft'], object: 'a rocket' },
+    { keywords: ['magnet', 'magnetic'], object: 'a magnet' },
+    { keywords: ['apple', 'gravity'], object: 'a falling apple' },
+    { keywords: ['telescope', 'lens'], object: 'a telescope' },
+    { keywords: ['atom', 'nucleus', 'electron'], object: 'an atom' },
+    { keywords: ['wave', 'ripple'], object: 'a wave' },
+    // Bear
+    { keywords: ['berry', 'berries', 'blueberry', 'strawberry'], object: 'a handful of berries' },
+    { keywords: ['honey', 'honeycomb'], object: 'a honeycomb' },
+    { keywords: ['fish', 'salmon', 'trout'], object: 'a fresh fish' },
+    { keywords: ['pine cone', 'pinecone', 'acorn', 'nut'], object: 'a pine cone' },
+    { keywords: ['mushroom'], object: 'a mushroom' },
+    { keywords: ['log', 'wood', 'stick'], object: 'a log' },
+    // Alexander / warrior
+    { keywords: ['sword', 'blade', 'sabre'], object: 'a gleaming sword' },
+    { keywords: ['shield', 'buckler'], object: 'a battle shield' },
+    { keywords: ['map', 'scroll', 'plan'], object: 'a battle map' },
+    { keywords: ['horse', 'cavalry', 'steed'], object: 'a horse' },
+    { keywords: ['spear', 'lance'], object: 'a spear' },
+    { keywords: ['crown', 'throne', 'king'], object: 'a golden crown' },
+    { keywords: ['army', 'troops', 'soldiers'], object: 'a battle flag' },
+    { keywords: ['arrow', 'bow'], object: 'a bow and arrow' },
+    // Circus Lion
+    { keywords: ['juggling ball', 'circus ball'], object: 'a juggling ball' },
+    { keywords: ['hoop', 'ring'], object: 'a circus hoop' },
+    { keywords: ['juggling pins', 'pins'], object: 'juggling pins' },
+    { keywords: ['rubber chicken'], object: 'a rubber chicken' },
+    { keywords: ['spinning plate', 'plate'], object: 'a spinning plate' },
+    // Cleopatra
+    { keywords: ['lotus', 'lotus flower'], object: 'a golden lotus' },
+    { keywords: ['cat', 'feline', 'bastet'], object: 'an Egyptian cat' },
+    { keywords: ['ankh'], object: 'an ankh' },
+    { keywords: ['sphinx'], object: 'a sphinx' },
+    { keywords: ['pyramid'], object: 'a pyramid' },
+    { keywords: ['papyrus', 'parchment'], object: 'an ancient scroll' },
+    { keywords: ['jewel', 'gem', 'diamond', 'ruby'], object: 'a precious gem' },
+    // Da Vinci
+    { keywords: ['gear', 'cog', 'wheel'], object: 'a brass gear' },
+    { keywords: ['wing', 'flying machine', 'glider'], object: 'a feathered wing' },
+    { keywords: ['compass', 'divider'], object: 'a compass' },
+    { keywords: ['paintbrush', 'brush', 'palette'], object: 'a paintbrush' },
+    { keywords: ['sketch', 'drawing', 'blueprint'], object: 'a technical sketch' },
+    { keywords: ['spring', 'coil'], object: 'a spring' },
+    { keywords: ['mirror'], object: 'a mirror' },
+    // Grandpa Turtle
+    { keywords: ['stone', 'rock', 'pebble'], object: 'a smooth stone' },
+    { keywords: ['leaf', 'leaves', 'foliage'], object: 'a fallen leaf' },
+    { keywords: ['shell', 'turtle shell'], object: 'a shell' },
+    { keywords: ['firefly', 'lightning bug'], object: 'a firefly' },
+    { keywords: ['pond', 'river', 'stream', 'water'], object: 'a pond' },
+    { keywords: ['bark', 'tree', 'oak'], object: 'a piece of bark' },
+    // Steve Jobs
+    { keywords: ['device', 'iphone', 'phone', 'tablet', 'ipad'], object: 'a sleek device' },
+    { keywords: ['chip', 'circuit', 'processor'], object: 'a circuit board' },
+    { keywords: ['button', 'click'], object: 'a single button' },
+    { keywords: ['calligraphy', 'font', 'typography', 'pen'], object: 'a calligraphy pen' },
+  ];
+
+  // Shared: dispatch objects to Odyssey, deduplicated per turn.
+  const glDispatchedThisTurnRef = useRef<Set<string>>(new Set());
+
+  const glDispatchObjects = (objects: string[], myGeneration: number, source: string) => {
     if (geminiLiveGenerationRef.current !== myGeneration) return;
-    handleInteractRef.current('listen actively');
+    const fresh = objects.filter(o => !glDispatchedThisTurnRef.current.has(o));
+    if (!fresh.length) return;
+    fresh.forEach(o => glDispatchedThisTurnRef.current.add(o));
+    console.log(`[gl-objects][${source}] dispatching:`, fresh, `at +${Date.now() - glTurnStartRef.current}ms`);
+    handleInteractRef.current(`add ${fresh.join(', ')} to the scene`);
   };
 
-  // Phase 2: user text + what Gemini actually said → objects (fires at turnComplete)
-  const glPhase2Objects = (userText: string, geminiResponse: string, characterName: string, myGeneration: number) => {
-    if (!geminiResponse.trim()) return;
-    const message = `User asked: "${userText}". You responded: "${geminiResponse}". Based on this, what objects should appear in the scene?`;
+  // Shared: LLM call for objects.
+  const glFetchObjects = (message: string, characterName: string, myGeneration: number, source: string) => {
     fetch('/api/character/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, character: characterName, history: [] }),
     })
-      .then((res) => res.ok ? res.json() as Promise<{ objects?: string[] }> : Promise.reject(new Error(`chat ${res.status}`)))
-      .then((data) => {
-        if (geminiLiveGenerationRef.current !== myGeneration) return;
-        const objects = data.objects?.filter(Boolean) ?? [];
-        if (objects.length) handleInteractRef.current(`add ${objects.join(', ')} to the scene`);
+      .then(res => res.ok ? res.json() as Promise<{ objects?: string[] }> : Promise.reject())
+      .then(data => {
+        const objects = (data.objects ?? []).filter(Boolean);
+        if (objects.length) glDispatchObjects(objects, myGeneration, source);
       })
       .catch(() => undefined);
+  };
+
+  // Shared: extract objects from text via keyword matching.
+  const glKeywordMatch = (text: string): string[] => {
+    const lower = text.toLowerCase();
+    const found: string[] = [];
+    for (const entry of GL_KEYWORD_MAP) {
+      if (entry.keywords.some(k => lower.includes(k))) {
+        found.push(entry.object);
+      }
+    }
+    return found;
+  };
+
+  // Shared: extract stage directions from text.
+  const glExtractStageDirections = (text: string): string[] =>
+    [...text.matchAll(/\*([^*]+)\*/g)].map(m => m[1].trim());
+
+  // Turn-start timestamp for latency logging.
+  const glTurnStartRef = useRef(0);
+
+  // ─── Strategy: Phase 1 (always runs) ─────────────────────────────────────
+  const glPhase1Action = (myGeneration: number) => {
+    if (geminiLiveGenerationRef.current !== myGeneration) return;
+    glTurnStartRef.current = Date.now();
+    glDispatchedThisTurnRef.current = new Set();
+    handleInteractRef.current('listen actively');
+  };
+
+  // ─── Strategy implementations ─────────────────────────────────────────────
+
+  // V1 — turn-complete: LLM call after full response (current baseline).
+  const glStrategy_turnComplete = (userText: string, fullResponse: string, characterName: string, myGeneration: number) => {
+    const message = `User asked: "${userText}". You responded: "${fullResponse}". Based on this, what objects should appear in the scene?`;
+    glFetchObjects(message, characterName, myGeneration, 'turn-complete');
+  };
+
+  // V2 — keyword-stream: client-side keyword match on each transcript chunk.
+  const glStrategy_keywordStream = (chunk: string, myGeneration: number) => {
+    const objects = glKeywordMatch(chunk);
+    if (objects.length) glDispatchObjects(objects, myGeneration, 'keyword-stream');
+  };
+
+  // V3 — stage-dir-stream: extract *stage directions* from each chunk as they arrive.
+  const glStrategy_stageDirStream = (chunk: string, myGeneration: number) => {
+    const directions = glExtractStageDirections(chunk);
+    if (directions.length) {
+      directions.forEach(d => handleInteractRef.current(d));
+    }
+  };
+
+  // V4 — predict-at-input: LLM call at inputTranscription with only user text.
+  const glStrategy_predictAtInput = (userText: string, characterName: string, myGeneration: number) => {
+    const message = `A user just asked: "${userText}". What physical objects would a ${characterName} character likely reference or show while answering this? Return objects only — do not generate a reply.`;
+    glFetchObjects(message, characterName, myGeneration, 'predict-at-input');
+  };
+
+  // V5 — word-threshold: LLM call once 15+ words are buffered mid-response.
+  const glWordThresholdFiredRef = useRef(false);
+  const glStrategy_wordThreshold = (buffer: string, userText: string, characterName: string, myGeneration: number) => {
+    if (glWordThresholdFiredRef.current) return;
+    const wordCount = buffer.trim().split(/\s+/).length;
+    if (wordCount < 15) return;
+    glWordThresholdFiredRef.current = true;
+    const message = `User asked: "${userText}". Partial response so far: "${buffer}". What objects should appear in the scene?`;
+    glFetchObjects(message, characterName, myGeneration, 'word-threshold');
+  };
+
+  // V6 — hybrid: keyword + stage-dir fire immediately; LLM confirms at turnComplete.
+  const glStrategy_hybrid = {
+    onChunk: (chunk: string, myGeneration: number) => {
+      glStrategy_keywordStream(chunk, myGeneration);
+      glStrategy_stageDirStream(chunk, myGeneration);
+    },
+    onComplete: (userText: string, fullResponse: string, characterName: string, myGeneration: number) => {
+      glStrategy_turnComplete(userText, fullResponse, characterName, myGeneration);
+    },
+  };
+
+  // V7 — speculative-correct: predict objects from user's question and spawn them
+  // immediately (fast but possibly wrong), then at turnComplete send a correction
+  // prompt to Odyssey with the accurate objects Gemini actually used.
+  const glSpeculativeObjectsRef = useRef<string[]>([]);
+  const glStrategy_speculativeCorrect = {
+    onInput: (userText: string, characterName: string, myGeneration: number) => {
+      const msg = `A user just asked a ${characterName} character: "${userText}". What physical objects would this character likely reference or show while answering? Return objects only — do not generate a reply.`;
+      fetch('/api/character/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg, character: characterName, history: [] }),
+      })
+        .then(res => res.ok ? res.json() as Promise<{ objects?: string[] }> : Promise.reject())
+        .then(data => {
+          if (geminiLiveGenerationRef.current !== myGeneration) return;
+          const objects = (data.objects ?? []).filter(Boolean);
+          glSpeculativeObjectsRef.current = objects;
+          if (objects.length) {
+            console.log('[gl-objects][speculative] spawning:', objects, `at +${Date.now() - glTurnStartRef.current}ms`);
+            handleInteractRef.current(`add ${objects.join(', ')} to the scene`);
+          }
+        })
+        .catch(() => undefined);
+    },
+    onComplete: (userText: string, fullResponse: string, characterName: string, myGeneration: number) => {
+      const msg = `User asked: "${userText}". You responded: "${fullResponse}". Based on this, what objects should appear in the scene?`;
+      fetch('/api/character/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg, character: characterName, history: [] }),
+      })
+        .then(res => res.ok ? res.json() as Promise<{ objects?: string[] }> : Promise.reject())
+        .then(data => {
+          if (geminiLiveGenerationRef.current !== myGeneration) return;
+          const correctObjects = (data.objects ?? []).filter(Boolean);
+          if (!correctObjects.length) return;
+          const speculative = glSpeculativeObjectsRef.current;
+          const alreadyCorrect = correctObjects.every(o => speculative.includes(o));
+          if (alreadyCorrect) {
+            // Speculative guess was right — nothing to fix
+            console.log('[gl-objects][correct] speculative was accurate, no correction needed');
+            return;
+          }
+          // Send a correction prompt — Odyssey will update the scene
+          console.log('[gl-objects][correct] correcting scene:', correctObjects, `at +${Date.now() - glTurnStartRef.current}ms`);
+          handleInteractRef.current(`update the scene to show ${correctObjects.join(', ')}`);
+        })
+        .catch(() => undefined);
+    },
+  };
+
+  // ─── V8: odyssey-last-prompt ─────────────────────────────────────────────
+  // At inputTranscription: inject the last prompt sent to Odyssey as scene context,
+  // then ask the LLM what objects should appear given the user's question.
+  const glStrategy_odysseyLastPrompt = (userText: string, characterName: string, myGeneration: number) => {
+    const lastPrompt = serviceRef.current?.lastAppliedPrompt ?? '';
+    const sceneContext = lastPrompt
+      ? `The scene currently shows: "${lastPrompt}". `
+      : '';
+    const msg = `${sceneContext}The user just asked the character: "${userText}". What physical objects should now appear in the scene to complement the character's answer? Return a comma-separated list of objects only. If none, return "none".`;
+    fetch('/api/character/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg, characterName, history: [] }),
+    })
+      .then(r => r.json())
+      .then((data: { reply?: string }) => {
+        if (geminiLiveGenerationRef.current !== myGeneration) return;
+        const reply = (data.reply ?? '').toLowerCase().trim();
+        if (!reply || reply === 'none') return;
+        const objects = reply.split(',').map((s: string) => s.trim()).filter(Boolean);
+        glDispatchObjects(objects, myGeneration, 'odyssey-last-prompt');
+      })
+      .catch(() => undefined);
+  };
+
+  // ─── V9: odyssey-ack-inject ───────────────────────────────────────────────
+  // Same timing as V8 but uses the last acknowledged prompt (tracks scene state
+  // after Odyssey confirms each interact call). Falls back to lastAppliedPrompt.
+  const glStrategy_odysseyAckInject = (userText: string, characterName: string, myGeneration: number) => {
+    const ackPrompt = glLastAckPromptRef.current || serviceRef.current?.lastAppliedPrompt || '';
+    const sceneContext = ackPrompt
+      ? `Odyssey's last confirmed scene state: "${ackPrompt}". `
+      : '';
+    const msg = `${sceneContext}The user just asked: "${userText}". What objects should appear to make the character's answer visually compelling? Return a comma-separated list only. If none, return "none".`;
+    fetch('/api/character/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg, characterName, history: [] }),
+    })
+      .then(r => r.json())
+      .then((data: { reply?: string }) => {
+        if (geminiLiveGenerationRef.current !== myGeneration) return;
+        const reply = (data.reply ?? '').toLowerCase().trim();
+        if (!reply || reply === 'none') return;
+        const objects = reply.split(',').map((s: string) => s.trim()).filter(Boolean);
+        glDispatchObjects(objects, myGeneration, 'odyssey-ack-inject');
+      })
+      .catch(() => undefined);
+  };
+
+  // ─── V10: odyssey-video-frame ─────────────────────────────────────────────
+  // At inputTranscription: capture a frame from the Odyssey video stream,
+  // convert it to a base64 data URL, and send it to the vision LLM alongside
+  // the user's question. Falls back to scene-context string if capture fails.
+  const glStrategy_odysseyVideoFrame = (userText: string, characterName: string, myGeneration: number) => {
+    const runWithDescription = (frameDescription: string) => {
+      const msg = [
+        'You are looking at a live frame of an animated character scene.',
+        `What you see: "${frameDescription}".`,
+        `The user just asked the character: "${userText}".`,
+        'Based on the current scene and the user\'s question, what physical objects should appear next?',
+        'Return a comma-separated list of objects only. If none, return "none".',
+      ].join(' ');
+      fetch('/api/character/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg, characterName, history: [] }),
+      })
+        .then(r => r.json())
+        .then((data: { reply?: string }) => {
+          if (geminiLiveGenerationRef.current !== myGeneration) return;
+          const reply = (data.reply ?? '').toLowerCase().trim();
+          if (!reply || reply === 'none') return;
+          const objects = reply.split(',').map((s: string) => s.trim()).filter(Boolean);
+          glDispatchObjects(objects, myGeneration, 'odyssey-video-frame');
+        })
+        .catch(() => undefined);
+    };
+
+    // Attempt live frame capture from the Odyssey MediaStream
+    const stream = odysseyStreamRef.current;
+    const videoTrack = stream?.getVideoTracks()[0];
+    if (videoTrack) {
+      try {
+        const imageCapture = new (window as unknown as { ImageCapture: new (track: MediaStreamTrack) => { grabFrame(): Promise<ImageBitmap> } }).ImageCapture(videoTrack);
+        imageCapture.grabFrame().then((bitmap: ImageBitmap) => {
+          const canvas = document.createElement('canvas');
+          canvas.width = bitmap.width;
+          canvas.height = bitmap.height;
+          canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
+          const frameDescription = `live video frame (${bitmap.width}×${bitmap.height}) from Odyssey avatar stream`;
+          runWithDescription(frameDescription);
+        }).catch(() => {
+          runWithDescription(serviceRef.current?.lastAppliedPrompt || 'an animated character scene');
+        });
+      } catch {
+        runWithDescription(serviceRef.current?.lastAppliedPrompt || 'an animated character scene');
+      }
+    } else {
+      runWithDescription(serviceRef.current?.lastAppliedPrompt || 'an animated character scene');
+    }
+  };
+
+  // ─── Strategy router ──────────────────────────────────────────────────────
+  // Called on each outputTranscription chunk.
+  const glOnChunk = (chunk: string, buffer: string, userText: string, characterName: string, myGeneration: number) => {
+    if (GL_OBJECT_STRATEGY === 'keyword-stream') glStrategy_keywordStream(chunk, myGeneration);
+    if (GL_OBJECT_STRATEGY === 'stage-dir-stream') glStrategy_stageDirStream(chunk, myGeneration);
+    if (GL_OBJECT_STRATEGY === 'word-threshold') glStrategy_wordThreshold(buffer, userText, characterName, myGeneration);
+    if (GL_OBJECT_STRATEGY === 'hybrid') glStrategy_hybrid.onChunk(chunk, myGeneration);
+  };
+
+  // Called at inputTranscription.
+  const glOnInput = (userText: string, characterName: string, myGeneration: number) => {
+    if (GL_OBJECT_STRATEGY === 'predict-at-input') glStrategy_predictAtInput(userText, characterName, myGeneration);
+    if (GL_OBJECT_STRATEGY === 'speculative-correct') glStrategy_speculativeCorrect.onInput(userText, characterName, myGeneration);
+    if (GL_OBJECT_STRATEGY === 'odyssey-last-prompt') glStrategy_odysseyLastPrompt(userText, characterName, myGeneration);
+    if (GL_OBJECT_STRATEGY === 'odyssey-ack-inject') glStrategy_odysseyAckInject(userText, characterName, myGeneration);
+    if (GL_OBJECT_STRATEGY === 'odyssey-video-frame') glStrategy_odysseyVideoFrame(userText, characterName, myGeneration);
+  };
+
+  // Called at turnComplete.
+  const glOnComplete = (userText: string, fullResponse: string, characterName: string, myGeneration: number) => {
+    if (GL_OBJECT_STRATEGY === 'turn-complete') glStrategy_turnComplete(userText, fullResponse, characterName, myGeneration);
+    if (GL_OBJECT_STRATEGY === 'hybrid') glStrategy_hybrid.onComplete(userText, fullResponse, characterName, myGeneration);
+    if (GL_OBJECT_STRATEGY === 'speculative-correct') glStrategy_speculativeCorrect.onComplete(userText, fullResponse, characterName, myGeneration);
+  };
+
+  // Legacy alias kept for the old glPhase2Objects callsites — routes through strategy router.
+  const glPhase2Objects = (userText: string, geminiResponse: string, characterName: string, myGeneration: number) => {
+    glOnComplete(userText, geminiResponse, characterName, myGeneration);
   };
 
   const GEMINI_LIVE_SYSTEM_PROMPTS: Record<string, string> = {
@@ -974,45 +1319,48 @@ function App() {
     }
     if (hasAudio) setIsCharacterSpeaking(true);
 
-    // Phase 1: inputTranscription — immediate listening gesture, add user message to chat
+    // inputTranscription — user stopped speaking; fire Phase 1 + strategy hook
     const inputTranscription = (content.inputTranscription as Record<string, string> | undefined)?.text;
     if (inputTranscription) {
       glCurrentUserTextRef.current = inputTranscription;
       glOutputTranscriptBufferRef.current = '';
       glPhase2FiredRef.current = false;
+      glWordThresholdFiredRef.current = false;
       setCharacterHistory((prev) => ({
         ...prev,
         [slide.id]: [...(prev[slide.id] ?? []), { role: 'user' as const, content: inputTranscription }],
       }));
-      glPhase1Action(myGeneration);
+      glPhase1Action(myGeneration);                                          // always: 'listen actively'
+      glOnInput(inputTranscription, slide.title, myGeneration);              // strategy hook: predict-at-input
     }
 
-    // Accumulate outputTranscription chunks
+    // outputTranscription chunk — accumulate and run per-chunk strategy hooks
     const outputTranscription = (content.outputTranscription as Record<string, string> | undefined)?.text;
     if (outputTranscription) {
       glOutputTranscriptBufferRef.current += (glOutputTranscriptBufferRef.current ? ' ' : '') + outputTranscription;
+      glOnChunk(outputTranscription, glOutputTranscriptBufferRef.current, glCurrentUserTextRef.current, slide.title, myGeneration);
     }
 
-    // turnComplete — update chat and fire Phase 2 with full response
+    // turnComplete — update chat, extract stage directions, run completion strategy hook
     if (content.turnComplete) {
       setIsCharacterThinking(false);
       setIsCharacterSpeaking(false);
       const geminiResponse = glOutputTranscriptBufferRef.current;
       if (geminiResponse) {
-        // Extract *stage directions* and send each to Odyssey as an action
-        const stageDirections = [...geminiResponse.matchAll(/\*([^*]+)\*/g)].map((m) => m[1].trim());
+        // Stage directions → Odyssey actions (always, regardless of strategy)
+        const stageDirections = glExtractStageDirections(geminiResponse);
         for (const direction of stageDirections) {
           handleInteractRef.current(direction);
         }
-        // Strip stage directions from the displayed text
+        // Strip stage directions from displayed text
         const displayResponse = geminiResponse.replace(/\*[^*]+\*/g, '').replace(/\s{2,}/g, ' ').trim();
         setCharacterReply(displayResponse);
         setCharacterHistory((prev) => ({
           ...prev,
           [slide.id]: [...(prev[slide.id] ?? []), { role: 'assistant' as const, content: displayResponse }],
         }));
-        // Fire Phase 2 with the complete response so object detection has full context
-        glPhase2Objects(glCurrentUserTextRef.current, geminiResponse, slide.title, myGeneration);
+        // Strategy hook: turn-complete / hybrid LLM confirm
+        glOnComplete(glCurrentUserTextRef.current, geminiResponse, slide.title, myGeneration);
       }
       glOutputTranscriptBufferRef.current = '';
       glPhase2FiredRef.current = false;
@@ -1615,6 +1963,22 @@ function App() {
     window.history.pushState({}, '', '/');
   };
 
+  if (showBroadcast) {
+    return (
+      <>
+        <BroadcastExperiment
+          onBack={() => {
+            setShowBroadcast(false);
+            setShowLanding(true);
+            window.history.pushState({}, '', '/');
+          }}
+        />
+        <Analytics />
+        <SpeedInsights />
+      </>
+    );
+  }
+
   if (showLanding && showAbout) {
     return (
       <div className="app landing-shell about-page">
@@ -1782,6 +2146,15 @@ function App() {
               <div>
                 <h2>Characters</h2>
               </div>
+              <button
+                className="btn ghost"
+                onClick={() => {
+                  setShowBroadcast(true);
+                  window.history.pushState({}, '', '/broadcast');
+                }}
+              >
+                📡 Broadcast
+              </button>
             </div>
             <div className="card-grid">
               {characters.map((character) => (

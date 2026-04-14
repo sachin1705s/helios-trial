@@ -1734,6 +1734,137 @@ app.get('/api/logs/summary', async (req, res) => {
   }
 });
 
+// ─── Broadcast rooms ──────────────────────────────────────────────────────────
+// Host creates a room → gets a code → starts Odyssey broadcast → posts webrtcUrl + spectatorToken.
+// Audience joins with code → gets webrtcUrl + spectatorToken → Odyssey.connectToStream().
+// Audience submits prompts → host polls and fires them via interact().
+
+const BROADCAST_ROOM_TTL_S = 3 * 60 * 60; // 3 h
+
+// In-memory store for local dev (Redis in production)
+const _broadcastRooms = new Map();   // code → { status, webrtcUrl, spectatorToken, hlsUrl, prompts[] }
+
+const bcRoomKey    = (code) => `broadcast:room:${code}`;
+const bcPromptsKey = (code) => `broadcast:prompts:${code}`;
+
+const generateRoomCode = () => {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const uuid  = randomUUID().replace(/-/g, '');
+  let code = '';
+  for (let i = 0; i < 6; i++) code += chars[parseInt(uuid[i * 2], 16) % chars.length];
+  return code;
+};
+
+// POST /api/broadcast/room — create a room, returns { code }
+app.post('/api/broadcast/room', async (_req, res) => {
+  let code;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const candidate = generateRoomCode();
+    if (useRedis) {
+      const exists = await redis.exists(bcRoomKey(candidate));
+      if (!exists) { code = candidate; break; }
+    } else {
+      if (!_broadcastRooms.has(candidate)) { code = candidate; break; }
+    }
+  }
+  if (!code) return res.status(500).json({ error: 'Could not generate unique room code.' });
+
+  if (useRedis) {
+    await redis.hset(bcRoomKey(code), { status: 'waiting', createdAt: Date.now() });
+    await redis.expire(bcRoomKey(code), BROADCAST_ROOM_TTL_S);
+  } else {
+    _broadcastRooms.set(code, { status: 'waiting', createdAt: Date.now(), prompts: [] });
+  }
+  return res.json({ code });
+});
+
+// POST /api/broadcast/room/:code/ready — host posts webrtcUrl + spectatorToken after onBroadcastReady
+app.post('/api/broadcast/room/:code/ready', async (req, res) => {
+  const code = String(req.params.code ?? '').toUpperCase().trim();
+  const { webrtcUrl, spectatorToken, hlsUrl } = req.body ?? {};
+  if (!webrtcUrl || !spectatorToken) return res.status(400).json({ error: 'Missing webrtcUrl or spectatorToken.' });
+
+  if (useRedis) {
+    const exists = await redis.exists(bcRoomKey(code));
+    if (!exists) return res.status(404).json({ error: 'Room not found.' });
+    await redis.hset(bcRoomKey(code), { status: 'live', webrtcUrl, spectatorToken, hlsUrl: hlsUrl || '' });
+    await redis.expire(bcRoomKey(code), BROADCAST_ROOM_TTL_S);
+  } else {
+    const room = _broadcastRooms.get(code);
+    if (!room) return res.status(404).json({ error: 'Room not found.' });
+    Object.assign(room, { status: 'live', webrtcUrl, spectatorToken, hlsUrl: hlsUrl || '' });
+  }
+  return res.json({ ok: true });
+});
+
+// GET /api/broadcast/room/:code — audience fetches webrtcUrl + spectatorToken
+app.get('/api/broadcast/room/:code', async (req, res) => {
+  const code = String(req.params.code ?? '').toUpperCase().trim();
+  if (useRedis) {
+    const room = await redis.hgetall(bcRoomKey(code));
+    if (!room || !room.status) return res.status(404).json({ error: 'Room not found.' });
+    if (room.status !== 'live') return res.status(202).json({ status: room.status });
+    return res.json({ status: 'live', webrtcUrl: room.webrtcUrl, spectatorToken: room.spectatorToken });
+  } else {
+    const room = _broadcastRooms.get(code);
+    if (!room) return res.status(404).json({ error: 'Room not found.' });
+    if (room.status !== 'live') return res.status(202).json({ status: room.status });
+    return res.json({ status: 'live', webrtcUrl: room.webrtcUrl, spectatorToken: room.spectatorToken });
+  }
+});
+
+// POST /api/broadcast/room/:code/prompt — audience submits a prompt
+app.post('/api/broadcast/room/:code/prompt', async (req, res) => {
+  const code     = String(req.params.code ?? '').toUpperCase().trim();
+  const text     = String(req.body?.text ?? '').trim().slice(0, 200);
+  const username = String(req.body?.username ?? 'Guest').trim().slice(0, 32) || 'Guest';
+  if (!text) return res.status(400).json({ error: 'Missing prompt text.' });
+
+  const promptId  = randomUUID();
+  const timestamp = Date.now();
+  const prompt    = { id: promptId, text, username, timestamp };
+
+  if (useRedis) {
+    const exists = await redis.exists(bcRoomKey(code));
+    if (!exists) return res.status(404).json({ error: 'Room not found.' });
+    await redis.zadd(bcPromptsKey(code), { score: timestamp, member: JSON.stringify(prompt) });
+    await redis.expire(bcPromptsKey(code), BROADCAST_ROOM_TTL_S);
+  } else {
+    const room = _broadcastRooms.get(code);
+    if (!room) return res.status(404).json({ error: 'Room not found.' });
+    room.prompts.push(prompt);
+  }
+  return res.json({ ok: true, promptId });
+});
+
+// GET /api/broadcast/room/:code/prompts?since=<ms> — host polls for new audience prompts
+app.get('/api/broadcast/room/:code/prompts', async (req, res) => {
+  const code  = String(req.params.code ?? '').toUpperCase().trim();
+  const since = Number(req.query.since ?? 0) || 0;
+
+  let prompts = [];
+  if (useRedis) {
+    const members = await redis.zrangebyscore(bcPromptsKey(code), since + 1, '+inf');
+    prompts = members.map((m) => { try { return JSON.parse(m); } catch { return null; } }).filter(Boolean);
+  } else {
+    const room = _broadcastRooms.get(code);
+    if (!room) return res.status(404).json({ error: 'Room not found.' });
+    prompts = room.prompts.filter((p) => p.timestamp > since);
+  }
+  return res.json({ prompts, serverTime: Date.now() });
+});
+
+// DELETE /api/broadcast/room/:code — host closes the room
+app.delete('/api/broadcast/room/:code', async (req, res) => {
+  const code = String(req.params.code ?? '').toUpperCase().trim();
+  if (useRedis) {
+    await Promise.all([redis.del(bcRoomKey(code)), redis.del(bcPromptsKey(code))]);
+  } else {
+    _broadcastRooms.delete(code);
+  }
+  return res.json({ ok: true });
+});
+
 // ─── Start (local dev only) ───────────────────────────────────────────────────
 if (!process.env.VERCEL) {
   const port = process.env.PORT || 8787;
