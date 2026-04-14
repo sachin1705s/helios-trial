@@ -856,7 +856,7 @@ function App() {
   // Options: 'turn-complete' | 'keyword-stream' | 'stage-dir-stream' |
   //          'predict-at-input' | 'word-threshold' | 'hybrid' | 'speculative-correct' |
   //          'odyssey-last-prompt' | 'odyssey-ack-inject' | 'odyssey-video-frame'
-  const GL_OBJECT_STRATEGY = 'speculative-correct' as const;
+  const GL_OBJECT_STRATEGY: string = 'speculative-correct';
 
   // Extended keyword → scene-object map covering all 8 characters.
   const GL_KEYWORD_MAP: Array<{ keywords: string[]; object: string }> = [
@@ -992,7 +992,7 @@ function App() {
   };
 
   // V3 — stage-dir-stream: extract *stage directions* from each chunk as they arrive.
-  const glStrategy_stageDirStream = (chunk: string, myGeneration: number) => {
+  const glStrategy_stageDirStream = (chunk: string, _myGeneration: number) => {
     const directions = glExtractStageDirections(chunk);
     if (directions.length) {
       directions.forEach(d => handleInteractRef.current(d));
@@ -1206,10 +1206,6 @@ function App() {
     if (GL_OBJECT_STRATEGY === 'speculative-correct') glStrategy_speculativeCorrect.onComplete(userText, fullResponse, characterName, myGeneration);
   };
 
-  // Legacy alias kept for the old glPhase2Objects callsites — routes through strategy router.
-  const glPhase2Objects = (userText: string, geminiResponse: string, characterName: string, myGeneration: number) => {
-    glOnComplete(userText, geminiResponse, characterName, myGeneration);
-  };
 
   const GEMINI_LIVE_SYSTEM_PROMPTS: Record<string, string> = {
     einstein: [

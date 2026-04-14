@@ -254,7 +254,6 @@ async function runStrategy_turnComplete(fixture: Fixture): Promise<StrategyResul
     elapsed += ev.delayMs;
     if (ev.type === 'outputChunk') buffer += (buffer ? ' ' : '') + ev.text;
     if (ev.type === 'turnComplete') {
-      const t0 = performance.now();
       const msg = `User asked: "${fixture.userText}". You responded: "${buffer}". Based on this, what objects should appear in the scene?`;
       const { objects, elapsedMs } = await llmFetchObjects(msg, fixture.character);
       const totalMs = elapsed + elapsedMs;
@@ -641,7 +640,6 @@ export function renderSummary(results: TurnResult[]): string {
     const avgMs = a.latencies.length
       ? Math.round(a.latencies.reduce((x, y) => x + y, 0) / a.latencies.length)
       : 99999;
-    const n = FIXTURES.length;
     // Score: hits=3pts, partial=1pt, minus latency penalty (1pt per 500ms)
     const latPenalty = Math.min(6, Math.floor(avgMs / 500));
     const score = (a.hits * 3 + a.partials) - latPenalty;

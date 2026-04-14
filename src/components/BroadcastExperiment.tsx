@@ -122,7 +122,7 @@ export function BroadcastExperiment({ onBack }: BroadcastExperimentProps) {
       if (!res.ok) throw new Error('Odyssey not available right now.');
       const data = await res.json() as { credentials?: unknown };
       if (!data.credentials) throw new Error('No credentials received.');
-      credentials = credentialsFromDict(data.credentials as Record<string, unknown>);
+      credentials = credentialsFromDict(data.credentials as Record<string, string | number>);
     } catch (err) {
       setHostError(err instanceof Error ? err.message : 'Failed to connect to Odyssey.');
       setHostStatus('idle');
@@ -155,7 +155,7 @@ export function BroadcastExperiment({ onBack }: BroadcastExperimentProps) {
           setHostStatus('idle');
           stopPolling();
         },
-        onBroadcastReady: async (info: { webrtcUrl: string; spectatorToken: string; hlsUrl?: string }) => {
+        onBroadcastReady: async (info: { webrtcUrl: string; spectatorToken: string; hlsUrl: string | null }) => {
           const currentCode = activeCodeRef.current;
           if (!currentCode) return;
           try {
