@@ -227,7 +227,8 @@
   border-color: rgba(244, 75, 58, 0.6);
 }
 
-.btn .recording-icon {
+.btn .recording-icon,
+.voice-orb .recording-icon {
   width: 18px;
   height: 18px;
   display: block;

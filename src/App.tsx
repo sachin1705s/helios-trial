@@ -2243,14 +2243,7 @@ function App() {
                   ].filter(Boolean).join(' ')}
                   onClick={stopGeminiLiveSession}
                   aria-label={isCharacterSpeaking ? `${activeCharacterName} is speaking — click to end` : 'Listening — click to end'}
-                >
-                  <img
-                    className="recording-icon"
-                    src="/images/recording_icon_v3.png"
-                    alt=""
-                    aria-hidden="true"
-                  />
-                </button>
+                />
               ) : (
                 <button
                   className="btn accent ptt-btn"
