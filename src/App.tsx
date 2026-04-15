@@ -2556,12 +2556,13 @@ function App() {
 
         <main className="slide-shell" />
 
-        {!isStreamingReady && streamState !== 'error' && (
-          <div className="stream-loading-badge" aria-live="polite">
-            <span className="stream-loading-dot" aria-hidden />
-            Waking up {activeCharacterName}…
-          </div>
-        )}
+        <div className="story-bar-wrap">
+          {!isStreamingReady && streamState !== 'error' && (
+            <div className="stream-loading-badge" aria-live="polite">
+              <span className="stream-loading-dot" aria-hidden />
+              Waking up {activeCharacterName}…
+            </div>
+          )}
 
         <footer className={`story-bar ${isCharacterSlide ? 'story-bar--compact' : ''}`}>
           {!isCharacterSlide ? (
@@ -2620,6 +2621,7 @@ function App() {
             </div>
           </div>
         </footer>
+        </div>
       </div>
     </div>
   );

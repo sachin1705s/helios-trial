@@ -47,7 +47,6 @@
 
 /* ── Loading badge ── */
 .stream-loading-badge {
-  align-self: center;
   margin-bottom: 10px;
   display: inline-flex;
   align-items: center;
@@ -372,8 +371,16 @@
   color: var(--muted);
 }
 
-.story-bar {
+.story-bar-wrap {
   margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  padding-bottom: 20px;
+}
+
+.story-bar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 20px;
@@ -390,8 +397,8 @@
   flex-direction: column;
   align-items: center;
   align-self: center;
-  max-width: 420px;
-  width: auto;
+  max-width: 300px;
+  width: 100%;
   padding: 6px 12px;
 }
 
