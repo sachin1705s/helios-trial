@@ -518,17 +518,6 @@ function App() {
     }
   }, [isStreamingReady, voiceStatus]);
 
-  useEffect(() => {
-    if (!isStreamingReady || !isCharacterSlide) return;
-    const greeting = slide.greeting;
-    if (!greeting) return;
-    if ((characterHistory[slide.id] ?? []).length > 0) return;
-    setCharacterHistory((prev) => ({
-      ...prev,
-      [slide.id]: [{ role: 'assistant', content: greeting }],
-    }));
-    playCharacterTTS(greeting, slide.id);
-  }, [isStreamingReady, slide.id]);
 
   useEffect(() => {
     if (isCharacterSlide) {
@@ -844,11 +833,15 @@ function App() {
       streamActiveRef.current = false;
       serviceRef.current?.endStream().catch(() => undefined);
     }
-    // Stop any in-flight TTS fetch and active audio playback
+    // Stop any in-flight TTS fetch and all scheduled audio playback
     ttsAbortRef.current?.abort();
     ttsAbortRef.current = null;
     try { ttsSourceRef.current?.stop(); } catch { /* already stopped */ }
     ttsSourceRef.current = null;
+    // Close the AudioContext to immediately silence any already-scheduled chunks
+    // (abort() stops new chunks from being fetched but scheduled nodes keep playing)
+    ttsAudioCtxRef.current?.close().catch(() => undefined);
+    ttsAudioCtxRef.current = null;
     // Clear the current character's chat state so returning starts fresh
     const charId = slide.id;
     setCharacterReply(null);
@@ -2514,12 +2507,6 @@ function App() {
           muted
         />
         <div className="video-overlay" />
-        {!isStreamingReady && streamState !== 'error' && (
-          <div className="stream-loading-badge" aria-live="polite">
-            <span className="stream-loading-dot" aria-hidden />
-            Waking up {activeCharacterName}…
-          </div>
-        )}
       </div>
 
       <div className="ui">
@@ -2568,6 +2555,13 @@ function App() {
         ) : null}
 
         <main className="slide-shell" />
+
+        {!isStreamingReady && streamState !== 'error' && (
+          <div className="stream-loading-badge" aria-live="polite">
+            <span className="stream-loading-dot" aria-hidden />
+            Waking up {activeCharacterName}…
+          </div>
+        )}
 
         <footer className={`story-bar ${isCharacterSlide ? 'story-bar--compact' : ''}`}>
           {!isCharacterSlide ? (
