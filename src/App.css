@@ -311,6 +311,16 @@
   max-width: 100%;
 }
 
+.story-bar--compact {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  align-self: center;
+  max-width: 420px;
+  width: auto;
+  padding: 8px 14px;
+}
+
 .einstein-chat {
   position: absolute;
   left: 24px;
@@ -329,10 +339,25 @@
 }
 
 .einstein-chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
   font-size: 0.8rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--muted);
+  font-family: inherit;
+}
+
+.einstein-chat-toggle {
+  font-size: 0.7rem;
+  opacity: 0.6;
 }
 
 .einstein-chat-body {

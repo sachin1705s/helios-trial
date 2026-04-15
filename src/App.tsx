@@ -94,6 +94,7 @@ function App() {
   const [isCharacterRecording, setIsCharacterRecording] = useState(false);
   const [isCharacterThinking, setIsCharacterThinking] = useState(false);
   const [isCharacterSpeaking, setIsCharacterSpeaking] = useState(false);
+  const [chatExpanded, setChatExpanded] = useState(false);
   const [characterReply, setCharacterReply] = useState<string | null>(null);
   const [characterSources, setCharacterSources] = useState<{ title: string; url: string }[]>([]);
   const [characterError, setCharacterError] = useState<string | null>(null);
@@ -1278,8 +1279,7 @@ function App() {
   };
 
   const buildSystemPrompt = (slideId: string): string => {
-    const base = GEMINI_LIVE_SYSTEM_PROMPTS[slideId] ?? 'You are a helpful character. Keep replies brief.';
-    return base + '\nYou may use *asterisks* to describe physical actions and expressions (e.g. *roars proudly*, *holds up a fish*). These drive the character animation — do not speak them aloud, just include them in your response.';
+    return GEMINI_LIVE_SYSTEM_PROMPTS[slideId] ?? 'You are a helpful character. Keep replies brief.';
   };
 
   // Routes a parsed server message for the current Gemini Live session.
@@ -2194,44 +2194,51 @@ function App() {
         </header>
 
         {isCharacterSlide ? (
-          <aside className="einstein-chat">
-            <div className="einstein-chat-header">{activeCharacterName} Chat</div>
-            <div className="einstein-chat-body">
-              {activeCharacterHistory.slice(-8).map((msg, idx) => (
-                <div
-                  key={`${msg.role}-${idx}`}
-                  className={`einstein-chat-line ${msg.role === 'user' ? 'user' : 'assistant'}`}
-                >
-                  <span className="einstein-chat-role">{msg.role === 'user' ? 'You' : activeCharacterName}:</span>
-                  <span className="einstein-chat-text">{msg.content}</span>
-                </div>
-              ))}
-              {characterReply && !activeCharacterHistory.some((m) => m.content === characterReply) ? (
-                <div className="einstein-chat-line assistant">
-                  <span className="einstein-chat-role">{activeCharacterName}:</span>
-                  <span className="einstein-chat-text">{characterReply}</span>
-                  {characterSources.length > 0 && (
-                    <div className="chat-sources">
-                      {characterSources.map((s, i) => (
-                        <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" className="chat-source-link">{s.title}</a>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ) : null}
-            </div>
+          <aside className={`einstein-chat ${chatExpanded ? 'einstein-chat--open' : ''}`}>
+            <button className="einstein-chat-header" onClick={() => setChatExpanded((e) => !e)}>
+              <span>{activeCharacterName} Chat</span>
+              <span className="einstein-chat-toggle">{chatExpanded ? '▾' : '▸'}</span>
+            </button>
+            {chatExpanded && (
+              <div className="einstein-chat-body">
+                {activeCharacterHistory.slice(-8).map((msg, idx) => (
+                  <div
+                    key={`${msg.role}-${idx}`}
+                    className={`einstein-chat-line ${msg.role === 'user' ? 'user' : 'assistant'}`}
+                  >
+                    <span className="einstein-chat-role">{msg.role === 'user' ? 'You' : activeCharacterName}:</span>
+                    <span className="einstein-chat-text">{msg.content}</span>
+                  </div>
+                ))}
+                {characterReply && !activeCharacterHistory.some((m) => m.content === characterReply) ? (
+                  <div className="einstein-chat-line assistant">
+                    <span className="einstein-chat-role">{activeCharacterName}:</span>
+                    <span className="einstein-chat-text">{characterReply}</span>
+                    {characterSources.length > 0 && (
+                      <div className="chat-sources">
+                        {characterSources.map((s, i) => (
+                          <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" className="chat-source-link">{s.title}</a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            )}
           </aside>
         ) : null}
 
         <main className="slide-shell" />
 
-        <footer className="story-bar">
-          <div className="story-text">
-            <p>{slide.body}</p>
-            {speechError ? <div className="speech-preview speech-error">{speechError}</div> : null}
-            {characterError ? <div className="speech-preview speech-error">{characterError}</div> : null}
-            {moderationError ? <div className="speech-preview speech-error">{moderationError}</div> : null}
-          </div>
+        <footer className={`story-bar ${isCharacterSlide ? 'story-bar--compact' : ''}`}>
+          {!isCharacterSlide ? (
+            <div className="story-text">
+              <p>{slide.body}</p>
+              {speechError ? <div className="speech-preview speech-error">{speechError}</div> : null}
+              {characterError ? <div className="speech-preview speech-error">{characterError}</div> : null}
+              {moderationError ? <div className="speech-preview speech-error">{moderationError}</div> : null}
+            </div>
+          ) : null}
           <div className="story-actions">
             {isCharacterSlide ? (
               isCharacterRecording ? (
