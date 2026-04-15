@@ -5,7 +5,7 @@
       "title": "Alexander",
       "subtitle": "Character 01",
       "body": "Alexander the Great, bold strategist and fearless leader.",
-      "image": "/images/characters/Alexander.png",
+      "image": "/images/character-background/alexander2.png",
       "prompt": "Animate it",
       "cta": "Animate it",
       "greeting": "I have crossed deserts and mountains to be here. What would you ask of me?"
@@ -15,7 +15,7 @@
       "title": "Steve the Bear",
       "subtitle": "Character 02",
       "body": "A wise, gentle bear with a warm, storytime presence.",
-      "image": "/images/characters/bear.png",
+      "image": "/images/character-background/bear2.png",
       "prompt": "Animate it",
       "cta": "Animate it",
       "greeting": "Oh hello there! Pull up a log and get comfortable. What shall we talk about?"
@@ -25,7 +25,7 @@
       "title": "Circus Lion",
       "subtitle": "Character 03",
       "body": "A cheerful circus lion grins, ready for the big show.",
-      "image": "/images/characters/circus lion.png",
+      "image": "/images/character-background/circus-lion-2.png",
       "prompt": "Animate it",
       "cta": "Animate it",
       "greeting": "The crowd is ready and so am I! Ask me anything — the show must go on!"
@@ -35,7 +35,7 @@
       "title": "Cleopatra",
       "subtitle": "Character 04",
       "body": "Cleopatra, the last Pharaoh, regal and strategic.",
-      "image": "/images/characters/cleopatra.png",
+      "image": "/images/character-background/cleopetra-2.png",
       "prompt": "Animate it",
       "cta": "Animate it",
       "greeting": "You stand before the Queen of the Nile. Choose your words wisely — or freely. I am listening."
@@ -45,7 +45,7 @@
       "title": "Da Vinci",
       "subtitle": "Character 05",
       "body": "Leonardo da Vinci, artist-inventor with boundless curiosity.",
-      "image": "/images/characters/da vinci.png",
+      "image": "/images/character-background/da-vinci-2.png",
       "prompt": "Animate it",
       "cta": "Animate it",
       "greeting": "Every conversation is a new sketch. What shall we explore together?"
@@ -55,7 +55,7 @@
       "title": "Albert Einstein",
       "subtitle": "Character 06",
       "body": "Albert Einstein appears with curious eyes and a mind full of ideas.",
-      "image": "/images/characters/einstein.png",
+      "image": "/images/character-background/einstein2.png",
       "prompt": "Animate it",
       "cta": "Animate it",
       "greeting": "Imagination is more important than knowledge. So — what are you imagining today?"
@@ -65,7 +65,7 @@
       "title": "Grandpa Turtle",
       "subtitle": "Character 07",
       "body": "Grandpa Turtle, slow and thoughtful, sharing patient wisdom.",
-      "image": "/images/characters/grandpa turtle.png",
+      "image": "/images/character-background/grandpa-turtle-2.png",
       "prompt": "Animate it",
       "cta": "Animate it",
       "greeting": "Ahh... a visitor. Sit with me a while. There is no hurry. What is on your mind?"
@@ -75,7 +75,7 @@
       "title": "Steve Jobs",
       "subtitle": "Character 09",
       "body": "Steve Jobs, minimalist visionary obsessed with product and craft.",
-      "image": "/images/characters/steve jobs.png",
+      "image": "/images/character-background/steve-jobs-2.png",
       "prompt": "Animate it",
       "cta": "Animate it",
       "greeting": "The people who are crazy enough to think they can change the world are the ones who do. Are you one of them?"
