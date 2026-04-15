@@ -5,6 +5,7 @@ import type { ConnectionStatus } from '@odysseyml/odyssey';
 import charactersData from './data/characters.json';
 import { trackEvent } from './lib/analytics';
 import { OdysseyService, credentialsFromDict, loadImageFile, type ClientCredentials, type StreamState } from './lib/odyssey';
+import { SEO_PAGES, applySeo } from './lib/seo';
 import './App.css';
 
 // Debug logger — silent by default in production.
@@ -81,6 +82,7 @@ function App() {
   const [showLanding, setShowLanding] = useState(true);
   const [showAbout, setShowAbout] = useState(false);
   const [showContact, setShowContact] = useState(false);
+  const [showVideoModal, setShowVideoModal] = useState(false);
   const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(characters[0]?.id ?? null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [streamState, setStreamState] = useState<StreamState>('idle');
@@ -103,6 +105,8 @@ function App() {
   const [uploadImage, setUploadImage] = useState<File | null>(null);
   const [_uploadError, setUploadError] = useState<string | null>(null);
   const [voiceStatus, setVoiceStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
+  const [isMusicEnabled, setIsMusicEnabled] = useState(false);
+  const [isMusicPlaying, setIsMusicPlaying] = useState(false);
   const [, setVoiceError] = useState<string | null>(null);
   const [, setLastVoiceText] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -113,6 +117,7 @@ function App() {
   const characterStreamRef = useRef<MediaStream | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const backgroundAudioRef = useRef<HTMLAudioElement | null>(null);
   const serviceRef = useRef<OdysseyService | null>(null);
   const odysseyLeaseIdRef = useRef<string | null>(null);
   const odysseyHeartbeatRef = useRef<number | null>(null);
@@ -124,7 +129,12 @@ function App() {
   const streamActiveRef = useRef(false); // Set directly in Odyssey callbacks — no React cycle
   const dataChannelReadyRef = useRef(false); // true only after onConnected fires; false when reconnecting
   const pendingStartRef = useRef<(() => Promise<void>) | null>(null); // startStream fn waiting for onConnected
+  const startStreamInFlightRef = useRef(false); // true while startStream is awaited — blocks re-entrant calls
+  const streamEndResolverRef = useRef<(() => void) | null>(null); // resolves when onStreamEnded fires during a transition
   const isVoiceAgentSlideRef = useRef(false);
+  const greetedCharactersRef = useRef<Set<string>>(new Set()); // tracks which characters have greeted this session
+  const ttsSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const ttsAbortRef = useRef<AbortController | null>(null);
   const lastVoiceActionAtRef = useRef(0);
   const handleInteractRef = useRef<(promptOverride?: string) => void>(() => undefined);
   const ttsAudioCtxRef = useRef<AudioContext | null>(null);
@@ -230,6 +240,47 @@ function App() {
   const activeCharacterHistory = slide ? characterHistory[slide.id] ?? [] : [];
   const slideCtaRef = useRef('');
 
+  const handleMusicToggle = () => {
+    const audio = backgroundAudioRef.current;
+    if (!audio) return;
+
+    if (isMusicEnabled) {
+      setIsMusicEnabled(false);
+      audio.pause();
+      return;
+    }
+
+    setIsMusicEnabled(true);
+    void audio.play().catch(() => undefined);
+  };
+
+  const backgroundMusicNode = (
+    <audio
+      ref={backgroundAudioRef}
+      src="/background-music.mpeg"
+      preload="auto"
+      aria-hidden="true"
+    />
+  );
+
+  const musicToggleButton = (
+    <button
+      type="button"
+      className={`music-toggle ${isMusicPlaying ? 'is-playing' : 'is-paused'}`}
+      onClick={handleMusicToggle}
+      aria-label={isMusicPlaying ? 'Pause background music' : 'Play background music'}
+      aria-pressed={isMusicPlaying}
+    >
+      <span className="music-toggle-bars" aria-hidden="true">
+        <span className="music-bar" />
+        <span className="music-bar" />
+        <span className="music-bar" />
+        <span className="music-bar" />
+        <span className="music-bar" />
+      </span>
+    </button>
+  );
+
 
   useEffect(() => {
     const syncFromLocation = () => {
@@ -265,6 +316,123 @@ function App() {
       characterId: showLanding ? null : selectedCharacterId,
     });
   }, [selectedCharacterId, showAbout, showContact, showLanding]);
+
+  useEffect(() => {
+    if (showAbout) {
+      applySeo(SEO_PAGES.about);
+      return;
+    }
+    if (showContact) {
+      applySeo(SEO_PAGES.contact);
+      return;
+    }
+    applySeo(SEO_PAGES.home);
+  }, [showAbout, showContact]);
+
+  useEffect(() => {
+    const audio = backgroundAudioRef.current;
+    if (!audio) return;
+
+    audio.volume = 1; // gain is controlled by the Web Audio graph below
+    audio.loop = true;
+
+    // Shape the background music to feel ambient and non-intrusive:
+    // - Low gain so it sits well beneath any foreground sound
+    // - Low-shelf cut reduces boomy low-end that feels imposing
+    // - High-shelf cut softens brightness that draws attention
+    // - Mid scoop pulls back the 1–3kHz "presence" range so it
+    //   doesn't compete with voices or feel like it's "speaking"
+    const ctx = new AudioContext();
+    const source = ctx.createMediaElementSource(audio);
+
+    const gain = ctx.createGain();
+    gain.gain.value = 0.10;
+
+    const lowShelf = ctx.createBiquadFilter();
+    lowShelf.type = 'lowshelf';
+    lowShelf.frequency.value = 220;
+    lowShelf.gain.value = -9;
+
+    const highShelf = ctx.createBiquadFilter();
+    highShelf.type = 'highshelf';
+    highShelf.frequency.value = 5500;
+    highShelf.gain.value = -16;
+
+    const midScoop = ctx.createBiquadFilter();
+    midScoop.type = 'peaking';
+    midScoop.frequency.value = 1800;
+    midScoop.Q.value = 0.8;
+    midScoop.gain.value = -6;
+
+    source.connect(lowShelf);
+    lowShelf.connect(midScoop);
+    midScoop.connect(highShelf);
+    highShelf.connect(gain);
+    gain.connect(ctx.destination);
+
+    // AudioContext may be suspended until a user gesture — resume on first interaction
+    const resume = () => { void ctx.resume(); };
+    document.addEventListener('click', resume, { once: true });
+    document.addEventListener('keydown', resume, { once: true });
+
+    return () => {
+      document.removeEventListener('click', resume);
+      document.removeEventListener('keydown', resume);
+      ctx.close();
+    };
+  }, []);
+
+  useEffect(() => {
+    const audio = backgroundAudioRef.current;
+    if (!audio) return;
+
+    const syncPlaybackState = () => {
+      setIsMusicPlaying(!audio.paused);
+    };
+
+    audio.addEventListener('play', syncPlaybackState);
+    audio.addEventListener('pause', syncPlaybackState);
+    audio.addEventListener('ended', syncPlaybackState);
+
+    return () => {
+      audio.removeEventListener('play', syncPlaybackState);
+      audio.removeEventListener('pause', syncPlaybackState);
+      audio.removeEventListener('ended', syncPlaybackState);
+    };
+  }, []);
+
+  useEffect(() => {
+    const audio = backgroundAudioRef.current;
+    if (!audio) return;
+
+    const shouldPlay = showLanding && isMusicEnabled;
+    if (!shouldPlay) {
+      audio.pause();
+      return;
+    }
+
+    const attemptPlay = () => {
+      void audio.play().catch(() => undefined);
+    };
+
+    attemptPlay();
+
+    const retryOnInteraction = () => {
+      attemptPlay();
+      if (!audio.paused) {
+        window.removeEventListener('pointerdown', retryOnInteraction);
+        window.removeEventListener('keydown', retryOnInteraction);
+      }
+    };
+
+    window.addEventListener('pointerdown', retryOnInteraction);
+    window.addEventListener('keydown', retryOnInteraction);
+
+    return () => {
+      window.removeEventListener('pointerdown', retryOnInteraction);
+      window.removeEventListener('keydown', retryOnInteraction);
+    };
+  }, [showLanding, isMusicEnabled]);
 
   useEffect(() => {
     if (showLanding) return; // Wait until user has selected a character before connecting
@@ -316,6 +484,25 @@ function App() {
   useEffect(() => {
     isStreamingReadyRef.current = isStreamingReady;
   }, [isStreamingReady]);
+
+  // Fire a character greeting once per session, only after the stream is ready.
+  // greetedCharactersRef guards against re-firing when the effect re-runs.
+  useEffect(() => {
+    if (!isStreamingReady) return;
+    const charId = slide.id;
+    const greeting = slide.greeting;
+    if (!greeting || greetedCharactersRef.current.has(charId)) return;
+
+    greetedCharactersRef.current.add(charId);
+    setCharacterReply(greeting);
+    setCharacterHistory((prev) => ({
+      ...prev,
+      [charId]: [...(prev[charId] ?? []), { role: 'assistant', content: greeting }],
+    }));
+    handleInteractRef.current('smile and wave hello warmly');
+    // TTS is best-effort — AudioContext may be suspended until first user gesture
+    playCharacterTTS(greeting, charId).catch(() => undefined);
+  }, [isStreamingReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     isVoiceAgentSlideRef.current = isVoiceAgentSlide;
@@ -374,12 +561,12 @@ function App() {
       .connect({
         onConnected: (stream) => {
           debug('[odyssey] onConnected — stream:', stream);
-          // Set 'connected' here (not in onStatusChange) so the startStream
-          // useEffect only fires after the data channel is open and ready.
+          // Set 'connected' here (not in onStatusChange) so startStream is only
+          // called after the data channel is open and ready.
           dataChannelReadyRef.current = true;
           setConnectionStatus('connected');
-          // If the effect fired before the data channel was ready (stale connectionStatus),
-          // it stored its start function here. Call it now — no React re-render needed.
+          // If run() fired before the data channel was ready it stored its start fn here.
+          // Call it directly — no React re-render, no effect re-run, exactly one startStream.
           const pending = pendingStartRef.current;
           if (pending) {
             pendingStartRef.current = null;
@@ -423,6 +610,14 @@ function App() {
           streamActiveRef.current = false;
           setStreamState('ended');
           setIsStreamingReady(false);
+          // If run() is waiting for the previous stream to fully end before calling
+          // startStream on the new character, unblock it now.
+          const resolve = streamEndResolverRef.current;
+          streamEndResolverRef.current = null;
+          if (resolve) {
+            resolve();
+            return; // Skip auto-restart — a new startStream is already queued
+          }
           // Auto-restart the stream so interact() keeps working
           if (retryStreamRef.current) {
             debug('[odyssey] auto-restarting stream after end');
@@ -436,17 +631,25 @@ function App() {
         onStreamError: (reason, message) => {
           console.error('[odyssey] onStreamError:', reason, message);
           streamActiveRef.current = false;
-          setStreamState('error');
-          setIsStreamingReady(false);
           const r = typeof reason === 'string' ? reason : JSON.stringify(reason);
           const m = typeof message === 'string' ? message : JSON.stringify(message);
           if (r === 'moderation_failed') {
+            // 'Failed to run content moderation' = the moderation service itself failed
+            // (capacity/transition artifact during i2v session setup, not a content rejection).
+            // The SDK will reconnect and Effect 2 will retry — suppress all error UI.
+            if (m === 'Failed to run content moderation') {
+              setStreamState('starting');
+              return;
+            }
+            // Real content moderation rejection — log analytics, retry silently up to 3×, then surface.
             logEvent('moderation_blocked', {
               reason: r,
               message: m,
               characterId: slide.id,
               characterName: activeCharacterName,
             });
+            setStreamState('error');
+            setIsStreamingReady(false);
             if (moderationRetryCountRef.current < 3 && retryStreamRef.current) {
               moderationRetryCountRef.current++;
               debug(`[odyssey] moderation_failed — retrying (attempt ${moderationRetryCountRef.current})`);
@@ -470,6 +673,8 @@ function App() {
             characterId: slide.id,
             characterName: activeCharacterName,
           });
+          setStreamState('error');
+          setIsStreamingReady(false);
           setError(`${r}: ${m}`);
         },
         onInteractAcknowledged: (prompt) => {
@@ -546,7 +751,17 @@ function App() {
       }
 
       if (hadActiveStream) {
-        await service.endStream().catch(() => undefined);
+        // Wait for onStreamEnded, not just endStream() — the SDK needs the stream fully
+        // torn down before it can accept a new startStream. Calling startStream while the
+        // previous stream is still cleaning up internally causes an extra reconnect cycle.
+        await new Promise<void>((resolve) => {
+          streamEndResolverRef.current = resolve;
+          service.endStream().catch(() => {
+            // endStream failed — clear resolver and unblock immediately
+            streamEndResolverRef.current = null;
+            resolve();
+          });
+        });
       }
 
       const cached = imageCacheRef.current.get(slide.id);
@@ -559,14 +774,13 @@ function App() {
       }
 
       const streamOptions = { prompt: slide.prompt, image: file, portrait: slide.id === 'characters-sudharshan' };
-      // retryStreamRef is set AFTER startStream resolves, not before.
-      // Setting it before would let onStreamEnded fire a concurrent startStream while the
-      // initial call is still in-flight (endStream → onStreamEnded → retry races run()).
+      // retryStreamRef is set AFTER startStream resolves — prevents onStreamEnded (macrotask from
+      // previous endStream) from racing with the initial call and triggering a double startStream → deadlock.
 
       // Guard: data channel must be confirmed open (onConnected fired) before startStream.
-      // If not ready, store as pending — onConnected will call it directly (no React re-render).
-      // Using pendingStartRef avoids a feedback loop:
-      // startStream → SDK reconnects → onConnected → effect re-runs → second startStream → deadlock.
+      // If not ready, store the start fn — onConnected will call it directly (no React re-render).
+      // This avoids the connectionEpoch feedback loop:
+      // startStream → SDK reconnects → onConnected → epoch bump → second startStream → deadlock.
       if (!dataChannelReadyRef.current) {
         debug('[odyssey] data channel not ready — queuing startStream for onConnected');
         pendingStartRef.current = async () => {
@@ -581,8 +795,19 @@ function App() {
       }
       pendingStartRef.current = null;
       if (requestIdRef.current !== requestId) return;
+      // Mutex: if a startStream is already awaiting (e.g. triggered by a stale effect re-run from
+      // onConnected → setConnectionStatus), bail out — the in-flight call will resolve or retry.
+      if (startStreamInFlightRef.current) {
+        debug('[odyssey] startStream already in flight — skipping duplicate call');
+        return;
+      }
+      startStreamInFlightRef.current = true;
       debug('[odyssey] calling startStream — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
-      await service.startStream(streamOptions);
+      try {
+        await service.startStream(streamOptions);
+      } finally {
+        startStreamInFlightRef.current = false;
+      }
       debug('[odyssey] startStream resolved');
       if (requestIdRef.current === requestId) {
         retryStreamRef.current = () => service.startStream(streamOptions).then(() => undefined);
@@ -593,10 +818,16 @@ function App() {
       if (requestIdRef.current !== requestId) {
         return;
       }
+      startStreamInFlightRef.current = false;
       setStreamState('error');
       setIsStreamingReady(false);
       setError(err instanceof Error ? err.message : String(err));
     });
+
+    return () => {
+      startStreamInFlightRef.current = false;
+      pendingStartRef.current = null;
+    };
   }, [connectionStatus, showLanding, selectedCharacterId, slide.id, slide.image, slide.prompt, isUploadSlide]);
 
   // End the stream when the user navigates back to the landing page so the session isn't consumed idle.
@@ -613,6 +844,16 @@ function App() {
       streamActiveRef.current = false;
       serviceRef.current?.endStream().catch(() => undefined);
     }
+    // Stop any in-flight TTS fetch and active audio playback
+    ttsAbortRef.current?.abort();
+    ttsAbortRef.current = null;
+    try { ttsSourceRef.current?.stop(); } catch { /* already stopped */ }
+    ttsSourceRef.current = null;
+    // Clear the current character's chat state so returning starts fresh
+    const charId = slide.id;
+    setCharacterReply(null);
+    setCharacterHistory((prev) => { const next = { ...prev }; delete next[charId]; return next; });
+    greetedCharactersRef.current.delete(charId);
   }, [showLanding]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
@@ -647,6 +888,17 @@ function App() {
       characterStreamRef.current?.getTracks().forEach((track) => track.stop());
     };
   }, []);
+
+  useEffect(() => {
+    if (!localStorage.getItem('tutorial-seen')) {
+      setShowVideoModal(true);
+    }
+  }, []);
+
+  const handleCloseVideoModal = () => {
+    localStorage.setItem('tutorial-seen', '1');
+    setShowVideoModal(false);
+  };
 
   // If the Odyssey stream connected while the landing page was showing (video element
   // didn't exist yet), attach the stream now that the story view is rendered.
@@ -1544,7 +1796,9 @@ function App() {
       const slideVoiceId = slideId ? VOICE_BY_SLIDE_ID[slideId] : '';
       const resolvedVoiceId = slideVoiceId || null;
       debug('[tts] sending fetch to /api/character/tts, voiceId:', resolvedVoiceId ?? 'default');
+      ttsAbortRef.current?.abort();
       const ttsAbort = new AbortController();
+      ttsAbortRef.current = ttsAbort;
       const ttsClientTimeout = setTimeout(() => ttsAbort.abort(), 20000);
       let ttsRes: Response;
       try {
@@ -1627,6 +1881,8 @@ function App() {
           const source = ctx.createBufferSource();
           source.buffer = decoded;
           source.connect(ctx.destination);
+          ttsSourceRef.current = source;
+          source.onended = () => { ttsSourceRef.current = null; };
           source.start();
           debug('[tts] audio playback started');
         } catch (err) {
@@ -1670,7 +1926,8 @@ function App() {
         latencyMs: Date.now() - chatStartedAt,
         status: chatResponse.status,
       });
-      throw new Error('Character response failed');
+      const errBody = await chatResponse.json().catch(() => ({})) as { error?: string; detail?: string };
+      throw new Error(`Character response failed: ${errBody.detail || errBody.error || chatResponse.status}`);
     }
 
     const chatData = await chatResponse.json() as { reply?: string; action?: string; objects?: string[]; sources?: { title: string; url: string }[] };
@@ -1968,6 +2225,7 @@ function App() {
   if (showLanding && showAbout) {
     return (
       <div className="app landing-shell about-page">
+        {backgroundMusicNode}
         <div className="landing-hero">
           <div className="landing-hero-bg" aria-hidden />
           <header className="landing-topbar">
@@ -1989,14 +2247,7 @@ function App() {
             <div className="landing-actions">
               <a
                 className="btn primary"
-                href="/contact"
-                onClick={(event) => {
-                  event.preventDefault();
-                  setShowContact(true);
-                  setShowAbout(false);
-                  setShowLanding(true);
-                  window.history.pushState({}, '', '/contact');
-                }}
+                href="mailto:hello.interactstudio@gmail.com"
               >
                 Get in touch
               </a>
@@ -2004,13 +2255,53 @@ function App() {
           </header>
           <section className="landing-intro">
             <p className="eyebrow">About us</p>
-            <h1 className="hero-title">We build worlds that listen.</h1>
-            <p className="landing-subtitle">
-              Interact Studio is an experiment in live storytelling. We blend world models,
-              generative media, and voice to create characters that feel present, responsive,
-              and emotionally expressive. Our goal is simple: make conversation move the world.
-            </p>
+            <h1 className="hero-title">
+              we’re building media
+              <br />
+              that actually responds
+            </h1>
+            <div className="about-content">
+              <p className="about-lead">
+                Content is becoming abundant, but it is still static. You sit there and watch.
+              </p>
+              <p className="about-copy">We think that model is running out of road.</p>
+              <p className="about-copy">
+                We are building real-time interactive video where you can talk to characters and
+                change what happens as the experience unfolds.
+              </p>
+              <p className="about-copy">
+                The story shifts. The environment reacts. The flow changes with you.
+              </p>
+              <p className="about-copy">
+                It feels less like watching something and more like being inside it.
+              </p>
+              <p className="about-copy">
+                We are a small team building quickly across world models, synthetic data, and
+                real-time systems, getting early versions into people&apos;s hands and iterating
+                fast.
+              </p>
+              <div className="about-why">
+                <h2 className="about-why-title">why we're building this</h2>
+                <p className="about-copy">
+                  Content is exploding, but the experience of it is still mostly passive.
+                </p>
+                <p className="about-copy">
+                  We think the next step is media that listens, reacts, and changes with you.
+                </p>
+              </div>
+              <p className="about-copy">
+                <a
+                  className="about-link"
+                  href="https://open.substack.com/pub/maxmill06/p/everything-youve-ever-watched-is?r=3xodvz&utm_campaign=post&utm_medium=web&showWelcomeOnShare=true"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  read more
+                </a>
+              </p>
+            </div>
           </section>
+          {musicToggleButton}
         </div>
       </div>
     );
@@ -2020,6 +2311,7 @@ function App() {
     const contactEmail = 'hello.interactstudio@gmail.com';
     return (
       <div className="app landing-shell contact-page">
+        {backgroundMusicNode}
         <div className="landing-hero">
           <div className="landing-hero-bg" aria-hidden />
           <header className="landing-topbar">
@@ -2061,6 +2353,7 @@ function App() {
               Email us at <span className="contact-email">{contactEmail}</span> and we will get back to you.
             </p>
           </section>
+          {musicToggleButton}
         </div>
       </div>
     );
@@ -2069,6 +2362,7 @@ function App() {
   if (showLanding) {
     return (
       <div className="app landing-shell">
+        {backgroundMusicNode}
         <div className="landing-hero">
           <div className="landing-hero-bg" aria-hidden />
           <header className="landing-topbar">
@@ -2103,14 +2397,7 @@ function App() {
               </a>
               <a
                 className="btn primary"
-                href="/contact"
-                onClick={(event) => {
-                  event.preventDefault();
-                  setShowContact(true);
-                  setShowAbout(false);
-                  setShowLanding(true);
-                  window.history.pushState({}, '', '/contact');
-                }}
+                href="mailto:hello.interactstudio@gmail.com"
               >
                 Get in touch
               </a>
@@ -2118,12 +2405,24 @@ function App() {
           </header>
 
           <section className="landing-intro">
-            <p className="eyebrow">Interactive media</p>
-            <h1 className="hero-title">Talk to characters</h1>
+            <p className="eyebrow">REAL-TIME INTERACTIVE VIDEO</p>
+            <h1 className="hero-title">Media that responds to you</h1>
             <p className="landing-subtitle">
-              Watch the world respond in real time.
+              Speak to characters, shift the scene, and shape the experience as it unfolds.
             </p>
+            <button
+              type="button"
+              className="hero-demo-btn"
+              onClick={() => setShowVideoModal(true)}
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+                <circle cx="7" cy="7" r="6.5" stroke="currentColor"/>
+                <path d="M5.5 4.5L10 7L5.5 9.5V4.5Z" fill="currentColor"/>
+              </svg>
+              Watch a conversation
+            </button>
           </section>
+          {musicToggleButton}
         </div>
 
         <main className="landing-body">
@@ -2166,6 +2465,30 @@ function App() {
             <div className="landing-footer-line" />
           </footer>
         </main>
+
+        {showVideoModal && (
+          <div className="video-modal-overlay" onClick={handleCloseVideoModal}>
+            <div className="video-modal" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                className="video-modal-close"
+                onClick={handleCloseVideoModal}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+              <video
+                className="video-modal-player"
+                src="/Starter-Demo.mp4"
+                autoPlay
+                muted
+                controls
+                playsInline
+                onEnded={handleCloseVideoModal}
+              />
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -2179,7 +2502,7 @@ function App() {
           aria-hidden
         />
         <div
-          className={`stream-placeholder ${streamState === 'streaming' ? 'hidden' : ''}`}
+          className={`stream-placeholder ${streamState === 'streaming' ? 'hidden' : ''} ${!isStreamingReady && streamState !== 'error' ? 'is-loading' : ''}`}
           style={{ backgroundImage: `url("${slideImageUrl}")` }}
           aria-hidden
         />
@@ -2191,6 +2514,12 @@ function App() {
           muted
         />
         <div className="video-overlay" />
+        {!isStreamingReady && streamState !== 'error' && (
+          <div className="stream-loading-badge" aria-live="polite">
+            <span className="stream-loading-dot" aria-hidden />
+            Waking up {activeCharacterName}…
+          </div>
+        )}
       </div>
 
       <div className="ui">
