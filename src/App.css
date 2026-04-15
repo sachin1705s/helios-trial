@@ -1,5 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@300;400;600;700&family=Work+Sans:wght@300;400;500;600;700&display=swap');
-
 .app {
   position: relative;
   min-height: 100vh;
@@ -397,7 +395,7 @@
   flex-direction: column;
   align-items: center;
   align-self: center;
-  max-width: 300px;
+  max-width: 360px;
   width: 100%;
   padding: 6px 12px;
 }
@@ -437,7 +435,7 @@
 }
 
 .einstein-chat-toggle {
-  font-size: 1rem;
+  font-size: 2rem;
   opacity: 0.6;
 }
 
