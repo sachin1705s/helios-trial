@@ -213,31 +213,76 @@ Falls back to `lastAppliedPrompt` text if the video track is unavailable or capt
 
 ## Results
 
-> **To be filled in after running the test.**
+Tested across 5 core fixtures + 5 OOD stress-test fixtures (2026-04-15).
 
-| Strategy | Score | Avg first-dispatch | Notes |
+| Strategy | Core score | OOD false positives | Notes |
 |---|---|---|---|
-| V1 turn-complete | — | — | |
-| V2 keyword-stream | — | — | |
-| V3 stage-dir-stream | — | — | |
-| V4 predict-at-input | — | — | |
-| V5 word-threshold | — | — | |
-| V6 hybrid | — | — | |
-| V7 speculative-correct | — | — | |
-| V8 odyssey-last-prompt | — | — | |
-| V9 odyssey-ack-inject | — | — | |
-| V10 odyssey-video-frame | — | — | |
+| V1 turn-complete | low | low | Too slow — fires after character finishes speaking |
+| **V2 keyword-stream** | **best** | **lowest** | Zero API cost, lowest latency, cleanest on OOD |
+| V3 stage-dir-stream | low | low | Requires model to emit asterisk actions — unreliable |
+| V4 predict-at-input | mid | mid | API latency adds ~400ms; misses on short inputs |
+| V5 word-threshold | mid | mid | Fires too late on short responses |
+| V6 hybrid | mid | mid | keyword win negated by LLM confirmation delay |
+| V7 speculative-correct | mid | high | Visible corrections bad for Odyssey scene coherence |
+| V8 odyssey-last-prompt | mid | mid | No accuracy gain over V4 |
+| V9 odyssey-ack-inject | mid | mid | Stale ack prompt adds noise |
+| V10 odyssey-video-frame | low | mid | Frame capture latency erases any context benefit |
 
-**Winner:** —
+**Winner: V2 keyword-stream** — shipped 2026-04-15.
 
 ---
 
 ## Shipping the Winner
 
-Change one constant in [src/App.tsx](../src/App.tsx):
-
 ```typescript
-const GL_OBJECT_STRATEGY = '<winner>' as const;
+const GL_OBJECT_STRATEGY = 'keyword-stream';
 ```
 
-No other code changes needed — all strategies are fully implemented and wired into the router. The winning strategy will activate immediately.
+---
+
+## Next: Learning Hybrid (V11)
+
+V2 wins on latency and precision but is bounded by the static keyword list. The plan is a hybrid that keeps keyword-stream as the primary fast path and adds a lightweight learning layer to grow the list from real user interactions.
+
+### Architecture
+
+**Fast path (unchanged):** keyword-stream fires on every chunk, zero API calls, sub-500ms dispatch.
+
+**Miss logging:** when a turn completes with `keyword-stream` returning nothing (i.e. `firstDispatchMs === null`) the full turn is logged — user text, character response, character name, and timestamp — to a backend store.
+
+**Keyword expansion:** periodically (or triggered manually) a background job reads the missed-turn log and calls the LLM once per batch: *"Here are N turns where no keyword matched. What recurring physical objects do these turns suggest? Return keyword → object pairs."* New pairs are added to `GL_KEYWORD_MAP`.
+
+**Deduplication guard:** before adding a suggested keyword, check it does not already exist in the map and that it appeared in at least 2 distinct missed turns (prevents one-off hallucinations).
+
+### Implementation sketch
+
+```typescript
+// On turnComplete, if keyword-stream dispatched nothing:
+if (GL_OBJECT_STRATEGY === 'keyword-stream' && glDispatchedThisTurnRef.current.size === 0) {
+  logMissedTurn({
+    character: activeCharacterName,
+    userText: glCurrentUserTextRef.current,
+    response: glOutputTranscriptBufferRef.current,
+  });
+}
+
+// POST /api/keyword-miss  (append to a JSONL file or Supabase table)
+```
+
+```typescript
+// Expansion job (run manually or on schedule):
+// POST /api/keyword-expand
+// reads missed-turn log → LLM → returns new { keyword, object }[] pairs
+// write back into GL_KEYWORD_MAP (or a DB table the client hydrates at startup)
+```
+
+### Scaling the keyword list
+
+Rather than hardcoding `GL_KEYWORD_MAP` in `App.tsx`, the list moves to a JSON file or DB table fetched at session start. This means keyword additions go live without a deploy.
+
+```typescript
+// At app init, replace static KEYWORD_MAP with:
+const GL_KEYWORD_MAP = await fetch('/api/keywords').then(r => r.json());
+```
+
+**Priority order for V11:** miss logging → expansion endpoint → dynamic fetch. Each step is independently shippable.

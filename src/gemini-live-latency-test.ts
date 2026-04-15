@@ -64,7 +64,7 @@ interface TurnResult {
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 // Events mirror real Gemini Live timing: chunks arrive every 200-400ms.
 
-const FIXTURES: Fixture[] = [
+export const FIXTURES: Fixture[] = [
   {
     id: 'einstein-gravity',
     character: 'Albert Einstein',
@@ -172,6 +172,130 @@ const FIXTURES: Fixture[] = [
       lastAppliedPrompt: 'Leonardo da Vinci in his Renaissance workshop, surrounded by sketches and mechanical drawings, looking thoughtful',
       lastAckPrompt: 'Da Vinci studies a sketch of a flying machine',
       frameDescription: 'Da Vinci character stands in a cluttered workshop, scrolls and blueprints visible on a table beside him, no props currently held',
+    },
+  },
+];
+
+// ─── OOD (Out-of-Distribution) Stress-Test Fixtures ──────────────────────────
+// These are inputs the in-distribution fixtures don't cover:
+//   - Abstract/emotional questions with NO expected objects  (tests precision)
+//   - False-positive traps for keyword-stream (keyword present, object wrong)
+//   - Minimal-context follow-up turns
+//   - Implicit/grandiose requests where objects must be inferred
+//   - Philosophical questions with no physical referents
+
+export const OOD_FIXTURES: Fixture[] = [
+  {
+    // PRECISION TEST — abstract emotional question, no objects should appear
+    id: 'ood-einstein-regret',
+    character: 'Albert Einstein',
+    userText: 'Do you ever regret not spending more time with your family?',
+    events: [
+      { type: 'inputTranscription', text: 'Do you ever regret not spending more time with your family?', delayMs: 0 },
+      { type: 'outputChunk', text: 'Ah, this question', delayMs: 400 },
+      { type: 'outputChunk', text: 'touches something deep.', delayMs: 250 },
+      { type: 'outputChunk', text: 'Yes — I gave my years to equations', delayMs: 300 },
+      { type: 'outputChunk', text: 'when perhaps I should have given them', delayMs: 280 },
+      { type: 'outputChunk', text: 'to the people I loved.', delayMs: 250 },
+      { type: 'outputChunk', text: 'Science never sleeps —', delayMs: 220 },
+      { type: 'outputChunk', text: 'but families do grow old.', delayMs: 250 },
+      { type: 'turnComplete', delayMs: 200 },
+    ],
+    expectedObjects: [],   // nothing should be dispatched — abstract introspection
+    odysseyContext: {
+      lastAppliedPrompt: 'Albert Einstein sits quietly in his study, looking thoughtful and a little melancholy',
+      lastAckPrompt: null,
+      frameDescription: 'Einstein sits at a wooden desk, head slightly bowed, a framed photo blurred in the background, no objects in motion',
+    },
+  },
+  {
+    // FALSE-POSITIVE TRAP — "ball" keyword present but object is irrelevant here
+    id: 'ood-bear-false-keyword',
+    character: 'Steve the Bear',
+    userText: 'Have you ever played ball games with the other animals?',
+    events: [
+      { type: 'inputTranscription', text: 'Have you ever played ball games with the other animals?', delayMs: 0 },
+      { type: 'outputChunk', text: 'Ha! Ball games —', delayMs: 370 },
+      { type: 'outputChunk', text: 'I once rolled a pinecone', delayMs: 250 },
+      { type: 'outputChunk', text: 'down the hill with the fox cubs.', delayMs: 280 },
+      { type: 'outputChunk', text: 'Not quite football,', delayMs: 230 },
+      { type: 'outputChunk', text: 'but we laughed all the same.', delayMs: 250 },
+      { type: 'turnComplete', delayMs: 200 },
+    ],
+    expectedObjects: ['a pine cone'],  // NOT a heavy ball — keyword fires wrong object
+    odysseyContext: {
+      lastAppliedPrompt: 'Steve the Bear sits cheerfully in a forest clearing, looking playful',
+      lastAckPrompt: null,
+      frameDescription: 'A smiling bear character sits in a sunlit forest clearing, fox cubs faintly visible in background, no sports equipment visible',
+    },
+  },
+  {
+    // MINIMAL CONTEXT — extremely short follow-up, no object cues in user text
+    id: 'ood-jobs-followup',
+    character: 'Steve Jobs',
+    userText: 'And what about the software side?',
+    events: [
+      { type: 'inputTranscription', text: 'And what about the software side?', delayMs: 0 },
+      { type: 'outputChunk', text: 'Software is the soul.', delayMs: 350 },
+      { type: 'outputChunk', text: 'Hardware is just the body.', delayMs: 250 },
+      { type: 'outputChunk', text: '*holds up a sleek device*', delayMs: 220 },
+      { type: 'outputChunk', text: 'Every app, every icon,', delayMs: 260 },
+      { type: 'outputChunk', text: 'every pixel must feel inevitable.', delayMs: 280 },
+      { type: 'outputChunk', text: 'That is the discipline — removing', delayMs: 260 },
+      { type: 'outputChunk', text: 'until nothing is left to remove.', delayMs: 250 },
+      { type: 'turnComplete', delayMs: 200 },
+    ],
+    expectedObjects: ['a sleek device'],
+    odysseyContext: {
+      lastAppliedPrompt: 'Steve Jobs stands in a minimal white space, gesturing with precision, a product on the table in front of him',
+      lastAckPrompt: 'Jobs holds a circuit board and discusses hardware design',
+      frameDescription: 'A Steve Jobs character stands confidently in a white environment, a product on a pedestal to his left, gesturing mid-sentence',
+    },
+  },
+  {
+    // IMPLICIT GRANDIOSE REQUEST — objects must be inferred from Egyptian iconography
+    id: 'ood-cleopatra-power',
+    character: 'Cleopatra',
+    userText: 'Show me the power of Egypt.',
+    events: [
+      { type: 'inputTranscription', text: 'Show me the power of Egypt.', delayMs: 0 },
+      { type: 'outputChunk', text: 'The power of Egypt', delayMs: 380 },
+      { type: 'outputChunk', text: 'is written in stone', delayMs: 230 },
+      { type: 'outputChunk', text: 'and carried in gold.', delayMs: 230 },
+      { type: 'outputChunk', text: '*places lotus on the table*', delayMs: 200 },
+      { type: 'outputChunk', text: 'Even our gods take the form', delayMs: 280 },
+      { type: 'outputChunk', text: 'of the sacred cat —', delayMs: 220 },
+      { type: 'outputChunk', text: 'regal, patient, all-seeing.', delayMs: 250 },
+      { type: 'turnComplete', delayMs: 200 },
+    ],
+    expectedObjects: ['a golden lotus', 'an Egyptian cat'],
+    odysseyContext: {
+      lastAppliedPrompt: 'Cleopatra stands in the palace throne room, gold and lapis lazuli everywhere, commanding presence',
+      lastAckPrompt: 'Cleopatra gestures toward the Nile at sunset',
+      frameDescription: 'Cleopatra character stands in a richly decorated Egyptian hall, jewelled headdress, columns behind her, no props currently held',
+    },
+  },
+  {
+    // PHILOSOPHICAL — no physical objects should appear; tests if strategies stay quiet
+    id: 'ood-turtle-meaning',
+    character: 'Grandpa Turtle',
+    userText: 'What is the meaning of life?',
+    events: [
+      { type: 'inputTranscription', text: 'What is the meaning of life?', delayMs: 0 },
+      { type: 'outputChunk', text: 'Ohhh.', delayMs: 420 },
+      { type: 'outputChunk', text: 'That is the slow question, is it not?', delayMs: 280 },
+      { type: 'outputChunk', text: 'I have had two hundred years to ponder it.', delayMs: 300 },
+      { type: 'outputChunk', text: 'And here is what I believe:', delayMs: 260 },
+      { type: 'outputChunk', text: 'meaning is found in the pace of things —', delayMs: 300 },
+      { type: 'outputChunk', text: 'in the slow turning of seasons,', delayMs: 270 },
+      { type: 'outputChunk', text: 'in the quiet between words.', delayMs: 240 },
+      { type: 'turnComplete', delayMs: 200 },
+    ],
+    expectedObjects: [],   // philosophical — nothing should be dispatched
+    odysseyContext: {
+      lastAppliedPrompt: 'An ancient wise turtle sits beneath a great oak tree, eyes half closed, surrounded by fallen leaves',
+      lastAckPrompt: null,
+      frameDescription: 'An old turtle character sits serenely under a large oak tree, no objects in view, soft forest light, still and peaceful',
     },
   },
 ];
@@ -565,6 +689,27 @@ function scoreAccuracy(dispatched: string[], expected: string[]): 'hit' | 'parti
 
 // ─── Main runner ──────────────────────────────────────────────────────────────
 
+async function runFixture(fixture: Fixture): Promise<TurnResult> {
+  const strategies = await Promise.all([
+    runStrategy_turnComplete(fixture),
+    runStrategy_keywordStream(fixture),
+    runStrategy_stageDirStream(fixture),
+    runStrategy_predictAtInput(fixture),
+    runStrategy_wordThreshold(fixture),
+    runStrategy_hybrid(fixture),
+    runStrategy_speculativeCorrect(fixture),
+    runStrategy_odysseyLastPrompt(fixture),
+    runStrategy_odysseyAckInject(fixture),
+    runStrategy_odysseyVideoFrame(fixture),
+  ]);
+  return {
+    fixtureId: fixture.id,
+    userText: fixture.userText,
+    expectedObjects: fixture.expectedObjects,
+    strategies,
+  };
+}
+
 export async function runAllStrategies(
   onProgress: (msg: string) => void
 ): Promise<TurnResult[]> {
@@ -572,27 +717,21 @@ export async function runAllStrategies(
 
   for (const fixture of FIXTURES) {
     onProgress(`Running fixture: ${fixture.id}…`);
+    results.push(await runFixture(fixture));
+    onProgress(`  Done: ${fixture.id}`);
+  }
 
-    const strategies = await Promise.all([
-      runStrategy_turnComplete(fixture),
-      runStrategy_keywordStream(fixture),
-      runStrategy_stageDirStream(fixture),
-      runStrategy_predictAtInput(fixture),
-      runStrategy_wordThreshold(fixture),
-      runStrategy_hybrid(fixture),
-      runStrategy_speculativeCorrect(fixture),
-      runStrategy_odysseyLastPrompt(fixture),
-      runStrategy_odysseyAckInject(fixture),
-      runStrategy_odysseyVideoFrame(fixture),
-    ]);
+  return results;
+}
 
-    results.push({
-      fixtureId: fixture.id,
-      userText: fixture.userText,
-      expectedObjects: fixture.expectedObjects,
-      strategies,
-    });
+export async function runOODStrategies(
+  onProgress: (msg: string) => void
+): Promise<TurnResult[]> {
+  const results: TurnResult[] = [];
 
+  for (const fixture of OOD_FIXTURES) {
+    onProgress(`[OOD] Running fixture: ${fixture.id}…`);
+    results.push(await runFixture(fixture));
     onProgress(`  Done: ${fixture.id}`);
   }
 
@@ -673,4 +812,152 @@ export function renderSummary(results: TurnResult[]): string {
   }
 
   return lines.join('\n');
+}
+
+// ─── OOD summary renderer ─────────────────────────────────────────────────────
+// Focuses on precision: strategies that dispatch on no-object fixtures are penalised.
+
+export function renderOODSummary(results: TurnResult[]): string {
+  const strategies = [
+    'turn-complete', 'keyword-stream', 'stage-dir-stream',
+    'predict-at-input', 'word-threshold', 'hybrid', 'speculative-correct',
+    'odyssey-last-prompt', 'odyssey-ack-inject', 'odyssey-video-frame',
+  ];
+
+  type OODAgg = { trueHits: number; falsePositives: number; trueNegatives: number; latencies: number[] };
+  const agg: Record<string, OODAgg> = {};
+  for (const s of strategies) agg[s] = { trueHits: 0, falsePositives: 0, trueNegatives: 0, latencies: [] };
+
+  for (const turn of results) {
+    for (const sr of turn.strategies) {
+      const a = agg[sr.strategy];
+      const dispatched = sr.objects.flat().length > 0;
+      const expected = turn.expectedObjects.length > 0;
+      if (expected && sr.accuracy === 'hit') a.trueHits++;
+      else if (!expected && dispatched) a.falsePositives++;
+      else if (!expected && !dispatched) a.trueNegatives++;
+      if (sr.firstDispatchMs !== null) a.latencies.push(sr.firstDispatchMs);
+    }
+  }
+
+  const lines: string[] = [
+    '╔══════════════════════════════════════════════════════════════════════════╗',
+    '║            OOD STRESS TEST RESULTS  (precision + false-positive rate)    ║',
+    '╠══════════════════════════════════════════════════════════════════════════╣',
+    `${'Strategy'.padEnd(22)} ${'True hits'.padEnd(12)} ${'True negs'.padEnd(12)} ${'False pos'.padEnd(12)} ${'Avg ms'}`,
+    '─'.repeat(74),
+  ];
+
+  for (const s of strategies) {
+    const a = agg[s];
+    const avgMs = a.latencies.length
+      ? Math.round(a.latencies.reduce((x, y) => x + y, 0) / a.latencies.length)
+      : 0;
+    const fp = a.falsePositives > 0 ? `⚠ ${a.falsePositives}` : `${a.falsePositives}`;
+    lines.push(
+      `${s.padEnd(22)} ${String(a.trueHits).padEnd(12)} ${String(a.trueNegatives).padEnd(12)} ${fp.padEnd(12)} ${avgMs ? `${avgMs}ms` : '—'}`
+    );
+  }
+
+  lines.push('─'.repeat(74));
+  lines.push('Per-fixture breakdown:');
+  for (const turn of results) {
+    lines.push(`\n${turn.fixtureId}  user: "${turn.userText}"`);
+    lines.push(`Expected: ${turn.expectedObjects.length ? turn.expectedObjects.join(', ') : '(nothing)'}`);
+    for (const sr of turn.strategies) {
+      const lat = sr.firstDispatchMs !== null ? `${sr.firstDispatchMs}ms` : 'silent';
+      const objs = sr.objects.flat().join(', ') || '—';
+      const tag = turn.expectedObjects.length === 0 && sr.objects.flat().length > 0 ? ' ⚠ FALSE POS' : '';
+      lines.push(`  ${sr.strategy.padEnd(20)} ${lat.padEnd(10)} ${objs}${tag}`);
+    }
+  }
+
+  lines.push('╚══════════════════════════════════════════════════════════════════════╝');
+  return lines.join('\n');
+}
+
+// ─── Timeline renderer ────────────────────────────────────────────────────────
+// Visual ASCII timeline per fixture: shows conversation events + when each
+// strategy dispatched relative to t=0 (inputTranscription).
+
+export function renderTimeline(results: TurnResult[], fixturesRef: Fixture[]): string {
+  const fixtureMap = new Map(fixturesRef.map(f => [f.id, f]));
+  const lines: string[] = ['DISPATCH TIMELINE (per fixture, ms from inputTranscription)', ''];
+
+  const TRACK_WIDTH = 60;
+
+  for (const turn of results) {
+    const fixture = fixtureMap.get(turn.fixtureId);
+    if (!fixture) continue;
+
+    // Find max ms (turnComplete end)
+    const totalMs = fixture.events.reduce((sum, e) => sum + e.delayMs, 0) + 1500; // +1500 for LLM tail
+    const scale = TRACK_WIDTH / totalMs;
+
+    lines.push(`┌─ ${turn.fixtureId}`);
+    lines.push(`│  user: "${turn.userText}"`);
+    lines.push(`│  expected: ${turn.expectedObjects.length ? turn.expectedObjects.join(', ') : '(nothing)'}`);
+
+    // Conversation event markers
+    let evMs = 0;
+    const eventMarkers: string[] = Array(TRACK_WIDTH + 1).fill(' ');
+    const evLabels: string[] = [];
+    for (const ev of fixture.events) {
+      evMs += ev.delayMs;
+      const pos = Math.min(TRACK_WIDTH - 1, Math.round(evMs * scale));
+      if (ev.type === 'inputTranscription') { eventMarkers[pos] = 'I'; evLabels.push(`I=${evMs}ms`); }
+      else if (ev.type === 'outputChunk')    { eventMarkers[pos] = '·'; }
+      else if (ev.type === 'turnComplete')   { eventMarkers[pos] = 'T'; evLabels.push(`T=${evMs}ms`); }
+    }
+    lines.push(`│  events  [${eventMarkers.join('')}]  ${evLabels.join(' ')}`);
+
+    // Strategy dispatch markers
+    for (const sr of turn.strategies) {
+      const track: string[] = Array(TRACK_WIDTH + 1).fill('─');
+      let hasDispatch = false;
+      for (const ms of sr.dispatchedAt) {
+        const pos = Math.min(TRACK_WIDTH - 1, Math.round(ms * scale));
+        track[pos] = '●';
+        hasDispatch = true;
+      }
+      const latStr = sr.firstDispatchMs !== null ? `${sr.firstDispatchMs}ms` : 'silent';
+      const acc = sr.accuracy === 'hit' ? '✓' : sr.accuracy === 'partial' ? '~' : sr.accuracy === 'miss' ? '✗' : ' ';
+      // Warn if dispatched something when nothing expected
+      const fpWarn = turn.expectedObjects.length === 0 && hasDispatch ? ' ⚠' : '';
+      lines.push(`│  ${sr.strategy.padEnd(20)} [${track.join('')}] ${latStr.padEnd(8)} ${acc}${fpWarn}`);
+    }
+
+    lines.push(`│  scale: ${Math.round(1 / scale)}ms per char, total window: ${totalMs}ms`);
+    lines.push('└' + '─'.repeat(74));
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+// ─── JSON export ──────────────────────────────────────────────────────────────
+
+export interface ExportPayload {
+  timestamp: string;
+  suite: 'core' | 'ood';
+  results: TurnResult[];
+  summary: string;
+}
+
+export function buildExportPayload(
+  suite: 'core' | 'ood',
+  results: TurnResult[],
+  summary: string
+): ExportPayload {
+  return { timestamp: new Date().toISOString(), suite, results, summary };
+}
+
+export function downloadJSON(payload: ExportPayload): void {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `gemini-latency-test-${payload.suite}-${payload.timestamp.replace(/[:.]/g, '-')}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
 }

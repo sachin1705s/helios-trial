@@ -1865,6 +1865,84 @@ app.delete('/api/broadcast/room/:code', async (req, res) => {
   return res.json({ ok: true });
 });
 
+// ─── Keyword expansion ────────────────────────────────────────────────────────
+// Reads keyword_miss events from the log, sends batches to the LLM, and returns
+// suggested keyword → object pairs for review before adding to GL_KEYWORD_MAP.
+
+app.get('/api/keyword-misses', async (req, res) => {
+  const logsSecret = process.env.LOGS_SECRET_KEY;
+  if (logsSecret && req.query?.key !== logsSecret) {
+    return res.status(401).json({ error: 'Unauthorized.' });
+  }
+  if (!useRedis) return res.json({ misses: [], total: 0 });
+  try {
+    const raw = await redis.lrange(LOG_KEY, 0, LOG_MAX - 1);
+    const misses = normalizeLogEntries(raw)
+      .filter(e => e.event === 'keyword_miss')
+      .map(e => ({ character: e.data?.character, userText: e.data?.userText, response: e.data?.response, timestamp: e.timestamp }));
+    return res.json({ misses, total: misses.length });
+  } catch (err) {
+    console.warn('[keyword-misses] read failed:', err?.message);
+    return res.json({ misses: [], total: 0 });
+  }
+});
+
+app.post('/api/keyword-expand', async (req, res) => {
+  const logsSecret = process.env.LOGS_SECRET_KEY;
+  if (logsSecret && req.body?.key !== logsSecret) {
+    return res.status(401).json({ error: 'Unauthorized.' });
+  }
+  const ai = getAiClient();
+  if (!ai) return res.status(503).json({ error: 'Gemini not configured.' });
+  if (!useRedis) return res.status(503).json({ error: 'Redis not configured.' });
+
+  try {
+    // Pull recent keyword misses — cap at 50 to keep prompt size manageable
+    const raw = await redis.lrange(LOG_KEY, 0, LOG_MAX - 1);
+    const misses = normalizeLogEntries(raw)
+      .filter(e => e.event === 'keyword_miss' && e.data?.userText && e.data?.response)
+      .slice(0, 50);
+
+    if (!misses.length) return res.json({ suggestions: [], message: 'No keyword misses found.' });
+
+    // Count how often each (userText, response) pair appears so we can require ≥2 occurrences
+    const turnsText = misses.map((m, i) =>
+      `[${i + 1}] Character: ${m.data.character}\n  User: ${m.data.userText}\n  Response: ${m.data.response}`
+    ).join('\n\n');
+
+    const prompt = `You are helping expand a keyword list for a character animation system.
+When a user talks to an animated character, we scan the character's spoken response for keywords.
+If a keyword matches, a physical object appears in the scene (e.g. keyword "apple" → object "a falling apple").
+
+The following conversations produced NO keyword match — the objects that should have appeared were missed.
+Analyse these turns and suggest new keyword → object pairs that would have caught the missing objects.
+
+Rules:
+- Only suggest concrete, holdable or visible physical objects (not abstract concepts).
+- Each keyword should be a single word or short phrase that would appear naturally in a character's speech.
+- Only suggest a pair if the same physical object pattern appears in at least 2 of the turns below.
+- Return ONLY a JSON array, no commentary. Format: [{ "keyword": "...", "object": "...", "seenInTurns": [1, 3] }]
+
+Turns:
+${turnsText}`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.0-flash',
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    });
+
+    const raw_text = response.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+    const jsonMatch = raw_text.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return res.json({ suggestions: [], raw: raw_text, missesAnalysed: misses.length });
+
+    const suggestions = JSON.parse(jsonMatch[0]);
+    return res.json({ suggestions, missesAnalysed: misses.length });
+  } catch (err) {
+    console.warn('[keyword-expand] failed:', err?.message);
+    return res.status(500).json({ error: 'Expansion failed.', detail: err?.message });
+  }
+});
+
 // ─── Start (local dev only) ───────────────────────────────────────────────────
 if (!process.env.VERCEL) {
   const port = process.env.PORT || 8787;

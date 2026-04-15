@@ -853,7 +853,7 @@ function App() {
   // Options: 'turn-complete' | 'keyword-stream' | 'stage-dir-stream' |
   //          'predict-at-input' | 'word-threshold' | 'hybrid' | 'speculative-correct' |
   //          'odyssey-last-prompt' | 'odyssey-ack-inject' | 'odyssey-video-frame'
-  const GL_OBJECT_STRATEGY: string = 'speculative-correct';
+  const GL_OBJECT_STRATEGY: string = 'keyword-stream';
 
   // Extended keyword → scene-object map covering all 8 characters.
   const GL_KEYWORD_MAP: Array<{ keywords: string[]; object: string }> = [
@@ -1353,6 +1353,16 @@ function App() {
         }));
         // Strategy hook: turn-complete / hybrid LLM confirm
         glOnComplete(glCurrentUserTextRef.current, geminiResponse, slide.title, myGeneration);
+
+        // Miss logging — when keyword-stream fired nothing, record the turn so
+        // the keyword list can be expanded from real user interactions later.
+        if (GL_OBJECT_STRATEGY === 'keyword-stream' && glDispatchedThisTurnRef.current.size === 0) {
+          logEvent('keyword_miss', {
+            character: slide.title,
+            userText: glCurrentUserTextRef.current,
+            response: displayResponse,
+          });
+        }
       }
       glOutputTranscriptBufferRef.current = '';
       glPhase2FiredRef.current = false;
