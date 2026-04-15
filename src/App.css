@@ -239,24 +239,21 @@
 }
 
 /* ── Voice orb ───────────────────────────────────────────────────────────── */
-@keyframes orb-ripple {
-  0%   { transform: scale(1);   opacity: 0.5; }
-  100% { transform: scale(2);   opacity: 0;   }
+@keyframes orb-pulse-listening {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255,255,255,0.4), 0 0 0 0 rgba(255,255,255,0.15); }
+  50%       { box-shadow: 0 0 0 7px rgba(255,255,255,0), 0 0 0 14px rgba(255,255,255,0); }
+}
+@keyframes orb-pulse-thinking {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255,255,255,0.15); }
+  50%       { box-shadow: 0 0 0 6px rgba(255,255,255,0); }
+}
+@keyframes orb-pulse-speaking {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(100,160,255,0.5), 0 0 0 0 rgba(100,160,255,0.2); }
+  50%       { box-shadow: 0 0 0 6px rgba(100,160,255,0), 0 0 0 12px rgba(100,160,255,0); }
 }
 
-@keyframes orb-ripple-fast {
-  0%   { transform: scale(1);   opacity: 0.6; }
-  100% { transform: scale(1.9); opacity: 0;   }
-}
-
-@keyframes orb-ripple-dim {
-  0%   { transform: scale(1);   opacity: 0.2; }
-  100% { transform: scale(1.7); opacity: 0;   }
-}
-
-/* Same shape + color as the accent button — continuity from idle to active */
+/* Matches idle accent button shape/color — pill→circle is the only visual change */
 .voice-orb {
-  position: relative;
   width: 40px;
   height: 40px;
   border-radius: 50%;
@@ -266,56 +263,13 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background 0.3s ease, border-color 0.3s ease;
   flex-shrink: 0;
+  transition: border-color 0.3s ease;
 }
-
-.voice-orb:hover {
-  background: rgba(244, 75, 58, 0.25);
-}
-
-/* Ripple rings expand from the button edge */
-.voice-orb::before,
-.voice-orb::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 1.5px solid;
-  pointer-events: none;
-}
-
-/* Listening — white rings, slow 2s staggered */
-.voice-orb--listening::before {
-  border-color: rgba(255, 255, 255, 0.5);
-  animation: orb-ripple 2s ease-out infinite;
-}
-.voice-orb--listening::after {
-  border-color: rgba(255, 255, 255, 0.3);
-  animation: orb-ripple 2s ease-out infinite 0.75s;
-}
-
-/* Thinking — single dim ring, slow */
-.voice-orb--thinking::before {
-  border-color: rgba(255, 255, 255, 0.2);
-  animation: orb-ripple-dim 2.5s ease-out infinite;
-}
-.voice-orb--thinking::after {
-  display: none;
-}
-
-/* Speaking — blue rings, faster. Button border shifts blue too */
-.voice-orb--speaking {
-  border-color: rgba(100, 160, 255, 0.6);
-}
-.voice-orb--speaking::before {
-  border-color: rgba(100, 160, 255, 0.65);
-  animation: orb-ripple-fast 1s ease-out infinite;
-}
-.voice-orb--speaking::after {
-  border-color: rgba(100, 160, 255, 0.35);
-  animation: orb-ripple-fast 1s ease-out infinite 0.4s;
-}
+.voice-orb:hover { background: rgba(244, 75, 58, 0.25); }
+.voice-orb--listening { animation: orb-pulse-listening 2s ease-in-out infinite; }
+.voice-orb--thinking  { animation: orb-pulse-thinking 2.5s ease-in-out infinite; }
+.voice-orb--speaking  { border-color: rgba(100,160,255,0.6); animation: orb-pulse-speaking 1s ease-in-out infinite; }
 
 .btn.ghost {
   background: transparent;
