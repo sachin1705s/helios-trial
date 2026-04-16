@@ -138,9 +138,11 @@ function App() {
   const lastVoiceActionAtRef = useRef(0);
   const handleInteractRef = useRef<(promptOverride?: string) => void>(() => undefined);
   const ttsAudioCtxRef = useRef<AudioContext | null>(null);
+  const ttsGenerationRef = useRef(0); // incremented on navigation — cancels any in-flight TTS across all await boundaries
   const characterOpenedAtRef = useRef<number | null>(null);
   const hasLoggedFirstPromptRef = useRef(false);
   const currentPageRef = useRef<string | null>(null);
+  const showLandingRef = useRef(showLanding); // kept in sync below — safe to read in SDK callbacks
   // Gemini Live session state
   const geminiLiveWsRef = useRef<WebSocket | null>(null);
   const geminiLiveCaptureCtxRef = useRef<AudioContext | null>(null);
@@ -266,10 +268,10 @@ function App() {
   const musicToggleButton = (
     <button
       type="button"
-      className={`music-toggle ${isMusicPlaying ? 'is-playing' : 'is-paused'}`}
+      className={`music-toggle ${isMusicEnabled ? 'is-playing' : 'is-paused'}`}
       onClick={handleMusicToggle}
-      aria-label={isMusicPlaying ? 'Pause background music' : 'Play background music'}
-      aria-pressed={isMusicPlaying}
+      aria-label={isMusicEnabled ? 'Pause background music' : 'Play background music'}
+      aria-pressed={isMusicEnabled}
     >
       <span className="music-toggle-bars" aria-hidden="true">
         <span className="music-bar" />
@@ -485,10 +487,14 @@ function App() {
     isStreamingReadyRef.current = isStreamingReady;
   }, [isStreamingReady]);
 
+  useEffect(() => {
+    showLandingRef.current = showLanding;
+  }, [showLanding]);
+
   // Fire a character greeting once per session, only after the stream is ready.
   // greetedCharactersRef guards against re-firing when the effect re-runs.
   useEffect(() => {
-    if (!isStreamingReady) return;
+    if (!isStreamingReady || showLandingRef.current) return;
     const charId = slide.id;
     const greeting = slide.greeting;
     if (!greeting || greetedCharactersRef.current.has(charId)) return;
@@ -589,6 +595,11 @@ function App() {
         },
         onStreamStarted: () => {
           debug('[odyssey] onStreamStarted');
+          // User navigated back before the stream finished starting — end it and ignore.
+          if (showLandingRef.current) {
+            serviceRef.current?.endStream().catch(() => undefined);
+            return;
+          }
           streamActiveRef.current = true;
           setStreamState('streaming');
           setIsStreamingReady(true);
@@ -833,6 +844,8 @@ function App() {
       streamActiveRef.current = false;
       serviceRef.current?.endStream().catch(() => undefined);
     }
+    // Invalidate any in-flight TTS — checked at every await boundary in playCharacterTTS
+    ++ttsGenerationRef.current;
     // Stop any in-flight TTS fetch and all scheduled audio playback
     ttsAbortRef.current?.abort();
     ttsAbortRef.current = null;
@@ -842,11 +855,14 @@ function App() {
     // (abort() stops new chunks from being fetched but scheduled nodes keep playing)
     ttsAudioCtxRef.current?.close().catch(() => undefined);
     ttsAudioCtxRef.current = null;
+    // Reset stream ready state immediately — onStreamEnded fires async so without this,
+    // isStreamingReady stays true and the greeting TTS fires before the stream restarts.
+    setIsStreamingReady(false);
+    setStreamState('idle');
     // Clear the current character's chat state so returning starts fresh
     const charId = slide.id;
     setCharacterReply(null);
     setCharacterHistory((prev) => { const next = { ...prev }; delete next[charId]; return next; });
-    greetedCharactersRef.current.delete(charId);
   }, [showLanding]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
@@ -1776,6 +1792,7 @@ function App() {
   };
 
   const playCharacterTTS = async (text: string, slideId?: string) => {
+    const generation = ttsGenerationRef.current; // snapshot — if this changes, navigation happened
     if (!ttsAudioCtxRef.current) {
       ttsAudioCtxRef.current = new AudioContext();
     }
@@ -1785,6 +1802,7 @@ function App() {
     if (!ctx) return;
     try {
       await ctx.resume();
+      if (ttsGenerationRef.current !== generation) return; // navigated away during resume
       debug('[tts] AudioContext resumed, state:', ctx.state);
       const slideVoiceId = slideId ? VOICE_BY_SLIDE_ID[slideId] : '';
       const resolvedVoiceId = slideVoiceId || null;
@@ -1803,11 +1821,14 @@ function App() {
         });
       } catch (fetchErr) {
         console.error('[tts] fetch failed or timed out:', fetchErr);
-        setCharacterError('TTS request timed out — check server logs for Smallest AI errors.');
+        if (ttsGenerationRef.current === generation) {
+          setCharacterError('TTS request timed out — check server logs for Smallest AI errors.');
+        }
         return;
       } finally {
         clearTimeout(ttsClientTimeout);
       }
+      if (ttsGenerationRef.current !== generation) return; // navigated away during fetch
       debug('[tts] server response status:', ttsRes.status, ttsRes.statusText);
       debug('[tts] content-type:', ttsRes.headers.get('content-type'));
       if (!ttsRes.ok) {
@@ -1827,6 +1848,7 @@ function App() {
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
+            if (ttsGenerationRef.current !== generation) return; // navigated away mid-stream
             // Combine leftover odd byte from previous chunk
             let data: Uint8Array;
             if (leftover.length > 0) {
@@ -2574,6 +2596,25 @@ function App() {
             </div>
           ) : null}
           <div className="story-actions">
+            {isUploadSlide ? (
+              <label className="upload-pill">
+                <input type="file" accept="image/*" onChange={handleUploadChange} />
+                <span>{uploadImage ? uploadImage.name : 'Upload image'}</span>
+              </label>
+            ) : null}
+            <div className="prompt-input">
+              <input
+                type="text"
+                value={textPrompt}
+                onChange={(event) => setTextPrompt(event.target.value)}
+                onKeyDown={handleTextPromptKeyDown}
+                placeholder="Type a wish..."
+                disabled={!isStreamingReady}
+              />
+              <button className="btn ghost" onClick={handleTextPromptSubmit} disabled={!isStreamingReady}>
+                Send
+              </button>
+            </div>
             {isCharacterSlide ? (
               isCharacterRecording ? (
                 <button
@@ -2600,25 +2641,6 @@ function App() {
                 </button>
               )
             ) : null}
-            {isUploadSlide ? (
-              <label className="upload-pill">
-                <input type="file" accept="image/*" onChange={handleUploadChange} />
-                <span>{uploadImage ? uploadImage.name : 'Upload image'}</span>
-              </label>
-            ) : null}
-            <div className="prompt-input">
-              <input
-                type="text"
-                value={textPrompt}
-                onChange={(event) => setTextPrompt(event.target.value)}
-                onKeyDown={handleTextPromptKeyDown}
-                placeholder="Type a wish..."
-                disabled={!isStreamingReady}
-              />
-              <button className="btn ghost" onClick={handleTextPromptSubmit} disabled={!isStreamingReady}>
-                Send
-              </button>
-            </div>
           </div>
         </footer>
         </div>

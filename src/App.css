@@ -1081,8 +1081,14 @@
   outline-offset: 3px;
 }
 
+.music-toggle.is-playing {
+  background: #000;
+  opacity: 1;
+}
+
 .music-toggle.is-paused {
-  opacity: 0.78;
+  background: rgba(5, 5, 5, 0.55);
+  opacity: 1;
 }
 
 .music-toggle-bars {
@@ -1127,7 +1133,12 @@
 
 .music-toggle.is-paused .music-bar {
   animation-play-state: paused;
-  opacity: 0.92;
+  opacity: 0.6;
+}
+
+.music-toggle.is-playing .music-bar {
+  animation-play-state: running;
+  opacity: 1;
 }
 
 @keyframes music-bar-bounce {
