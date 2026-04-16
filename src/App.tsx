@@ -231,8 +231,6 @@ function App() {
   const slide = selectedCharacter;
   const slideImageUrl = encodeURI(slide?.image ?? '');
 
-  const isUploadSlide = false;
-  const isCharacterSlide = true;
   const VOICE_AGENT_ID_BY_SLIDE: Record<string, { id: string; label: string }> = {
     'circus-lion': { id: '', label: 'Circus Lion' },
     'einstein': { id: '', label: 'Albert Einstein' }
@@ -478,10 +476,9 @@ function App() {
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
-      closeActiveCharacter('page_exit');
-      releaseOdysseyLease();
     };
-  }, [selectedCharacterId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // mount/unmount only — cleanup on character switch is handled by handleSelectCharacter
 
 
   useEffect(() => {
@@ -526,14 +523,6 @@ function App() {
   }, [isStreamingReady, voiceStatus]);
 
 
-  useEffect(() => {
-    if (isCharacterSlide) {
-      return;
-    }
-    if (isCharacterRecording) {
-      stopCharacterRecording();
-    }
-  }, [isCharacterSlide, isCharacterRecording]);
 
   useEffect(() => {
     if (voiceStatus === 'connected' && isVoiceAgentSlide) {
@@ -874,6 +863,8 @@ function App() {
     const charId = slide.id;
     setCharacterReply(null);
     setCharacterHistory((prev) => { const next = { ...prev }; delete next[charId]; return next; });
+    // Allow the greeting to re-fire when the user returns to this character
+    greetedCharactersRef.current.delete(charId);
   }, [showLanding]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
@@ -1070,9 +1061,11 @@ function App() {
 
   const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
     const bytes = new Uint8Array(buffer);
-    let binary = '';
-    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-    return btoa(binary);
+    const chunks: string[] = [];
+    for (let i = 0; i < bytes.length; i += 8192) {
+      chunks.push(String.fromCharCode(...bytes.subarray(i, i + 8192)));
+    }
+    return btoa(chunks.join(''));
   };
 
   const base64ToUint8Array = (base64: string): Uint8Array => {
@@ -1119,13 +1112,6 @@ function App() {
     geminiLiveSourceNodesRef.current = [];
     geminiLivePlaybackTimeRef.current = 0;
   };
-
-  // ─── Object-dispatch strategy ─────────────────────────────────────────────
-  // Switch here to change which strategy runs in production.
-  // Options: 'turn-complete' | 'keyword-stream' | 'stage-dir-stream' |
-  //          'predict-at-input' | 'word-threshold' | 'hybrid' | 'speculative-correct' |
-  //          'odyssey-last-prompt' | 'odyssey-ack-inject' | 'odyssey-video-frame'
-  const GL_OBJECT_STRATEGY: string = 'keyword-stream';
 
   // Extended keyword → scene-object map covering all 8 characters.
   const GL_KEYWORD_MAP: Array<{ keywords: string[]; object: string }> = [
@@ -1248,232 +1234,12 @@ function App() {
 
   // ─── Strategy implementations ─────────────────────────────────────────────
 
-  // V1 — turn-complete: LLM call after full response (current baseline).
-  const glStrategy_turnComplete = (userText: string, fullResponse: string, characterName: string, myGeneration: number) => {
-    const message = `User asked: "${userText}". You responded: "${fullResponse}". Based on this, what objects should appear in the scene?`;
-    glFetchObjects(message, characterName, myGeneration, 'turn-complete');
-  };
-
-  // V2 — keyword-stream: client-side keyword match on each transcript chunk.
-  const glStrategy_keywordStream = (chunk: string, myGeneration: number) => {
+  // Keyword-stream: dispatch objects from each outputTranscription chunk via keyword matching.
+  const glDispatchKeywords = (chunk: string, myGeneration: number) => {
     const objects = glKeywordMatch(chunk);
     if (objects.length) glDispatchObjects(objects, myGeneration, 'keyword-stream');
   };
 
-  // V3 — stage-dir-stream: extract *stage directions* from each chunk as they arrive.
-  const glStrategy_stageDirStream = (chunk: string, _myGeneration: number) => {
-    const directions = glExtractStageDirections(chunk);
-    if (directions.length) {
-      directions.forEach(d => handleInteractRef.current(d));
-    }
-  };
-
-  // V4 — predict-at-input: LLM call at inputTranscription with only user text.
-  const glStrategy_predictAtInput = (userText: string, characterName: string, myGeneration: number) => {
-    const message = `A user just asked: "${userText}". What physical objects would a ${characterName} character likely reference or show while answering this? Return objects only — do not generate a reply.`;
-    glFetchObjects(message, characterName, myGeneration, 'predict-at-input');
-  };
-
-  // V5 — word-threshold: LLM call once 15+ words are buffered mid-response.
-  const glWordThresholdFiredRef = useRef(false);
-  const glStrategy_wordThreshold = (buffer: string, userText: string, characterName: string, myGeneration: number) => {
-    if (glWordThresholdFiredRef.current) return;
-    const wordCount = buffer.trim().split(/\s+/).length;
-    if (wordCount < 15) return;
-    glWordThresholdFiredRef.current = true;
-    const message = `User asked: "${userText}". Partial response so far: "${buffer}". What objects should appear in the scene?`;
-    glFetchObjects(message, characterName, myGeneration, 'word-threshold');
-  };
-
-  // V6 — hybrid: keyword + stage-dir fire immediately; LLM confirms at turnComplete.
-  const glStrategy_hybrid = {
-    onChunk: (chunk: string, myGeneration: number) => {
-      glStrategy_keywordStream(chunk, myGeneration);
-      glStrategy_stageDirStream(chunk, myGeneration);
-    },
-    onComplete: (userText: string, fullResponse: string, characterName: string, myGeneration: number) => {
-      glStrategy_turnComplete(userText, fullResponse, characterName, myGeneration);
-    },
-  };
-
-  // V7 — speculative-correct: predict objects from user's question and spawn them
-  // immediately (fast but possibly wrong), then at turnComplete send a correction
-  // prompt to Odyssey with the accurate objects Gemini actually used.
-  const glSpeculativeObjectsRef = useRef<string[]>([]);
-  const glStrategy_speculativeCorrect = {
-    onInput: (userText: string, characterName: string, myGeneration: number) => {
-      const msg = `A user just asked a ${characterName} character: "${userText}". What physical objects would this character likely reference or show while answering? Return objects only — do not generate a reply.`;
-      fetch('/api/character/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, character: characterName, history: [] }),
-      })
-        .then(res => res.ok ? res.json() as Promise<{ objects?: string[] }> : Promise.reject())
-        .then(data => {
-          if (geminiLiveGenerationRef.current !== myGeneration) return;
-          const objects = (data.objects ?? []).filter(Boolean);
-          glSpeculativeObjectsRef.current = objects;
-          if (objects.length) {
-            console.log('[gl-objects][speculative] spawning:', objects, `at +${Date.now() - glTurnStartRef.current}ms`);
-            handleInteractRef.current(`add ${objects.join(', ')} to the scene`);
-          }
-        })
-        .catch(() => undefined);
-    },
-    onComplete: (userText: string, fullResponse: string, characterName: string, myGeneration: number) => {
-      const msg = `User asked: "${userText}". You responded: "${fullResponse}". Based on this, what objects should appear in the scene?`;
-      fetch('/api/character/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, character: characterName, history: [] }),
-      })
-        .then(res => res.ok ? res.json() as Promise<{ objects?: string[] }> : Promise.reject())
-        .then(data => {
-          if (geminiLiveGenerationRef.current !== myGeneration) return;
-          const correctObjects = (data.objects ?? []).filter(Boolean);
-          if (!correctObjects.length) return;
-          const speculative = glSpeculativeObjectsRef.current;
-          const alreadyCorrect = correctObjects.every(o => speculative.includes(o));
-          if (alreadyCorrect) {
-            // Speculative guess was right — nothing to fix
-            console.log('[gl-objects][correct] speculative was accurate, no correction needed');
-            return;
-          }
-          // Send a correction prompt — Odyssey will update the scene
-          console.log('[gl-objects][correct] correcting scene:', correctObjects, `at +${Date.now() - glTurnStartRef.current}ms`);
-          handleInteractRef.current(`update the scene to show ${correctObjects.join(', ')}`);
-        })
-        .catch(() => undefined);
-    },
-  };
-
-  // ─── V8: odyssey-last-prompt ─────────────────────────────────────────────
-  // At inputTranscription: inject the last prompt sent to Odyssey as scene context,
-  // then ask the LLM what objects should appear given the user's question.
-  const glStrategy_odysseyLastPrompt = (userText: string, characterName: string, myGeneration: number) => {
-    const lastPrompt = serviceRef.current?.lastAppliedPrompt ?? '';
-    const sceneContext = lastPrompt
-      ? `The scene currently shows: "${lastPrompt}". `
-      : '';
-    const msg = `${sceneContext}The user just asked the character: "${userText}". What physical objects should now appear in the scene to complement the character's answer? Return a comma-separated list of objects only. If none, return "none".`;
-    fetch('/api/character/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: msg, characterName, history: [] }),
-    })
-      .then(r => r.json())
-      .then((data: { reply?: string }) => {
-        if (geminiLiveGenerationRef.current !== myGeneration) return;
-        const reply = (data.reply ?? '').toLowerCase().trim();
-        if (!reply || reply === 'none') return;
-        const objects = reply.split(',').map((s: string) => s.trim()).filter(Boolean);
-        glDispatchObjects(objects, myGeneration, 'odyssey-last-prompt');
-      })
-      .catch(() => undefined);
-  };
-
-  // ─── V9: odyssey-ack-inject ───────────────────────────────────────────────
-  // Same timing as V8 but uses the last acknowledged prompt (tracks scene state
-  // after Odyssey confirms each interact call). Falls back to lastAppliedPrompt.
-  const glStrategy_odysseyAckInject = (userText: string, characterName: string, myGeneration: number) => {
-    const ackPrompt = glLastAckPromptRef.current || serviceRef.current?.lastAppliedPrompt || '';
-    const sceneContext = ackPrompt
-      ? `Odyssey's last confirmed scene state: "${ackPrompt}". `
-      : '';
-    const msg = `${sceneContext}The user just asked: "${userText}". What objects should appear to make the character's answer visually compelling? Return a comma-separated list only. If none, return "none".`;
-    fetch('/api/character/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: msg, characterName, history: [] }),
-    })
-      .then(r => r.json())
-      .then((data: { reply?: string }) => {
-        if (geminiLiveGenerationRef.current !== myGeneration) return;
-        const reply = (data.reply ?? '').toLowerCase().trim();
-        if (!reply || reply === 'none') return;
-        const objects = reply.split(',').map((s: string) => s.trim()).filter(Boolean);
-        glDispatchObjects(objects, myGeneration, 'odyssey-ack-inject');
-      })
-      .catch(() => undefined);
-  };
-
-  // ─── V10: odyssey-video-frame ─────────────────────────────────────────────
-  // At inputTranscription: capture a frame from the Odyssey video stream,
-  // convert it to a base64 data URL, and send it to the vision LLM alongside
-  // the user's question. Falls back to scene-context string if capture fails.
-  const glStrategy_odysseyVideoFrame = (userText: string, characterName: string, myGeneration: number) => {
-    const runWithDescription = (frameDescription: string) => {
-      const msg = [
-        'You are looking at a live frame of an animated character scene.',
-        `What you see: "${frameDescription}".`,
-        `The user just asked the character: "${userText}".`,
-        'Based on the current scene and the user\'s question, what physical objects should appear next?',
-        'Return a comma-separated list of objects only. If none, return "none".',
-      ].join(' ');
-      fetch('/api/character/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, characterName, history: [] }),
-      })
-        .then(r => r.json())
-        .then((data: { reply?: string }) => {
-          if (geminiLiveGenerationRef.current !== myGeneration) return;
-          const reply = (data.reply ?? '').toLowerCase().trim();
-          if (!reply || reply === 'none') return;
-          const objects = reply.split(',').map((s: string) => s.trim()).filter(Boolean);
-          glDispatchObjects(objects, myGeneration, 'odyssey-video-frame');
-        })
-        .catch(() => undefined);
-    };
-
-    // Attempt live frame capture from the Odyssey MediaStream
-    const stream = odysseyStreamRef.current;
-    const videoTrack = stream?.getVideoTracks()[0];
-    if (videoTrack) {
-      try {
-        const imageCapture = new (window as unknown as { ImageCapture: new (track: MediaStreamTrack) => { grabFrame(): Promise<ImageBitmap> } }).ImageCapture(videoTrack);
-        imageCapture.grabFrame().then((bitmap: ImageBitmap) => {
-          const canvas = document.createElement('canvas');
-          canvas.width = bitmap.width;
-          canvas.height = bitmap.height;
-          canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
-          const frameDescription = `live video frame (${bitmap.width}×${bitmap.height}) from Odyssey avatar stream`;
-          runWithDescription(frameDescription);
-        }).catch(() => {
-          runWithDescription(serviceRef.current?.lastAppliedPrompt || 'an animated character scene');
-        });
-      } catch {
-        runWithDescription(serviceRef.current?.lastAppliedPrompt || 'an animated character scene');
-      }
-    } else {
-      runWithDescription(serviceRef.current?.lastAppliedPrompt || 'an animated character scene');
-    }
-  };
-
-  // ─── Strategy router ──────────────────────────────────────────────────────
-  // Called on each outputTranscription chunk.
-  const glOnChunk = (chunk: string, buffer: string, userText: string, characterName: string, myGeneration: number) => {
-    if (GL_OBJECT_STRATEGY === 'keyword-stream') glStrategy_keywordStream(chunk, myGeneration);
-    if (GL_OBJECT_STRATEGY === 'stage-dir-stream') glStrategy_stageDirStream(chunk, myGeneration);
-    if (GL_OBJECT_STRATEGY === 'word-threshold') glStrategy_wordThreshold(buffer, userText, characterName, myGeneration);
-    if (GL_OBJECT_STRATEGY === 'hybrid') glStrategy_hybrid.onChunk(chunk, myGeneration);
-  };
-
-  // Called at inputTranscription.
-  const glOnInput = (userText: string, characterName: string, myGeneration: number) => {
-    if (GL_OBJECT_STRATEGY === 'predict-at-input') glStrategy_predictAtInput(userText, characterName, myGeneration);
-    if (GL_OBJECT_STRATEGY === 'speculative-correct') glStrategy_speculativeCorrect.onInput(userText, characterName, myGeneration);
-    if (GL_OBJECT_STRATEGY === 'odyssey-last-prompt') glStrategy_odysseyLastPrompt(userText, characterName, myGeneration);
-    if (GL_OBJECT_STRATEGY === 'odyssey-ack-inject') glStrategy_odysseyAckInject(userText, characterName, myGeneration);
-    if (GL_OBJECT_STRATEGY === 'odyssey-video-frame') glStrategy_odysseyVideoFrame(userText, characterName, myGeneration);
-  };
-
-  // Called at turnComplete.
-  const glOnComplete = (userText: string, fullResponse: string, characterName: string, myGeneration: number) => {
-    if (GL_OBJECT_STRATEGY === 'turn-complete') glStrategy_turnComplete(userText, fullResponse, characterName, myGeneration);
-    if (GL_OBJECT_STRATEGY === 'hybrid') glStrategy_hybrid.onComplete(userText, fullResponse, characterName, myGeneration);
-    if (GL_OBJECT_STRATEGY === 'speculative-correct') glStrategy_speculativeCorrect.onComplete(userText, fullResponse, characterName, myGeneration);
-  };
 
 
   const GEMINI_LIVE_SYSTEM_PROMPTS: Record<string, string> = {
@@ -1589,20 +1355,18 @@ function App() {
       glCurrentUserTextRef.current = inputTranscription;
       glOutputTranscriptBufferRef.current = '';
       glPhase2FiredRef.current = false;
-      glWordThresholdFiredRef.current = false;
       setCharacterHistory((prev) => ({
         ...prev,
         [slide.id]: [...(prev[slide.id] ?? []), { role: 'user' as const, content: inputTranscription }],
       }));
       glPhase1Action(myGeneration);                                          // always: 'listen actively'
-      glOnInput(inputTranscription, slide.title, myGeneration);              // strategy hook: predict-at-input
     }
 
     // outputTranscription chunk — accumulate and run per-chunk strategy hooks
     const outputTranscription = (content.outputTranscription as Record<string, string> | undefined)?.text;
     if (outputTranscription) {
       glOutputTranscriptBufferRef.current += (glOutputTranscriptBufferRef.current ? ' ' : '') + outputTranscription;
-      glOnChunk(outputTranscription, glOutputTranscriptBufferRef.current, glCurrentUserTextRef.current, slide.title, myGeneration);
+      glDispatchKeywords(outputTranscription, myGeneration);
     }
 
     // turnComplete — update chat, extract stage directions, run completion strategy hook
@@ -1623,8 +1387,6 @@ function App() {
           ...prev,
           [slide.id]: [...(prev[slide.id] ?? []), { role: 'assistant' as const, content: displayResponse }],
         }));
-        // Strategy hook: turn-complete / hybrid LLM confirm
-        glOnComplete(glCurrentUserTextRef.current, geminiResponse, slide.title, myGeneration);
 
         // Miss logging — when keyword-stream fired nothing, record the turn so
         // the keyword list can be expanded from real user interactions later.
@@ -1767,22 +1529,36 @@ function App() {
           // the browser to re-suspend the AudioContext even if resume() was called earlier.
           if (captureCtx.state === 'suspended') await captureCtx.resume();
           const micSrc = captureCtx.createMediaStreamSource(stream);
-          // ScriptProcessorNode buffer must be power of 2; 2048 @ 16kHz = 128ms
-          const scriptNode = captureCtx.createScriptProcessor(2048, 1, 1);
-          scriptNode.onaudioprocess = (ev) => {
-            if (geminiLiveGenerationRef.current !== myGeneration || ws.readyState !== WebSocket.OPEN) return;
-            const f32 = ev.inputBuffer.getChannelData(0);
-            const int16 = new Int16Array(f32.length);
-            for (let i = 0; i < f32.length; i++) {
-              const s = Math.max(-1, Math.min(1, f32[i]));
-              int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-            }
-            ws.send(JSON.stringify({
-              realtimeInput: { audio: { data: arrayBufferToBase64(int16.buffer), mimeType: 'audio/pcm;rate=16000' } },
-            }));
-          };
-          micSrc.connect(scriptNode);
-          scriptNode.connect(captureCtx.destination);
+          // AudioWorklet runs off the main thread — zero-copy Int16 transfer, no UI jank.
+          // Falls back to ScriptProcessorNode if addModule fails (e.g. older browsers).
+          try {
+            await captureCtx.audioWorklet.addModule('/audio-processor.worklet.js');
+            const workletNode = new AudioWorkletNode(captureCtx, 'pcm-processor');
+            workletNode.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
+              if (geminiLiveGenerationRef.current !== myGeneration || ws.readyState !== WebSocket.OPEN) return;
+              ws.send(JSON.stringify({
+                realtimeInput: { audio: { data: arrayBufferToBase64(e.data), mimeType: 'audio/pcm;rate=16000' } },
+              }));
+            };
+            micSrc.connect(workletNode);
+          } catch {
+            // Fallback: ScriptProcessorNode (deprecated, main-thread)
+            const scriptNode = captureCtx.createScriptProcessor(2048, 1, 1);
+            scriptNode.onaudioprocess = (ev) => {
+              if (geminiLiveGenerationRef.current !== myGeneration || ws.readyState !== WebSocket.OPEN) return;
+              const f32 = ev.inputBuffer.getChannelData(0);
+              const int16 = new Int16Array(f32.length);
+              for (let i = 0; i < f32.length; i++) {
+                const s = Math.max(-1, Math.min(1, f32[i]));
+                int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+              }
+              ws.send(JSON.stringify({
+                realtimeInput: { audio: { data: arrayBufferToBase64(int16.buffer), mimeType: 'audio/pcm;rate=16000' } },
+              }));
+            };
+            micSrc.connect(scriptNode);
+            scriptNode.connect(captureCtx.destination);
+          }
         } catch (err) {
           console.error('[gemini-live] mic setup error', err);
           stopGeminiLiveSession();
@@ -2233,6 +2009,12 @@ function App() {
   const handleSelectCharacter = (id: string) => {
     stopGeminiLiveSession();  // B3: clean up any active session before switching characters
     closeActiveCharacter('switch');
+    // Cancel any in-flight TTS from the previous character
+    ++ttsGenerationRef.current;
+    ttsAbortRef.current?.abort();
+    ttsAbortRef.current = null;
+    try { ttsSourceRef.current?.stop(); } catch { /* already stopped */ }
+    ttsSourceRef.current = null;
     const newCharacter = characters.find((c) => c.id === id);
     logEvent('character_opened', {
       characterId: id,

@@ -1459,23 +1459,26 @@ app.post('/api/clone-ab', aiLimiter, cloneMultipart.single('voice'), async (req,
 });
 
 // ── POST /api/clone-ab/rate ───────────────────────────────────────────────────
-app.post('/api/clone-ab/rate', async (req, res) => {
+app.post('/api/clone-ab/rate', aiLimiter, async (req, res) => {
   const sessionId = String(req.body?.sessionId ?? '').trim();
   const rating    = Number(req.body?.rating);
-  if (!sessionId)              return res.status(400).json({ error: 'sessionId required' });
+  if (!sessionId)               return res.status(400).json({ error: 'sessionId required' });
   if (rating < 1 || rating > 5) return res.status(400).json({ error: 'rating must be 1–5' });
 
-  let providerId = null;
-  if (useRedis) {
-    providerId = await redis.get(cloneSessionKey(sessionId));
-  }
+  if (!useRedis) return res.status(503).json({ error: 'Rating storage unavailable.' });
+
+  const ratedKey = `clone:session:${sessionId}:rated`;
+  const alreadyRated = await redis.get(ratedKey);
+  if (alreadyRated) return res.status(409).json({ error: 'Session already rated.' });
+
+  const providerId = await redis.get(cloneSessionKey(sessionId));
   if (!providerId) return res.status(404).json({ error: 'Session not found or expired' });
 
-  if (useRedis) {
-    await redis.hincrbyfloat(cloneStatKey(providerId), 'ratingSum', rating);
-    await redis.hincrby(cloneStatKey(providerId), 'ratingCount', 1);
-    // Don't reveal the provider to the client
-  }
+  await redis.hincrbyfloat(cloneStatKey(providerId), 'ratingSum', rating);
+  await redis.hincrby(cloneStatKey(providerId), 'ratingCount', 1);
+  // Mark this session as rated (TTL matches the session TTL)
+  await redis.set(ratedKey, '1', { ex: 3600 });
+
   console.log(`[clone-ab/rate] session:${sessionId} → ${providerId} rated ${rating}/5`);
   return res.json({ ok: true });
 });
@@ -1527,11 +1530,13 @@ app.post('/api/user/voice-clones', requireAuth, async (req, res) => {
 });
 
 app.delete('/api/user/voice-clones/:id', requireAuth, async (req, res) => {
-  const { error } = await req.supabase
+  const { error, count } = await req.supabase
     .from('voice_clones')
-    .delete()
-    .eq('id', req.params.id);
+    .delete({ count: 'exact' })
+    .eq('id', req.params.id)
+    .eq('user_id', req.userId);
   if (error) return res.status(500).json({ error: error.message });
+  if (count === 0) return res.status(404).json({ error: 'Not found.' });
   return res.json({ ok: true });
 });
 
@@ -1570,11 +1575,13 @@ app.post('/api/user/characters', requireAuth, async (req, res) => {
 });
 
 app.delete('/api/user/characters/:id', requireAuth, async (req, res) => {
-  const { error } = await req.supabase
+  const { error, count } = await req.supabase
     .from('characters')
-    .delete()
-    .eq('id', req.params.id);
+    .delete({ count: 'exact' })
+    .eq('id', req.params.id)
+    .eq('user_id', req.userId);
   if (error) return res.status(500).json({ error: error.message });
+  if (count === 0) return res.status(404).json({ error: 'Not found.' });
   return res.json({ ok: true });
 });
 
@@ -1587,6 +1594,18 @@ const normalizeLogEntries = (raw) =>
     if (r && typeof r === 'object') return r;
     try { return JSON.parse(r); } catch { return null; }
   }).filter(Boolean);
+
+// Checks the Authorization: Bearer <secret> header for admin-only routes.
+// Returns true when the request is authorized.
+const checkAdminAuth = (req, res) => {
+  const logsSecret = process.env.LOGS_SECRET_KEY;
+  const provided = req.headers['authorization']?.replace(/^Bearer\s+/i, '');
+  if (!logsSecret || provided !== logsSecret) {
+    res.status(401).json({ error: 'Unauthorized.' });
+    return false;
+  }
+  return true;
+};
 
 const mean = (values) => {
   if (!values.length) return null;
@@ -1612,6 +1631,9 @@ const summarizeLogs = (entries) => {
     trends: {},
   };
   const sessions = new Set();
+  // Accumulated per-character timing arrays — populated during the single pass below
+  const ttfpByChar = {};
+  const dwellByChar = {};
 
   for (const entry of entries) {
     const event = String(entry.event || '').trim();
@@ -1650,22 +1672,19 @@ const summarizeLogs = (entries) => {
     if (event === 'character_closed') character.closed += 1;
     if (event === 'prompt_sent') character.prompts += 1;
     if (event === 'response_received') character.responses += 1;
+
+    // Accumulate timing values during the same pass (avoids a second O(n×c) scan)
+    if (event === 'time_to_first_prompt' && Number.isFinite(data?.timeMs)) {
+      (ttfpByChar[characterId] ??= []).push(Number(data.timeMs));
+    }
+    if (event === 'character_closed' && Number.isFinite(data?.timeSpentMs)) {
+      (dwellByChar[characterId] ??= []).push(Number(data.timeSpentMs));
+    }
   }
 
   for (const [characterId, character] of Object.entries(summary.characters)) {
-    const ttfp = [];
-    const dwell = [];
-    for (const entry of entries) {
-      if (entry?.data?.characterId !== characterId) continue;
-      if (entry.event === 'time_to_first_prompt' && Number.isFinite(entry.data?.timeMs)) {
-        ttfp.push(Number(entry.data.timeMs));
-      }
-      if (entry.event === 'character_closed' && Number.isFinite(entry.data?.timeSpentMs)) {
-        dwell.push(Number(entry.data.timeSpentMs));
-      }
-    }
-    character.avgTimeToFirstPromptMs = mean(ttfp);
-    character.avgTimeSpentMs = mean(dwell);
+    character.avgTimeToFirstPromptMs = mean(ttfpByChar[characterId] ?? []);
+    character.avgTimeSpentMs = mean(dwellByChar[characterId] ?? []);
   }
 
   summary.totals.uniqueSessions = sessions.size;
@@ -1691,10 +1710,7 @@ app.post('/api/log', async (req, res) => {
 });
 
 app.get('/api/logs', async (req, res) => {
-  const logsSecret = process.env.LOGS_SECRET_KEY;
-  if (logsSecret && req.query?.key !== logsSecret) {
-    return res.status(401).json({ error: 'Unauthorized.' });
-  }
+  if (!checkAdminAuth(req, res)) return;
   if (!useRedis) return res.json([]);
   try {
     const limit = Math.min(Number(req.query?.limit ?? 500), 2000);
@@ -1713,10 +1729,7 @@ app.get('/api/logs', async (req, res) => {
 });
 
 app.get('/api/logs/summary', async (req, res) => {
-  const logsSecret = process.env.LOGS_SECRET_KEY;
-  if (logsSecret && req.query?.key !== logsSecret) {
-    return res.status(401).json({ error: 'Unauthorized.' });
-  }
+  if (!checkAdminAuth(req, res)) return;
   if (!useRedis) return res.json({
     totals: { events: 0, byEvent: {}, uniqueSessions: 0 },
     pages: {},
@@ -1891,10 +1904,7 @@ app.delete('/api/broadcast/room/:code', async (req, res) => {
 // suggested keyword → object pairs for review before adding to GL_KEYWORD_MAP.
 
 app.get('/api/keyword-misses', async (req, res) => {
-  const logsSecret = process.env.LOGS_SECRET_KEY;
-  if (logsSecret && req.query?.key !== logsSecret) {
-    return res.status(401).json({ error: 'Unauthorized.' });
-  }
+  if (!checkAdminAuth(req, res)) return;
   if (!useRedis) return res.json({ misses: [], total: 0 });
   try {
     const raw = await redis.lrange(LOG_KEY, 0, LOG_MAX - 1);
@@ -1909,10 +1919,7 @@ app.get('/api/keyword-misses', async (req, res) => {
 });
 
 app.post('/api/keyword-expand', async (req, res) => {
-  const logsSecret = process.env.LOGS_SECRET_KEY;
-  if (logsSecret && req.body?.key !== logsSecret) {
-    return res.status(401).json({ error: 'Unauthorized.' });
-  }
+  if (!checkAdminAuth(req, res)) return;
   const ai = getAiClient();
   if (!ai) return res.status(503).json({ error: 'Gemini not configured.' });
   if (!useRedis) return res.status(503).json({ error: 'Redis not configured.' });
