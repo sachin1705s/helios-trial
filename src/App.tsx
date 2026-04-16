@@ -131,6 +131,7 @@ function App() {
   const pendingStartRef = useRef<(() => Promise<void>) | null>(null); // startStream fn waiting for onConnected
   const startStreamInFlightRef = useRef(false); // true while startStream is awaited — blocks re-entrant calls
   const streamEndResolverRef = useRef<(() => void) | null>(null); // resolves when onStreamEnded fires during a transition
+  const streamRequestIdRef = useRef(0); // set to requestId just before startStream — onStreamStarted checks for staleness
   const isVoiceAgentSlideRef = useRef(false);
   const greetedCharactersRef = useRef<Set<string>>(new Set()); // tracks which characters have greeted this session
   const ttsSourceRef = useRef<AudioBufferSourceNode | null>(null);
@@ -600,6 +601,14 @@ function App() {
             serviceRef.current?.endStream().catch(() => undefined);
             return;
           }
+          // Stale stream — user switched characters before this one finished starting.
+          // requestIdRef holds the latest request; streamRequestIdRef holds which request
+          // called startStream. A mismatch means this onStreamStarted is for an old character.
+          if (streamRequestIdRef.current !== requestIdRef.current) {
+            debug('[odyssey] onStreamStarted — stale stream (requestId mismatch), discarding');
+            serviceRef.current?.endStream().catch(() => undefined);
+            return;
+          }
           streamActiveRef.current = true;
           setStreamState('streaming');
           setIsStreamingReady(true);
@@ -786,6 +795,7 @@ function App() {
         pendingStartRef.current = async () => {
           if (requestIdRef.current !== requestId) return;
           debug('[odyssey] calling startStream (from pending) — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
+          streamRequestIdRef.current = requestId;
           await service.startStream(streamOptions);
           if (requestIdRef.current === requestId) {
             retryStreamRef.current = () => service.startStream(streamOptions).then(() => undefined);
@@ -802,6 +812,7 @@ function App() {
         return;
       }
       startStreamInFlightRef.current = true;
+      streamRequestIdRef.current = requestId;
       debug('[odyssey] calling startStream — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
       try {
         await service.startStream(streamOptions);
