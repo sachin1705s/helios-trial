@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Analytics } from '@vercel/analytics/react';
 import { SpeedInsights } from '@vercel/speed-insights/react';
 import type { ConnectionStatus } from '@odysseyml/odyssey';
@@ -53,14 +53,6 @@ type SpeechRecognitionLike = {
 
 const characters = (charactersData as { characters: Character[] }).characters;
 
-function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
-  const win = window as typeof window & {
-    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
-    SpeechRecognition?: new () => SpeechRecognitionLike;
-  };
-  return win.SpeechRecognition ?? win.webkitSpeechRecognition ?? null;
-}
-
 function pcmToWav(pcm: ArrayBuffer, sampleRate: number, channels: number, bitDepth: number): ArrayBuffer {
   const dataLen = pcm.byteLength;
   const buf = new ArrayBuffer(44 + dataLen);
@@ -88,10 +80,7 @@ function App() {
   const [streamState, setStreamState] = useState<StreamState>('idle');
   const [_error, setError] = useState<string | null>(null);
   const [isStreamingReady, setIsStreamingReady] = useState(false);
-  const [_speechText, setSpeechText] = useState('');
-  const [speechError, setSpeechError] = useState<string | null>(null);
-  const [isRecording, setIsRecording] = useState(false);
-  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [, setSpeechError] = useState<string | null>(null);
   const [textPrompt, setTextPrompt] = useState('');
   const [isCharacterRecording, setIsCharacterRecording] = useState(false);
   const [isCharacterThinking, setIsCharacterThinking] = useState(false);
@@ -99,20 +88,16 @@ function App() {
   const [chatExpanded, setChatExpanded] = useState(false);
   const [characterReply, setCharacterReply] = useState<string | null>(null);
   const [characterSources, setCharacterSources] = useState<{ title: string; url: string }[]>([]);
-  const [characterError, setCharacterError] = useState<string | null>(null);
-  const [moderationError, setModerationError] = useState<string | null>(null);
+  const [, setCharacterError] = useState<string | null>(null);
+  const [, setModerationError] = useState<string | null>(null);
   const [characterHistory, setCharacterHistory] = useState<Record<string, Array<{ role: 'user' | 'assistant'; content: string }>>>({});
-  const [uploadImage, setUploadImage] = useState<File | null>(null);
-  const [_uploadError, setUploadError] = useState<string | null>(null);
   const [voiceStatus, setVoiceStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
   const [isMusicEnabled, setIsMusicEnabled] = useState(false);
   const [, setIsMusicPlaying] = useState(false);
   const [, setVoiceError] = useState<string | null>(null);
-  const [, setLastVoiceText] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const odysseyStreamRef = useRef<MediaStream | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
   const characterRecorderRef = useRef<MediaRecorder | null>(null);
   const characterStreamRef = useRef<MediaStream | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
@@ -136,7 +121,6 @@ function App() {
   const greetedCharactersRef = useRef<Set<string>>(new Set()); // tracks which characters have greeted this session
   const ttsSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const ttsAbortRef = useRef<AbortController | null>(null);
-  const lastVoiceActionAtRef = useRef(0);
   const handleInteractRef = useRef<(promptOverride?: string) => void>(() => undefined);
   const ttsAudioCtxRef = useRef<AudioContext | null>(null);
   const ttsGenerationRef = useRef(0); // incremented on navigation — cancels any in-flight TTS across all await boundaries
@@ -964,81 +948,11 @@ function App() {
     handleInteractRef.current = handleInteract;
   }, [handleInteract]);
 
-  const OBJECT_KEYWORDS: Array<{ keywords: string[]; object: string }> = [
-    { keywords: ['sword', 'blade'], object: 'a shining sword' },
-    { keywords: ['shield'], object: 'a glowing shield' },
-    { keywords: ['crown', 'tiara'], object: 'a golden crown' },
-    { keywords: ['flower', 'rose', 'bouquet'], object: 'a bright flower' },
-    { keywords: ['star', 'stars'], object: 'twinkling stars' },
-    { keywords: ['balloon', 'balloons'], object: 'colorful balloons' },
-    { keywords: ['book'], object: 'an ancient book' },
-    { keywords: ['map'], object: 'a glowing map' },
-    { keywords: ['lantern', 'lamp'], object: 'a warm lantern' }
-  ];
-
-  const findObjectFromUtterance = (normalized: string) => {
-    for (const entry of OBJECT_KEYWORDS) {
-      for (const key of entry.keywords) {
-        const pattern = new RegExp(`(^|\\b)${key}(\\b|$)`, 'i');
-        if (pattern.test(normalized)) {
-          return entry.object;
-        }
-      }
-    }
-    return null;
-  };
-
-  const mapUtteranceToPrompt = (text: string) => {
-    const normalized = text.toLowerCase();
-    const object = findObjectFromUtterance(normalized);
-    if (/(^|\\b)(hello|hi|hey|yo|greetings)(\\b|$)/.test(normalized)) {
-      return { prompt: 'do hello', label: 'hello', object };
-    }
-    if (/(thumbs?\\s*up|like\\sthis)/.test(normalized)) {
-      return { prompt: 'do thumbs up', label: 'thumbs up', object };
-    }
-    if (/(victory|peace\\s*sign|v\\s*sign)/.test(normalized)) {
-      return { prompt: 'do victory sign', label: 'victory', object };
-    }
-    if (/(namaste|namaskar)/.test(normalized)) {
-      return { prompt: 'do namaste', label: 'namaste', object };
-    }
-    if (/(wave|waving)/.test(normalized)) {
-      return { prompt: 'do hello', label: 'wave', object };
-    }
-    if (/(dance|celebrate|celebration)/.test(normalized)) {
-      return { prompt: slideCtaRef.current || 'Animate it', label: 'celebrate', object };
-    }
-    if (object) {
-      return { prompt: slideCtaRef.current || 'Animate it', label: `object: ${object}`, object };
-    }
-    return null;
-  };
-
-
-  const handleVoiceUtterance = (text: string, _source: string) => {
-    const mapped = mapUtteranceToPrompt(text);
-    if (!mapped) return;
-    const now = Date.now();
-    if (now - lastVoiceActionAtRef.current < 1800) return;
-    lastVoiceActionAtRef.current = now;
-    if (!isStreamingReadyRef.current) return;
-    const objectPrompt = mapped.object ? ` Include ${mapped.object} in the scene.` : '';
-    const fullPrompt = `${mapped.prompt}.${objectPrompt}`.trim();
-    handleInteractRef.current(fullPrompt);
-  };
 
   const stopVoiceCapture = () => {
     // no-op: using SDK transcripts instead of browser speech
   };
 
-
-  const stopCharacterRecording = () => {
-    if (!isCharacterRecording) {
-      return;
-    }
-    characterRecorderRef.current?.stop();
-  };
 
   const VOICE_BY_SLIDE_ID: Record<string, string> = {
     'grandpa-turtle': 'magnus',
@@ -1182,21 +1096,6 @@ function App() {
     fresh.forEach(o => glDispatchedThisTurnRef.current.add(o));
     console.log(`[gl-objects][${source}] dispatching:`, fresh, `at +${Date.now() - glTurnStartRef.current}ms`);
     handleInteractRef.current(`add ${fresh.join(', ')} to the scene`);
-  };
-
-  // Shared: LLM call for objects.
-  const glFetchObjects = (message: string, characterName: string, myGeneration: number, source: string) => {
-    fetch('/api/character/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, character: characterName, history: [] }),
-    })
-      .then(res => res.ok ? res.json() as Promise<{ objects?: string[] }> : Promise.reject())
-      .then(data => {
-        const objects = (data.objects ?? []).filter(Boolean);
-        if (objects.length) glDispatchObjects(objects, myGeneration, source);
-      })
-      .catch(() => undefined);
   };
 
   // Shared: extract objects from text via keyword matching.
@@ -1387,7 +1286,7 @@ function App() {
 
         // Miss logging — when keyword-stream fired nothing, record the turn so
         // the keyword list can be expanded from real user interactions later.
-        if (GL_OBJECT_STRATEGY === 'keyword-stream' && glDispatchedThisTurnRef.current.size === 0) {
+        if (glDispatchedThisTurnRef.current.size === 0) {
           logEvent('keyword_miss', {
             character: slide.title,
             userText: glCurrentUserTextRef.current,
@@ -1758,34 +1657,6 @@ function App() {
     playCharacterTTS(trimmedReply, slideId);
   };
 
-  const startUploadStream = (file: File) => {
-    if (!serviceRef.current || connectionStatus !== 'connected') {
-      setUploadError('Waiting for connection…');
-      return;
-    }
-    const requestId = ++requestIdRef.current;
-    setStreamState('starting');
-    setIsStreamingReady(false);
-    setError(null);
-    serviceRef.current
-      .endStream()
-      .catch(() => undefined)
-      .then(async () => {
-        if (requestIdRef.current !== requestId) {
-          return;
-        }
-        await serviceRef.current?.startStream({ prompt: 'animate it', image: file, portrait: false });
-      })
-      .catch((err) => {
-        if (requestIdRef.current !== requestId) {
-          return;
-        }
-        setStreamState('error');
-        setIsStreamingReady(false);
-        setError(err instanceof Error ? err.message : String(err));
-      });
-  };
-
   const handleTextPromptSubmit = () => {
     const prompt = textPrompt.trim();
     if (!prompt) {
@@ -1812,153 +1683,6 @@ function App() {
       event.preventDefault();
       handleTextPromptSubmit();
     }
-  };
-
-  const handleUploadChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0] ?? null;
-    if (!file) {
-      setUploadImage(null);
-      return;
-    }
-    if (!file.type.startsWith('image/')) {
-      setUploadError('Please select an image file.');
-      setUploadImage(null);
-      return;
-    }
-    if (file.size > 25 * 1024 * 1024) {
-      setUploadError('Image is too large (max 25MB).');
-      setUploadImage(null);
-      return;
-    }
-    setUploadError(null);
-    setUploadImage(file);
-  };
-
-  const startBackendRecording = async () => {
-    if (isRecording || isTranscribing) {
-      return;
-    }
-    setSpeechError(null);
-    setSpeechText('');
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-
-      mediaStreamRef.current = stream;
-      mediaRecorderRef.current = recorder;
-      audioChunksRef.current = [];
-
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      recorder.onstop = async () => {
-        setIsRecording(false);
-        setIsTranscribing(true);
-
-        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
-        audioChunksRef.current = [];
-
-        try {
-          const form = new FormData();
-          form.append('audio', blob, 'wish.webm');
-
-          const response = await fetch('/api/stt', {
-            method: 'POST',
-            body: form
-          });
-
-          if (!response.ok) {
-            throw new Error('Transcription failed');
-          }
-
-          const data = (await response.json()) as { text?: string };
-          const transcript = (data.text ?? '').trim();
-          if (transcript) {
-            setSpeechText(transcript);
-            handleInteract(transcript);
-            if (voiceStatus === 'connected' && isVoiceAgentSlideRef.current) {
-              setLastVoiceText(transcript);
-              handleVoiceUtterance(transcript, 'stt');
-            }
-          } else {
-            logEvent('stt_empty', {
-              characterId: slide.id,
-              characterName: activeCharacterName,
-              inputMethod: 'world_voice',
-            });
-            setSpeechError('We did not hear anything. Try again.');
-          }
-        } catch (err) {
-          logEvent('stt_failed', {
-            characterId: slide.id,
-            characterName: activeCharacterName,
-            inputMethod: 'world_voice',
-            message: err instanceof Error ? err.message : 'Transcription failed',
-          });
-          const browserStarted = startBrowserSTT();
-          if (!browserStarted) {
-            setSpeechError('Transcription failed. Try again.');
-          }
-        } finally {
-          setIsTranscribing(false);
-          mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-          mediaStreamRef.current = null;
-        }
-      };
-
-      setIsRecording(true);
-      recorder.start();
-    } catch (err) {
-      logEvent('world_mic_blocked', {
-        characterId: slide.id,
-        characterName: activeCharacterName,
-        message: err instanceof Error ? err.message : 'Microphone access was blocked.',
-      });
-      const browserStarted = startBrowserSTT();
-      if (!browserStarted) {
-        setSpeechError('Microphone access was blocked.');
-      }
-    }
-  };
-
-  const startBrowserSTT = () => {
-    const Recognition = getSpeechRecognition();
-    if (!Recognition) {
-      return false;
-    }
-    const recognition = new Recognition();
-    recognition.lang = 'en-US';
-    recognition.interimResults = false;
-    recognition.continuous = false;
-
-    recognition.onresult = (event) => {
-      const result = event.results[event.results.length - 1];
-      const transcript = result[0]?.transcript ?? '';
-      if (result.isFinal && transcript) {
-        setSpeechText(transcript);
-        handleInteract(transcript);
-      }
-    };
-
-    recognition.onerror = () => {
-      logEvent('browser_stt_failed', {
-        characterId: slide.id,
-        characterName: activeCharacterName,
-      });
-      setSpeechError('Browser speech failed.');
-    };
-
-    recognition.onend = () => {
-    };
-
-    recognitionRef.current = recognition;
-    setSpeechText('');
-    recognition.start();
-    return true;
   };
 
   // Keep PTT refs pointing to latest function instances to avoid stale closures
