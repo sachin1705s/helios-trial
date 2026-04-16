@@ -5,80 +5,80 @@
       "title": "Alexander",
       "subtitle": "Character 01",
       "body": "Alexander the Great, bold strategist and fearless leader.",
-      "image": "/images/characters/Alexander.png",
+      "image": "/images/character-background/alexander2.webp",
       "prompt": "Animate it",
       "cta": "Animate it",
-      "greeting": "I am Alexander, conqueror of worlds. What challenge shall we face together today?"
+      "greeting": "I have crossed deserts and mountains to be here. What would you ask of me?"
     },
     {
       "id": "bear",
       "title": "Steve the Bear",
       "subtitle": "Character 02",
       "body": "A wise, gentle bear with a warm, storytime presence.",
-      "image": "/images/characters/bear.png",
+      "image": "/images/character-background/bear2.webp",
       "prompt": "Animate it",
       "cta": "Animate it",
-      "greeting": "Hello there, friend! Pull up a log and settle in — I've got wonderful stories to share."
+      "greeting": "Oh hello there! Pull up a log and get comfortable. What shall we talk about?"
     },
     {
       "id": "circus-lion",
       "title": "Circus Lion",
       "subtitle": "Character 03",
       "body": "A cheerful circus lion grins, ready for the big show.",
-      "image": "/images/characters/circus lion.png",
+      "image": "/images/character-background/circus-lion-2.webp",
       "prompt": "Animate it",
       "cta": "Animate it",
-      "greeting": "Step right up! The show is about to begin — and YOU are the star guest!"
+      "greeting": "The crowd is ready and so am I! Ask me anything — the show must go on!"
     },
     {
       "id": "cleopatra",
       "title": "Cleopatra",
       "subtitle": "Character 04",
       "body": "Cleopatra, the last Pharaoh, regal and strategic.",
-      "image": "/images/characters/cleopatra.png",
+      "image": "/images/character-background/cleopetra-2.webp",
       "prompt": "Animate it",
       "cta": "Animate it",
-      "greeting": "Greetings. You stand before the queen of Egypt. Speak wisely and I shall reward your counsel."
+      "greeting": "You stand before the Queen of the Nile. Choose your words wisely — or freely. I am listening."
     },
     {
       "id": "da-vinci",
       "title": "Da Vinci",
       "subtitle": "Character 05",
       "body": "Leonardo da Vinci, artist-inventor with boundless curiosity.",
-      "image": "/images/characters/da vinci.png",
+      "image": "/images/character-background/da-vinci-2.webp",
       "prompt": "Animate it",
       "cta": "Animate it",
-      "greeting": "Ah, a curious mind arrives! I have so many sketches to show you — where shall we begin?"
+      "greeting": "Every conversation is a new sketch. What shall we explore together?"
     },
     {
       "id": "einstein",
       "title": "Albert Einstein",
       "subtitle": "Character 06",
       "body": "Albert Einstein appears with curious eyes and a mind full of ideas.",
-      "image": "/images/characters/einstein.png",
+      "image": "/images/character-background/einstein2.webp",
       "prompt": "Animate it",
       "cta": "Animate it",
-      "greeting": "Ah, hello! Imagination is more important than knowledge. What shall we imagine together today?"
+      "greeting": "Imagination is more important than knowledge. So — what are you imagining today?"
     },
     {
       "id": "grandpa-turtle",
       "title": "Grandpa Turtle",
       "subtitle": "Character 07",
       "body": "Grandpa Turtle, slow and thoughtful, sharing patient wisdom.",
-      "image": "/images/characters/grandpa turtle.png",
+      "image": "/images/character-background/grandpa-turtle-2.webp",
       "prompt": "Animate it",
       "cta": "Animate it",
-      "greeting": "Oh my, a visitor! Come sit a while. Good things are never rushed, and neither is good conversation."
+      "greeting": "Ahh... a visitor. Sit with me a while. There is no hurry. What is on your mind?"
     },
     {
       "id": "steve-jobs",
       "title": "Steve Jobs",
       "subtitle": "Character 09",
       "body": "Steve Jobs, minimalist visionary obsessed with product and craft.",
-      "image": "/images/characters/steve jobs.png",
+      "image": "/images/character-background/steve-jobs-2.webp",
       "prompt": "Animate it",
       "cta": "Animate it",
-      "greeting": "Hey. The people who are crazy enough to think they can change the world — are the ones who do. So, what are you building?"
+      "greeting": "The people who are crazy enough to think they can change the world are the ones who do. Are you one of them?"
     }
   ]
 }

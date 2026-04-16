@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gemini Live — Object Dispatch Latency Test</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0d0d0d; color: #e0e0e0; font-family: 'Courier New', monospace; padding: 32px; }
+    h1 { color: #7eb8f7; font-size: 20px; margin-bottom: 8px; }
+    p.sub { color: #888; font-size: 13px; margin-bottom: 20px; line-height: 1.6; }
+
+    .strategy-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px;
+    }
+    .strategy-group {
+      background: #111; border: 1px solid #1e1e1e; border-radius: 8px; padding: 14px;
+    }
+    .strategy-group h3 { color: #7eb8f7; font-size: 12px; margin-bottom: 8px; letter-spacing: 0.05em; }
+    .strategy-item { font-size: 11px; color: #888; padding: 2px 0; line-height: 1.5; }
+    .strategy-item b { color: #ccc; }
+    .strategy-item.new b { color: #f0c85e; }
+    .strategy-item.new::after { content: ' ✦'; color: #f0c85e; font-size: 9px; }
+
+    button {
+      background: #1a6ef0; color: #fff; border: none; border-radius: 6px;
+      padding: 12px 28px; font-size: 15px; cursor: pointer; margin-bottom: 24px;
+    }
+    button:disabled { background: #222; color: #666; cursor: not-allowed; }
+
+    #log {
+      background: #111; border: 1px solid #222; border-radius: 8px;
+      padding: 20px; font-size: 12px; line-height: 1.6; white-space: pre-wrap;
+      min-height: 120px; max-height: 40vh; overflow-y: auto; margin-bottom: 20px;
+    }
+    #results {
+      background: #111; border: 1px solid #2a4a2a; border-radius: 8px;
+      padding: 20px; font-size: 12px; line-height: 1.65; white-space: pre-wrap;
+      display: none; margin-bottom: 20px; overflow-x: auto;
+    }
+    .winner { color: #5ef06e; font-weight: bold; }
+    .progress { color: #666; }
+    .done { color: #5ef06e; }
+    .error { color: #f06e5e; }
+
+    #ship-note {
+      background: #131820; border: 1px solid #2a3a4a; border-radius: 8px;
+      padding: 18px; font-size: 13px; color: #aac4e8; display: none; line-height: 1.7;
+    }
+    #ship-note code {
+      background: #1a2030; padding: 2px 6px; border-radius: 3px; color: #7eb8f7;
+    }
+    #ship-note .winner-name { color: #5ef06e; font-weight: bold; font-size: 15px; }
+  </style>
+</head>
+<body>
+  <h1>Gemini Live — Object Dispatch Latency Test</h1>
+  <p class="sub">
+    Runs all 10 strategies against 5 fixtures. Scores each on first-dispatch latency + accuracy.<br/>
+    LLM-based strategies call <code>/api/character/chat</code> — dev server must be running.<br/>
+    <span style="color:#f0c85e">✦ New</span> = Odyssey-feedback strategies added this session.
+  </p>
+
+  <div class="strategy-grid">
+    <div class="strategy-group">
+      <h3>LATENCY STRATEGIES</h3>
+      <div class="strategy-item"><b>V1 turn-complete</b> — LLM after full transcript (baseline)</div>
+      <div class="strategy-item"><b>V2 keyword-stream</b> — keyword match per chunk, zero API calls</div>
+      <div class="strategy-item"><b>V3 stage-dir-stream</b> — extract *actions* per chunk</div>
+      <div class="strategy-item"><b>V4 predict-at-input</b> — LLM at inputTranscription, user text only</div>
+      <div class="strategy-item"><b>V5 word-threshold</b> — LLM after 15+ words buffered</div>
+      <div class="strategy-item"><b>V6 hybrid</b> — keyword+stage-dir now, LLM confirms at end</div>
+      <div class="strategy-item"><b>V7 speculative-correct</b> — predict immediately, correct after turn</div>
+    </div>
+    <div class="strategy-group">
+      <h3>ODYSSEY FEEDBACK STRATEGIES ✦</h3>
+      <div class="strategy-item new"><b>V8 odyssey-last-prompt</b> — inject <code>lastAppliedPrompt</code> as scene context into prediction</div>
+      <div class="strategy-item new"><b>V9 odyssey-ack-inject</b> — inject last <code>onInteractAcknowledged</code> prompt as scene state</div>
+      <div class="strategy-item new"><b>V10 odyssey-video-frame</b> — simulate frame capture → vision description → Gemini Flash prediction</div>
+      <div style="margin-top:10px; font-size:11px; color:#666; line-height:1.6;">
+        V8–V10 all fire at <b>inputTranscription</b> (same timing as V4) but with richer<br/>
+        context about what Odyssey is currently showing. The question is whether<br/>
+        that context improves <b>accuracy</b> vs V4 predict-at-input.
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:24px;">
+    <button id="run-btn">▶ Run Core Fixtures (5)</button>
+    <button id="ood-btn" style="background:#6a3fc8;">⚡ Run OOD Stress Test (5)</button>
+  </div>
+
+  <div id="log">Press a button to start…</div>
+  <div id="results"></div>
+  <div id="timeline" style="background:#111; border:1px solid #222; border-radius:8px; padding:20px; font-size:11px; line-height:1.6; white-space:pre-wrap; display:none; margin-bottom:20px; overflow-x:auto;"></div>
+  <div style="display:none; margin-bottom:16px;" id="dl-row">
+    <button id="dl-btn" style="background:#1a4a2a; font-size:13px; padding:8px 20px;">⬇ Download JSON</button>
+  </div>
+  <div id="ship-note"></div>
+
+  <script type="module">
+    import {
+      runAllStrategies, runOODStrategies,
+      renderSummary, renderOODSummary, renderTimeline,
+      buildExportPayload, downloadJSON,
+      FIXTURES, OOD_FIXTURES,
+    } from '/src/gemini-live-latency-test.ts';
+
+    const runBtn  = document.getElementById('run-btn');
+    const oodBtn  = document.getElementById('ood-btn');
+    const dlBtn   = document.getElementById('dl-btn');
+    const dlRow   = document.getElementById('dl-row');
+    const logEl   = document.getElementById('log');
+    const results = document.getElementById('results');
+    const timeline = document.getElementById('timeline');
+    const note    = document.getElementById('ship-note');
+
+    let lastPayload = null;
+
+    function appendLog(msg, cls = '') {
+      const span = document.createElement('span');
+      if (cls) span.className = cls;
+      span.textContent = msg + '\n';
+      logEl.appendChild(span);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function resetUI() {
+      logEl.textContent = '';
+      results.style.display = 'none';
+      timeline.style.display = 'none';
+      dlRow.style.display = 'none';
+      note.style.display = 'none';
+      lastPayload = null;
+    }
+
+    function showResults(turnResults, summary, fixtureSet, suite) {
+      results.style.display = 'block';
+      results.textContent = summary;
+      results.innerHTML = results.innerHTML
+        .replace(/(WINNER:.*)/g, '<span class="winner">$1</span>')
+        .replace(/(⚠.*)/g, '<span class="error">$1</span>');
+
+      const tl = renderTimeline(turnResults, fixtureSet);
+      timeline.style.display = 'block';
+      timeline.textContent = tl;
+
+      lastPayload = buildExportPayload(suite, turnResults, summary);
+      dlRow.style.display = 'block';
+
+      if (suite === 'core') {
+        const winnerMatch = summary.match(/WINNER: (\S+)/);
+        if (winnerMatch) {
+          const winner = winnerMatch[1];
+          const isOdysseyStrategy = ['odyssey-last-prompt', 'odyssey-ack-inject', 'odyssey-video-frame'].includes(winner);
+          const implNote = isOdysseyStrategy
+            ? `This is an Odyssey-feedback strategy. Add Odyssey context injection to <code>glOnInput</code> in App.tsx, then set the constant.`
+            : `Already fully implemented in App.tsx — just update the constant.`;
+          note.style.display = 'block';
+          note.innerHTML = `
+            <div>Winner: <span class="winner-name">${winner}</span></div><br/>
+            <strong>To ship:</strong> In <code>src/App.tsx</code>:<br/><br/>
+            <code>const GL_OBJECT_STRATEGY = '${winner}';</code><br/><br/>
+            ${implNote}
+          `;
+        }
+      }
+    }
+
+    runBtn.addEventListener('click', async () => {
+      runBtn.disabled = true; oodBtn.disabled = true;
+      resetUI();
+      appendLog('Running core fixtures (5 × 10 strategies)…\n', 'progress');
+      try {
+        const turnResults = await runAllStrategies(msg => appendLog(msg, msg.startsWith('  ') ? 'done' : 'progress'));
+        appendLog('\nAll core fixtures complete.\n', 'done');
+        const summary = renderSummary(turnResults);
+        showResults(turnResults, summary, FIXTURES, 'core');
+      } catch (err) {
+        appendLog('\nError: ' + err.message, 'error');
+      } finally {
+        runBtn.disabled = false; oodBtn.disabled = false;
+      }
+    });
+
+    oodBtn.addEventListener('click', async () => {
+      runBtn.disabled = true; oodBtn.disabled = true;
+      resetUI();
+      appendLog('Running OOD stress-test fixtures (5 × 10 strategies)…\n', 'progress');
+      appendLog('OOD fixtures test precision: abstract questions, false-positive traps, minimal context.\n', 'progress');
+      try {
+        const turnResults = await runOODStrategies(msg => appendLog(msg, msg.startsWith('  ') ? 'done' : 'progress'));
+        appendLog('\nAll OOD fixtures complete.\n', 'done');
+        const summary = renderOODSummary(turnResults);
+        showResults(turnResults, summary, OOD_FIXTURES, 'ood');
+      } catch (err) {
+        appendLog('\nError: ' + err.message, 'error');
+      } finally {
+        runBtn.disabled = false; oodBtn.disabled = false;
+      }
+    });
+
+    dlBtn.addEventListener('click', () => {
+      if (lastPayload) downloadJSON(lastPayload);
+    });
+  </script>
+</body>
+</html>

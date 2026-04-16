@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Odyssey Phase Timing Test</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: monospace; background: #0d0d0d; color: #e0e0e0; padding: 20px; }
+    h1 { color: #fff; font-size: 17px; margin-bottom: 4px; }
+    .subtitle { color: #555; font-size: 11px; margin-bottom: 20px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+    .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+    .panel { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 14px; }
+    .panel h2 { font-size: 12px; color: #aaa; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px; }
+    .badge { display: inline-block; font-size: 10px; padding: 1px 7px; border-radius: 10px; background: #333; color: #888; margin-left: 6px; vertical-align: middle; }
+    .badge.ok  { background: #14532d; color: #4ade80; }
+    .badge.err { background: #450a0a; color: #f87171; }
+    .badge.mid { background: #1e3a5f; color: #60a5fa; }
+    .row { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; align-items: center; }
+    button { background: #2563eb; color: #fff; border: none; border-radius: 5px; padding: 7px 14px; cursor: pointer; font-family: monospace; font-size: 12px; }
+    button:disabled { background: #2a2a2a; color: #555; cursor: not-allowed; }
+    button.red { background: #dc2626; }
+    button.green { background: #16a34a; }
+    button.grey { background: #374151; }
+    button.orange { background: #c2410c; }
+    label { font-size: 11px; color: #777; }
+    select, input[type=text] { background: #111; color: #e0e0e0; border: 1px solid #444; border-radius: 4px; padding: 5px 8px; font-family: monospace; font-size: 12px; width: 100%; margin-top: 3px; }
+    .log { background: #0a0a0a; border: 1px solid #222; border-radius: 4px; padding: 8px; height: 200px; overflow-y: auto; font-size: 10px; line-height: 1.7; margin-top: 8px; }
+    .log .ts    { color: #444; }
+    .log .info  { color: #60a5fa; }
+    .log .ok    { color: #4ade80; }
+    .log .warn  { color: #fbbf24; }
+    .log .err   { color: #f87171; }
+    .log .audio { color: #fb923c; }
+    .log .tscript { color: #34d399; }
+    .log .phase1  { color: #a78bfa; }
+    .log .phase2  { color: #f472b6; }
+    .log .timing  { color: #fbbf24; font-weight: bold; }
+    video { width: 100%; aspect-ratio: 9/16; background: #111; border-radius: 6px; display: block; }
+    .video-placeholder { width: 100%; aspect-ratio: 9/16; background: #111; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #444; font-size: 12px; }
+    .stat { font-size: 11px; color: #555; margin-top: 4px; }
+    /* Results table */
+    .results-panel { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 14px; margin-bottom: 16px; }
+    table { width: 100%; border-collapse: collapse; font-size: 10px; margin-top: 8px; }
+    th { background: #222; color: #aaa; padding: 5px 8px; text-align: left; border: 1px solid #333; font-weight: normal; text-transform: uppercase; letter-spacing: 0.5px; }
+    td { padding: 5px 8px; border: 1px solid #222; color: #ccc; vertical-align: top; }
+    tr:nth-child(even) td { background: #141414; }
+    td.hit  { color: #4ade80; }
+    td.miss { color: #f87171; }
+    td.late { color: #fbbf24; }
+    .mode-pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; background: #1e3a5f; color: #60a5fa; margin-bottom: 4px; }
+    .note-input { background: #111; color: #e0e0e0; border: 1px solid #444; border-radius: 4px; padding: 4px 6px; font-family: monospace; font-size: 11px; width: 100%; }
+  </style>
+</head>
+<body>
+  <h1>Odyssey Phase Timing Test
+    <span class="badge" id="gl-badge">gl: disconnected</span>
+    <span class="badge" id="ody-badge">ody: disconnected</span>
+  </h1>
+  <p class="subtitle">Tests Phase 1 and Phase 2 timing variations for Odyssey interact() calls. Records results for architecture decision + Odyssey sharing.</p>
+
+  <!-- CONTROLS -->
+  <div class="panel" style="margin-bottom:16px">
+    <h2>Setup</h2>
+    <div class="row">
+      <div style="flex:1">
+        <label>Character</label>
+        <select id="char-sel">
+          <option value="einstein">Einstein</option>
+          <option value="alexander">Alexander</option>
+          <option value="cleopatra">Cleopatra</option>
+          <option value="da-vinci">Da Vinci</option>
+        </select>
+      </div>
+      <div style="flex:2">
+        <label>Phase 2 Mode</label>
+        <select id="mode-sel">
+          <option value="first-chunk">A — First outputTranscription chunk (fastest, least context)</option>
+          <option value="words-10">B — Word threshold: 10 words</option>
+          <option value="words-15" selected>C — Word threshold: 15 words</option>
+          <option value="words-20">D — Word threshold: 20 words</option>
+          <option value="words-30">E — Word threshold: 30 words</option>
+          <option value="turn-complete">F — turnComplete only (slowest, most accurate)</option>
+          <option value="double-fire">G — Double fire: 15 words + turnComplete (tests scene corruption)</option>
+        </select>
+      </div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="btn-connect" onclick="doConnect()">Connect</button>
+      <button id="btn-mic" onclick="doToggleMic()" disabled>Start Mic</button>
+      <button id="btn-disconnect" onclick="doDisconnect()" disabled class="grey">Disconnect</button>
+      <button onclick="clearLogs()" class="grey">Clear Logs</button>
+      <button onclick="exportResults()" class="orange">Export JSON</button>
+    </div>
+    <div class="stat" id="stats">Mic→Gemini: 0 chunks | Gemini→Speaker: 0 chunks</div>
+  </div>
+
+  <div class="grid">
+    <!-- LEFT: Gemini + Transcript -->
+    <div>
+      <div class="panel" style="margin-bottom:16px">
+        <h2>Gemini Live <span class="badge" id="gl-panel-badge">disconnected</span></h2>
+        <div class="log" id="gl-log"></div>
+      </div>
+      <div class="panel">
+        <h2>Transcript + Phase Events</h2>
+        <div class="log" id="transcript-log" style="height:240px"></div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Odyssey video + log -->
+    <div class="panel">
+      <h2>Odyssey Avatar <span class="badge" id="ody-panel-badge">disconnected</span></h2>
+      <div id="video-placeholder" class="video-placeholder">Waiting for stream…</div>
+      <video id="ody-video" autoplay playsinline muted style="display:none"></video>
+      <div class="log" id="ody-log"></div>
+    </div>
+  </div>
+
+  <!-- RESULTS TABLE -->
+  <div class="results-panel">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+      <h2 style="font-size:12px;color:#aaa;text-transform:uppercase;letter-spacing:1px">Turn Results
+        <span style="color:#555;font-size:10px;font-weight:normal;margin-left:8px">— record your visual observations in the Note column</span>
+      </h2>
+      <button onclick="clearResults()" class="grey" style="padding:3px 10px;font-size:10px">Clear</button>
+    </div>
+    <table id="results-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Mode</th>
+          <th>User said</th>
+          <th>Phase2 prompt (truncated)</th>
+          <th>Words at fire</th>
+          <th>ms after speech start</th>
+          <th>ms before turnComplete</th>
+          <th>Objects returned</th>
+          <th>Visual result</th>
+          <th>Note (edit me)</th>
+        </tr>
+      </thead>
+      <tbody id="results-body"></tbody>
+    </table>
+  </div>
+
+  <script type="module" src="/src/odyssey-phase-test.ts"></script>
+</body>
+</html>

@@ -10,6 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
+import { requireAuth } from './middleware/auth.js';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -22,8 +23,13 @@ const loadPrompt = (filename, fallback) => {
   try {
     const content = fs.readFileSync(path.join(promptDir, filename), 'utf8');
     const cleaned = content.replace(/\r\n/g, '\n').trim();
-    return cleaned || fallback;
+    if (!cleaned) {
+      if (process.env.NODE_ENV !== 'production') console.warn(`[prompt] ${filename} is empty — using fallback`);
+      return fallback;
+    }
+    return cleaned;
   } catch {
+    if (process.env.NODE_ENV !== 'production') console.warn(`[prompt] ${filename} not found — using fallback`);
     return fallback;
   }
 };
@@ -67,7 +73,7 @@ app.use(
         return callback(null, true);
       }
       // Allow all Vercel preview/production URLs for this project
-      if (/^https:\/\/interactive-studio[^.]*\.vercel\.app$/.test(origin)) {
+      if (/^https:\/\/(interactive-studio[^.]*|[^.]*-saitiger)\.vercel\.app$/.test(origin)) {
         return callback(null, true);
       }
       if (allowedOrigins.includes(origin)) {
@@ -106,11 +112,36 @@ if (!smallestApiKey) {
   console.warn('[startup] Missing SMALLEST_API_KEY');
 }
 
+const supabaseUrl            = process.env.SUPABASE_URL            || '';
+const supabaseAnonKey        = process.env.SUPABASE_ANON_KEY        || '';
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey) {
+  console.warn('[startup] Missing SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY');
+}
+
+const fishAudioApiKey = process.env.FISH_AUDIO_API_KEY || '';
+if (!fishAudioApiKey) {
+  console.warn('[startup] Missing FISH_AUDIO_API_KEY (voice clone A/B test)');
+}
+
+const gradiumApiKey = process.env.GRADIUM_API_KEY || '';
+if (!gradiumApiKey) {
+  console.warn('[startup] Missing GRADIUM_API_KEY (voice clone A/B test)');
+}
+
+const sarvamApiKey = process.env.SARVAM_API_KEY || '';
+if (!sarvamApiKey) {
+  console.warn('[startup] Missing SARVAM_API_KEY (voice clone A/B test)');
+}
+
 const runtimeConfig = {
   geminiApiKey,
   odysseyApiKey: odysseyApiKeys[0] || '',
   odysseyApiKeys,
-  smallestApiKey
+  smallestApiKey,
+  fishAudioApiKey,
+  gradiumApiKey,
+  sarvamApiKey,
 };
 
 const isProduction = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
@@ -528,8 +559,7 @@ app.post('/api/character/chat', aiLimiter, async (req, res) => {
     const characterModel = process.env.EINSTEIN_MODEL || model;
     const promptByCharacter = {
       'Alexander': loadPrompt('alexander.txt', 'You are Alexander. Be confident, strategic, and bold.'),
-      'Bear': loadPrompt('bear.txt', 'You are a gentle, wise bear who explains things warmly.'),
-      'Circus Lion': loadPrompt('circus lion.txt', 'You are Leo the Circus Lion, playful and showy. Use scene actions.'),
+      'Steve the Bear': loadPrompt('bear.txt', 'You are a gentle, wise bear who explains things warmly.'),
       'Cleopatra': loadPrompt('cleopetra.txt', 'You are Cleopatra, regal and strategic.'),
       'Da Vinci': loadPrompt('da vinci.txt', 'You are Leonardo da Vinci, curious and inventive.'),
       'Albert Einstein': loadPrompt('einstein.txt', 'You are Albert Einstein, curious and thoughtful.'),
@@ -1191,9 +1221,456 @@ app.post('/api/chat', aiLimiter, async (req, res) => {
   }
 });
 
+// ─── Voice Clone A/B Test ─────────────────────────────────────────────────────
+// Single-provider routing: each request goes to ONE provider, chosen by an
+// epsilon-greedy bandit. User rates the result blind (they don't know which
+// provider was used), and that rating feeds back into routing weights so the
+// best provider gets more traffic over time.
+//
+// Routes:
+//   POST /api/clone-ab          — generate clone (routes to one provider)
+//   POST /api/clone-ab/rate     — submit a rating for a session
+//   GET  /api/clone-ab/stats    — provider stats (counts, avg ratings, weights)
+
+const cloneMultipart = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 30 * 1024 * 1024 },
+});
+
+// ── Provider registry ─────────────────────────────────────────────────────────
+const CLONE_PROVIDERS = {
+  smallest: { label: 'Smallest.ai' },
+  fish:     { label: 'Fish Audio'  },
+  gradium:  { label: 'Gradium'     },
+  sarvam:   { label: 'Sarvam AI'   },
+};
+
+function cloneProviderKey(id) {
+  return { smallest: runtimeConfig.smallestApiKey, fish: runtimeConfig.fishAudioApiKey,
+           gradium: runtimeConfig.gradiumApiKey,   sarvam: runtimeConfig.sarvamApiKey }[id] ?? '';
+}
+
+// ── Redis keys ────────────────────────────────────────────────────────────────
+const cloneStatKey  = (id) => `clone:stats:${id}`;   // hash: count, ratingSum
+const cloneSessionKey = (sid) => `clone:session:${sid}`; // string: providerId, TTL 1h
+
+// ── Bandit: pick one provider ─────────────────────────────────────────────────
+// Epsilon-greedy: 20% random exploration, 80% exploit best avg rating.
+// Falls back to round-robin if no ratings yet.
+async function pickProvider(eligible) {
+  const EPSILON = 0.2;
+
+  // Gather stats for eligible providers
+  const stats = await Promise.all(eligible.map(async (id) => {
+    if (useRedis) {
+      const s = await redis.hgetall(cloneStatKey(id));
+      const count = Number(s?.count ?? 0);
+      const avg   = count > 0 ? Number(s?.ratingSum ?? 0) / count : null;
+      return { id, count, avg };
+    }
+    return { id, count: 0, avg: null };
+  }));
+
+  // Explore: pick randomly
+  if (Math.random() < EPSILON || stats.every(s => s.avg === null)) {
+    // Prefer under-explored providers first
+    const minCount = Math.min(...stats.map(s => s.count));
+    const underexplored = stats.filter(s => s.count === minCount);
+    return underexplored[Math.floor(Math.random() * underexplored.length)].id;
+  }
+
+  // Exploit: pick highest avg rating (among providers with at least 1 rating)
+  const rated = stats.filter(s => s.avg !== null);
+  if (!rated.length) return eligible[Math.floor(Math.random() * eligible.length)];
+  rated.sort((a, b) => b.avg - a.avg);
+  return rated[0].id;
+}
+
+// ── Provider adapters ─────────────────────────────────────────────────────────
+
+async function cloneSmallest(audioBuffer, audioMime, audioFilename, text, apiKey) {
+  const boundary = `----Boundary${Date.now().toString(16)}`;
+  const CRLF = '\r\n';
+  const cloneName = `ab-${Date.now()}`;
+  const parts = [
+    `--${boundary}${CRLF}Content-Disposition: form-data; name="displayName"${CRLF}${CRLF}${cloneName}${CRLF}`,
+    `--${boundary}${CRLF}Content-Disposition: form-data; name="file"; filename="${audioFilename}"${CRLF}Content-Type: ${audioMime}${CRLF}${CRLF}`,
+  ];
+  const cloneBody = Buffer.concat([
+    Buffer.from(parts.join('')),
+    audioBuffer,
+    Buffer.from(`${CRLF}--${boundary}--${CRLF}`),
+  ]);
+  const cloneRes = await fetch('https://waves-api.smallest.ai/api/v1/lightning-large/add_voice', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      'Content-Length': String(cloneBody.length),
+    },
+    body: cloneBody,
+  });
+  if (!cloneRes.ok) {
+    const msg = await cloneRes.text().catch(() => cloneRes.statusText);
+    throw new Error(`Smallest add_voice ${cloneRes.status}: ${msg}`);
+  }
+  const cloneData = await cloneRes.json();
+  const voiceId = cloneData.voice_id ?? cloneData.voiceId ?? cloneData.id
+    ?? cloneData.data?.voice_id ?? cloneData.data?.id;
+  if (!voiceId) throw new Error(`Smallest: no voice_id in response: ${JSON.stringify(cloneData)}`);
+
+  const ttsRes = await fetch('https://waves-api.smallest.ai/api/v1/lightning-large/get_speech', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ voiceId, text, speed: 1, add_wav_header: true }),
+  });
+  if (!ttsRes.ok) {
+    const msg = await ttsRes.text().catch(() => ttsRes.statusText);
+    throw new Error(`Smallest get_speech ${ttsRes.status}: ${msg}`);
+  }
+  return { audioB64: Buffer.from(await ttsRes.arrayBuffer()).toString('base64'), mimeType: 'audio/wav' };
+}
+
+async function cloneFishAudio(audioBuffer, text, apiKey) {
+  const ttsRes = await fetch('https://api.fish.audio/v1/tts', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'model-id': 'speech-1.6',
+    },
+    body: JSON.stringify({
+      text,
+      format: 'mp3',
+      mp3_bitrate: 128,
+      references: [{ audio: audioBuffer.toString('base64'), text: '' }],
+      normalize: true,
+      latency: 'normal',
+    }),
+  });
+  if (!ttsRes.ok) {
+    const msg = await ttsRes.text().catch(() => ttsRes.statusText);
+    throw new Error(`Fish Audio TTS ${ttsRes.status}: ${msg}`);
+  }
+  return { audioB64: Buffer.from(await ttsRes.arrayBuffer()).toString('base64'), mimeType: 'audio/mpeg' };
+}
+
+async function cloneGradium(audioBuffer, audioMime, audioFilename, text, apiKey) {
+  const boundary = `----Boundary${Date.now().toString(16)}`;
+  const CRLF = '\r\n';
+  const cloneBody = Buffer.concat([
+    Buffer.from(`--${boundary}${CRLF}Content-Disposition: form-data; name="file"; filename="${audioFilename}"${CRLF}Content-Type: ${audioMime}${CRLF}${CRLF}`),
+    audioBuffer,
+    Buffer.from(`${CRLF}--${boundary}--${CRLF}`),
+  ]);
+  const cloneRes = await fetch('https://api.gradium.ai/api/speech/voice-clone', {
+    method: 'POST',
+    headers: { 'x-api-key': apiKey, 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+    body: cloneBody,
+  });
+  if (!cloneRes.ok) {
+    const msg = await cloneRes.text().catch(() => cloneRes.statusText);
+    throw new Error(`Gradium clone ${cloneRes.status}: ${msg}`);
+  }
+  const cloneData = await cloneRes.json();
+  const voiceId = cloneData.voice_id ?? cloneData.id ?? cloneData.voiceId;
+  if (!voiceId) throw new Error(`Gradium: no voice_id: ${JSON.stringify(cloneData)}`);
+
+  const ttsRes = await fetch('https://api.gradium.ai/api/speech/tts', {
+    method: 'POST',
+    headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ voice_id: voiceId, text, format: 'wav' }),
+  });
+  if (!ttsRes.ok) {
+    const msg = await ttsRes.text().catch(() => ttsRes.statusText);
+    throw new Error(`Gradium TTS ${ttsRes.status}: ${msg}`);
+  }
+  return { audioB64: Buffer.from(await ttsRes.arrayBuffer()).toString('base64'), mimeType: 'audio/wav' };
+}
+
+async function cloneSarvam(audioBuffer, audioMime, text, apiKey) {
+  const boundary = `----Boundary${Date.now().toString(16)}`;
+  const CRLF = '\r\n';
+  const body = Buffer.concat([
+    Buffer.from(`--${boundary}${CRLF}Content-Disposition: form-data; name="text"${CRLF}${CRLF}${text}${CRLF}`
+      + `--${boundary}${CRLF}Content-Disposition: form-data; name="reference_audio"; filename="voice.webm"${CRLF}Content-Type: ${audioMime}${CRLF}${CRLF}`),
+    audioBuffer,
+    Buffer.from(`${CRLF}--${boundary}--${CRLF}`),
+  ]);
+  const ttsRes = await fetch('https://api.sarvam.ai/text-to-speech', {
+    method: 'POST',
+    headers: { 'api-subscription-key': apiKey, 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+    body,
+  });
+  if (!ttsRes.ok) {
+    const msg = await ttsRes.text().catch(() => ttsRes.statusText);
+    throw new Error(`Sarvam TTS ${ttsRes.status}: ${msg}`);
+  }
+  const ct = ttsRes.headers.get('content-type') ?? 'audio/wav';
+  return { audioB64: Buffer.from(await ttsRes.arrayBuffer()).toString('base64'), mimeType: ct.split(';')[0].trim() };
+}
+
+async function runProvider(id, audioBuffer, audioMime, audioFilename, text) {
+  const apiKey = cloneProviderKey(id);
+  if (!apiKey) throw new Error(`${CLONE_PROVIDERS[id]?.label ?? id} API key not configured`);
+  if (id === 'smallest') return cloneSmallest(audioBuffer, audioMime, audioFilename, text, apiKey);
+  if (id === 'fish')     return cloneFishAudio(audioBuffer, text, apiKey);
+  if (id === 'gradium')  return cloneGradium(audioBuffer, audioMime, audioFilename, text, apiKey);
+  if (id === 'sarvam')   return cloneSarvam(audioBuffer, audioMime, text, apiKey);
+  throw new Error(`Unknown provider: ${id}`);
+}
+
+// ── POST /api/clone-ab ────────────────────────────────────────────────────────
+app.post('/api/clone-ab', aiLimiter, cloneMultipart.single('voice'), async (req, res) => {
+  const text = String(req.body?.text ?? '').trim().slice(0, 500);
+  if (!text)     return res.status(400).json({ error: 'text is required' });
+  if (!req.file) return res.status(400).json({ error: 'voice file is required' });
+
+  const { buffer: audioBuffer, mimetype: audioMime, originalname: audioFilename = 'voice.webm' } = req.file;
+
+  // Only include providers whose API key is configured
+  const eligible = Object.keys(CLONE_PROVIDERS).filter(id => cloneProviderKey(id));
+  if (!eligible.length) return res.status(503).json({ error: 'No voice clone providers configured' });
+
+  const providerId = await pickProvider(eligible);
+  const t0 = Date.now();
+
+  try {
+    const result = await runProvider(providerId, audioBuffer, audioMime, audioFilename, text);
+    const latencyMs = Date.now() - t0;
+
+    // Persist a short-lived session so /rate can look up the provider
+    const sessionId = randomUUID();
+    if (useRedis) {
+      await redis.set(cloneSessionKey(sessionId), providerId, { ex: 3600 });
+    }
+
+    // Increment request count (no rating yet)
+    if (useRedis) {
+      await redis.hincrby(cloneStatKey(providerId), 'count', 1);
+    }
+
+    console.log(`[clone-ab] routed → ${providerId} | ${latencyMs}ms | session:${sessionId}`);
+    return res.json({ sessionId, latencyMs, ...result });
+  } catch (err) {
+    console.error(`[clone-ab][${providerId}]`, err.message);
+    return res.status(500).json({ error: err.message, provider: providerId });
+  }
+});
+
+// ── POST /api/clone-ab/rate ───────────────────────────────────────────────────
+app.post('/api/clone-ab/rate', async (req, res) => {
+  const sessionId = String(req.body?.sessionId ?? '').trim();
+  const rating    = Number(req.body?.rating);
+  if (!sessionId)              return res.status(400).json({ error: 'sessionId required' });
+  if (rating < 1 || rating > 5) return res.status(400).json({ error: 'rating must be 1–5' });
+
+  let providerId = null;
+  if (useRedis) {
+    providerId = await redis.get(cloneSessionKey(sessionId));
+  }
+  if (!providerId) return res.status(404).json({ error: 'Session not found or expired' });
+
+  if (useRedis) {
+    await redis.hincrbyfloat(cloneStatKey(providerId), 'ratingSum', rating);
+    await redis.hincrby(cloneStatKey(providerId), 'ratingCount', 1);
+    // Don't reveal the provider to the client
+  }
+  console.log(`[clone-ab/rate] session:${sessionId} → ${providerId} rated ${rating}/5`);
+  return res.json({ ok: true });
+});
+
+// ── GET /api/clone-ab/stats ───────────────────────────────────────────────────
+app.get('/api/clone-ab/stats', async (_req, res) => {
+  const ids = Object.keys(CLONE_PROVIDERS);
+  const rows = await Promise.all(ids.map(async (id) => {
+    const label = CLONE_PROVIDERS[id].label;
+    const configured = Boolean(cloneProviderKey(id));
+    if (!useRedis) return { id, label, configured, count: 0, ratingCount: 0, avgRating: null };
+    const s = await redis.hgetall(cloneStatKey(id));
+    const count       = Number(s?.count       ?? 0);
+    const ratingCount = Number(s?.ratingCount ?? 0);
+    const ratingSum   = Number(s?.ratingSum   ?? 0);
+    const avgRating   = ratingCount > 0 ? Math.round((ratingSum / ratingCount) * 100) / 100 : null;
+    return { id, label, configured, count, ratingCount, avgRating };
+  }));
+  return res.json({ providers: rows });
+});
+
+// ─── User: Voice Clones ───────────────────────────────────────────────────────
+
+app.get('/api/user/voice-clones', requireAuth, async (req, res) => {
+  const { data, error } = await req.supabase
+    .from('voice_clones')
+    .select('*')
+    .order('created_at', { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ voiceClones: data });
+});
+
+app.post('/api/user/voice-clones', requireAuth, async (req, res) => {
+  const { provider, provider_voice_id, display_name } = req.body ?? {};
+  if (!provider || !provider_voice_id || !display_name) {
+    return res.status(400).json({ error: 'provider, provider_voice_id, and display_name are required' });
+  }
+  const allowed = ['smallest', 'gradium', 'sarvam'];
+  if (!allowed.includes(provider)) {
+    return res.status(400).json({ error: `provider must be one of: ${allowed.join(', ')}` });
+  }
+  const { data, error } = await req.supabase
+    .from('voice_clones')
+    .insert({ user_id: req.userId, provider, provider_voice_id, display_name })
+    .select()
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  return res.status(201).json({ voiceClone: data });
+});
+
+app.delete('/api/user/voice-clones/:id', requireAuth, async (req, res) => {
+  const { error } = await req.supabase
+    .from('voice_clones')
+    .delete()
+    .eq('id', req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ ok: true });
+});
+
+// ─── User: Characters ────────────────────────────────────────────────────────
+
+app.get('/api/user/characters', requireAuth, async (req, res) => {
+  const { data, error } = await req.supabase
+    .from('characters')
+    .select('*')
+    .order('created_at', { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ characters: data });
+});
+
+app.post('/api/user/characters', requireAuth, async (req, res) => {
+  const { title, subtitle, body, prompt, image_url, greeting, cta } = req.body ?? {};
+  if (!title || !prompt) {
+    return res.status(400).json({ error: 'title and prompt are required' });
+  }
+  const { data, error } = await req.supabase
+    .from('characters')
+    .insert({
+      user_id: req.userId,
+      title: String(title).slice(0, 80),
+      subtitle: String(subtitle ?? '').slice(0, 120),
+      body: String(body ?? '').slice(0, 500),
+      prompt: String(prompt).slice(0, 2000),
+      image_url: image_url ? String(image_url).slice(0, 500) : null,
+      greeting: greeting ? String(greeting).slice(0, 300) : null,
+      cta: String(cta ?? 'Talk to me').slice(0, 40),
+    })
+    .select()
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  return res.status(201).json({ character: data });
+});
+
+app.delete('/api/user/characters/:id', requireAuth, async (req, res) => {
+  const { error } = await req.supabase
+    .from('characters')
+    .delete()
+    .eq('id', req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ ok: true });
+});
+
 // ─── Logging ──────────────────────────────────────────────────────────────────
 const LOG_KEY = 'logs:all';
 const LOG_MAX = 10_000;
+
+const normalizeLogEntries = (raw) =>
+  raw.map((r) => {
+    if (r && typeof r === 'object') return r;
+    try { return JSON.parse(r); } catch { return null; }
+  }).filter(Boolean);
+
+const mean = (values) => {
+  if (!values.length) return null;
+  return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+};
+
+const incrementCounter = (bucket, key) => {
+  if (!key) return;
+  bucket[key] = (bucket[key] || 0) + 1;
+};
+
+const summarizeLogs = (entries) => {
+  const summary = {
+    totals: {
+      events: entries.length,
+      byEvent: {},
+      uniqueSessions: 0,
+    },
+    pages: {},
+    characters: {},
+    inputMethods: {},
+    failures: {},
+    trends: {},
+  };
+  const sessions = new Set();
+
+  for (const entry of entries) {
+    const event = String(entry.event || '').trim();
+    const data = entry.data && typeof entry.data === 'object' ? entry.data : {};
+    const timestamp = String(entry.timestamp || '');
+    const day = timestamp ? timestamp.slice(0, 10) : 'unknown';
+    const sessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
+    const characterId = typeof data.characterId === 'string' ? data.characterId : '';
+    const pageName = typeof data.pageName === 'string' ? data.pageName : '';
+    const inputMethod = typeof data.inputMethod === 'string' ? data.inputMethod : '';
+
+    incrementCounter(summary.totals.byEvent, event);
+    incrementCounter(summary.trends, day);
+    incrementCounter(summary.pages, pageName);
+    incrementCounter(summary.inputMethods, inputMethod);
+    if (sessionId) sessions.add(sessionId);
+
+    if (event.includes('failed') || event.includes('error') || event.includes('blocked')) {
+      incrementCounter(summary.failures, event);
+    }
+
+    if (!characterId) continue;
+    if (!summary.characters[characterId]) {
+      summary.characters[characterId] = {
+        opened: 0,
+        closed: 0,
+        prompts: 0,
+        responses: 0,
+        avgTimeToFirstPromptMs: null,
+        avgTimeSpentMs: null,
+      };
+    }
+
+    const character = summary.characters[characterId];
+    if (event === 'character_opened') character.opened += 1;
+    if (event === 'character_closed') character.closed += 1;
+    if (event === 'prompt_sent') character.prompts += 1;
+    if (event === 'response_received') character.responses += 1;
+  }
+
+  for (const [characterId, character] of Object.entries(summary.characters)) {
+    const ttfp = [];
+    const dwell = [];
+    for (const entry of entries) {
+      if (entry?.data?.characterId !== characterId) continue;
+      if (entry.event === 'time_to_first_prompt' && Number.isFinite(entry.data?.timeMs)) {
+        ttfp.push(Number(entry.data.timeMs));
+      }
+      if (entry.event === 'character_closed' && Number.isFinite(entry.data?.timeSpentMs)) {
+        dwell.push(Number(entry.data.timeSpentMs));
+      }
+    }
+    character.avgTimeToFirstPromptMs = mean(ttfp);
+    character.avgTimeSpentMs = mean(dwell);
+  }
+
+  summary.totals.uniqueSessions = sessions.size;
+  return summary;
+};
 
 app.post('/api/log', async (req, res) => {
   if (useRedis) {
@@ -1224,10 +1701,7 @@ app.get('/api/logs', async (req, res) => {
     const eventFilter = String(req.query?.event ?? '').trim();
     const fetchCount = eventFilter ? LOG_MAX : limit;
     const raw = await redis.lrange(LOG_KEY, 0, fetchCount - 1);
-    let entries = raw.map((r) => {
-      if (r && typeof r === 'object') return r;
-      try { return JSON.parse(r); } catch { return null; }
-    }).filter(Boolean);
+    let entries = normalizeLogEntries(raw);
     if (eventFilter) {
       entries = entries.filter((e) => e.event === eventFilter).slice(0, limit);
     }
@@ -1235,6 +1709,258 @@ app.get('/api/logs', async (req, res) => {
   } catch (err) {
     console.warn('[logs] read failed:', err?.message);
     return res.json([]);
+  }
+});
+
+app.get('/api/logs/summary', async (req, res) => {
+  const logsSecret = process.env.LOGS_SECRET_KEY;
+  if (logsSecret && req.query?.key !== logsSecret) {
+    return res.status(401).json({ error: 'Unauthorized.' });
+  }
+  if (!useRedis) return res.json({
+    totals: { events: 0, byEvent: {}, uniqueSessions: 0 },
+    pages: {},
+    characters: {},
+    inputMethods: {},
+    failures: {},
+    trends: {},
+  });
+  try {
+    const days = Math.min(Math.max(Number(req.query?.days ?? 30), 1), 365);
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    const raw = await redis.lrange(LOG_KEY, 0, LOG_MAX - 1);
+    const entries = normalizeLogEntries(raw).filter((entry) => {
+      const ts = Date.parse(String(entry.timestamp || ''));
+      return Number.isFinite(ts) && ts >= cutoff;
+    });
+    return res.json({
+      rangeDays: days,
+      generatedAt: new Date().toISOString(),
+      summary: summarizeLogs(entries),
+    });
+  } catch (err) {
+    console.warn('[logs-summary] read failed:', err?.message);
+    return res.json({
+      rangeDays: 0,
+      generatedAt: new Date().toISOString(),
+      summary: {
+        totals: { events: 0, byEvent: {}, uniqueSessions: 0 },
+        pages: {},
+        characters: {},
+        inputMethods: {},
+        failures: {},
+        trends: {},
+      },
+    });
+  }
+});
+
+// ─── Broadcast rooms ──────────────────────────────────────────────────────────
+// Host creates a room → gets a code → starts Odyssey broadcast → posts webrtcUrl + spectatorToken.
+// Audience joins with code → gets webrtcUrl + spectatorToken → Odyssey.connectToStream().
+// Audience submits prompts → host polls and fires them via interact().
+
+const BROADCAST_ROOM_TTL_S = 3 * 60 * 60; // 3 h
+
+// In-memory store for local dev (Redis in production)
+const _broadcastRooms = new Map();   // code → { status, webrtcUrl, spectatorToken, hlsUrl, prompts[] }
+
+const bcRoomKey    = (code) => `broadcast:room:${code}`;
+const bcPromptsKey = (code) => `broadcast:prompts:${code}`;
+
+const generateRoomCode = () => {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const uuid  = randomUUID().replace(/-/g, '');
+  let code = '';
+  for (let i = 0; i < 6; i++) code += chars[parseInt(uuid[i * 2], 16) % chars.length];
+  return code;
+};
+
+// POST /api/broadcast/room — create a room, returns { code }
+app.post('/api/broadcast/room', async (_req, res) => {
+  let code;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const candidate = generateRoomCode();
+    if (useRedis) {
+      const exists = await redis.exists(bcRoomKey(candidate));
+      if (!exists) { code = candidate; break; }
+    } else {
+      if (!_broadcastRooms.has(candidate)) { code = candidate; break; }
+    }
+  }
+  if (!code) return res.status(500).json({ error: 'Could not generate unique room code.' });
+
+  if (useRedis) {
+    await redis.hset(bcRoomKey(code), { status: 'waiting', createdAt: Date.now() });
+    await redis.expire(bcRoomKey(code), BROADCAST_ROOM_TTL_S);
+  } else {
+    _broadcastRooms.set(code, { status: 'waiting', createdAt: Date.now(), prompts: [] });
+  }
+  return res.json({ code });
+});
+
+// POST /api/broadcast/room/:code/ready — host posts webrtcUrl + spectatorToken after onBroadcastReady
+app.post('/api/broadcast/room/:code/ready', async (req, res) => {
+  const code = String(req.params.code ?? '').toUpperCase().trim();
+  const { webrtcUrl, spectatorToken, hlsUrl } = req.body ?? {};
+  if (!webrtcUrl || !spectatorToken) return res.status(400).json({ error: 'Missing webrtcUrl or spectatorToken.' });
+
+  if (useRedis) {
+    const exists = await redis.exists(bcRoomKey(code));
+    if (!exists) return res.status(404).json({ error: 'Room not found.' });
+    await redis.hset(bcRoomKey(code), { status: 'live', webrtcUrl, spectatorToken, hlsUrl: hlsUrl || '' });
+    await redis.expire(bcRoomKey(code), BROADCAST_ROOM_TTL_S);
+  } else {
+    const room = _broadcastRooms.get(code);
+    if (!room) return res.status(404).json({ error: 'Room not found.' });
+    Object.assign(room, { status: 'live', webrtcUrl, spectatorToken, hlsUrl: hlsUrl || '' });
+  }
+  return res.json({ ok: true });
+});
+
+// GET /api/broadcast/room/:code — audience fetches webrtcUrl + spectatorToken
+app.get('/api/broadcast/room/:code', async (req, res) => {
+  const code = String(req.params.code ?? '').toUpperCase().trim();
+  if (useRedis) {
+    const room = await redis.hgetall(bcRoomKey(code));
+    if (!room || !room.status) return res.status(404).json({ error: 'Room not found.' });
+    if (room.status !== 'live') return res.status(202).json({ status: room.status });
+    return res.json({ status: 'live', webrtcUrl: room.webrtcUrl, spectatorToken: room.spectatorToken });
+  } else {
+    const room = _broadcastRooms.get(code);
+    if (!room) return res.status(404).json({ error: 'Room not found.' });
+    if (room.status !== 'live') return res.status(202).json({ status: room.status });
+    return res.json({ status: 'live', webrtcUrl: room.webrtcUrl, spectatorToken: room.spectatorToken });
+  }
+});
+
+// POST /api/broadcast/room/:code/prompt — audience submits a prompt
+app.post('/api/broadcast/room/:code/prompt', async (req, res) => {
+  const code     = String(req.params.code ?? '').toUpperCase().trim();
+  const text     = String(req.body?.text ?? '').trim().slice(0, 200);
+  const username = String(req.body?.username ?? 'Guest').trim().slice(0, 32) || 'Guest';
+  if (!text) return res.status(400).json({ error: 'Missing prompt text.' });
+
+  const promptId  = randomUUID();
+  const timestamp = Date.now();
+  const prompt    = { id: promptId, text, username, timestamp };
+
+  if (useRedis) {
+    const exists = await redis.exists(bcRoomKey(code));
+    if (!exists) return res.status(404).json({ error: 'Room not found.' });
+    await redis.zadd(bcPromptsKey(code), { score: timestamp, member: JSON.stringify(prompt) });
+    await redis.expire(bcPromptsKey(code), BROADCAST_ROOM_TTL_S);
+  } else {
+    const room = _broadcastRooms.get(code);
+    if (!room) return res.status(404).json({ error: 'Room not found.' });
+    room.prompts.push(prompt);
+  }
+  return res.json({ ok: true, promptId });
+});
+
+// GET /api/broadcast/room/:code/prompts?since=<ms> — host polls for new audience prompts
+app.get('/api/broadcast/room/:code/prompts', async (req, res) => {
+  const code  = String(req.params.code ?? '').toUpperCase().trim();
+  const since = Number(req.query.since ?? 0) || 0;
+
+  let prompts = [];
+  if (useRedis) {
+    const members = await redis.zrangebyscore(bcPromptsKey(code), since + 1, '+inf');
+    prompts = members.map((m) => { try { return JSON.parse(m); } catch { return null; } }).filter(Boolean);
+  } else {
+    const room = _broadcastRooms.get(code);
+    if (!room) return res.status(404).json({ error: 'Room not found.' });
+    prompts = room.prompts.filter((p) => p.timestamp > since);
+  }
+  return res.json({ prompts, serverTime: Date.now() });
+});
+
+// DELETE /api/broadcast/room/:code — host closes the room
+app.delete('/api/broadcast/room/:code', async (req, res) => {
+  const code = String(req.params.code ?? '').toUpperCase().trim();
+  if (useRedis) {
+    await Promise.all([redis.del(bcRoomKey(code)), redis.del(bcPromptsKey(code))]);
+  } else {
+    _broadcastRooms.delete(code);
+  }
+  return res.json({ ok: true });
+});
+
+// ─── Keyword expansion ────────────────────────────────────────────────────────
+// Reads keyword_miss events from the log, sends batches to the LLM, and returns
+// suggested keyword → object pairs for review before adding to GL_KEYWORD_MAP.
+
+app.get('/api/keyword-misses', async (req, res) => {
+  const logsSecret = process.env.LOGS_SECRET_KEY;
+  if (logsSecret && req.query?.key !== logsSecret) {
+    return res.status(401).json({ error: 'Unauthorized.' });
+  }
+  if (!useRedis) return res.json({ misses: [], total: 0 });
+  try {
+    const raw = await redis.lrange(LOG_KEY, 0, LOG_MAX - 1);
+    const misses = normalizeLogEntries(raw)
+      .filter(e => e.event === 'keyword_miss')
+      .map(e => ({ character: e.data?.character, userText: e.data?.userText, response: e.data?.response, timestamp: e.timestamp }));
+    return res.json({ misses, total: misses.length });
+  } catch (err) {
+    console.warn('[keyword-misses] read failed:', err?.message);
+    return res.json({ misses: [], total: 0 });
+  }
+});
+
+app.post('/api/keyword-expand', async (req, res) => {
+  const logsSecret = process.env.LOGS_SECRET_KEY;
+  if (logsSecret && req.body?.key !== logsSecret) {
+    return res.status(401).json({ error: 'Unauthorized.' });
+  }
+  const ai = getAiClient();
+  if (!ai) return res.status(503).json({ error: 'Gemini not configured.' });
+  if (!useRedis) return res.status(503).json({ error: 'Redis not configured.' });
+
+  try {
+    // Pull recent keyword misses — cap at 50 to keep prompt size manageable
+    const raw = await redis.lrange(LOG_KEY, 0, LOG_MAX - 1);
+    const misses = normalizeLogEntries(raw)
+      .filter(e => e.event === 'keyword_miss' && e.data?.userText && e.data?.response)
+      .slice(0, 50);
+
+    if (!misses.length) return res.json({ suggestions: [], message: 'No keyword misses found.' });
+
+    // Count how often each (userText, response) pair appears so we can require ≥2 occurrences
+    const turnsText = misses.map((m, i) =>
+      `[${i + 1}] Character: ${m.data.character}\n  User: ${m.data.userText}\n  Response: ${m.data.response}`
+    ).join('\n\n');
+
+    const prompt = `You are helping expand a keyword list for a character animation system.
+When a user talks to an animated character, we scan the character's spoken response for keywords.
+If a keyword matches, a physical object appears in the scene (e.g. keyword "apple" → object "a falling apple").
+
+The following conversations produced NO keyword match — the objects that should have appeared were missed.
+Analyse these turns and suggest new keyword → object pairs that would have caught the missing objects.
+
+Rules:
+- Only suggest concrete, holdable or visible physical objects (not abstract concepts).
+- Each keyword should be a single word or short phrase that would appear naturally in a character's speech.
+- Only suggest a pair if the same physical object pattern appears in at least 2 of the turns below.
+- Return ONLY a JSON array, no commentary. Format: [{ "keyword": "...", "object": "...", "seenInTurns": [1, 3] }]
+
+Turns:
+${turnsText}`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.0-flash',
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    });
+
+    const raw_text = response.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+    const jsonMatch = raw_text.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return res.json({ suggestions: [], raw: raw_text, missesAnalysed: misses.length });
+
+    const suggestions = JSON.parse(jsonMatch[0]);
+    return res.json({ suggestions, missesAnalysed: misses.length });
+  } catch (err) {
+    console.warn('[keyword-expand] failed:', err?.message);
+    return res.status(500).json({ error: 'Expansion failed.', detail: err?.message });
   }
 });
 

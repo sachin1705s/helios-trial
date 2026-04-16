@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gemini Live — Function Calling Test</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0d0d0d; color: #e0e0e0; font-family: 'Courier New', monospace; padding: 32px; }
+
+    h1 { color: #7eb8f7; font-size: 20px; margin-bottom: 6px; }
+    p.sub { color: #888; font-size: 13px; margin-bottom: 24px; line-height: 1.5; }
+
+    .models-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;
+    }
+    .model-card {
+      background: #111; border: 1px solid #222; border-radius: 8px; padding: 16px;
+    }
+    .model-card h3 { color: #aac4e8; font-size: 14px; margin-bottom: 6px; }
+    .model-card input {
+      width: 100%; background: #1a1a1a; border: 1px solid #333; border-radius: 4px;
+      color: #e0e0e0; font-family: inherit; font-size: 12px; padding: 6px 8px;
+    }
+    .model-card .progress-bar {
+      height: 4px; background: #222; border-radius: 2px; margin-top: 10px; overflow: hidden;
+    }
+    .model-card .progress-fill {
+      height: 100%; background: #1a6ef0; border-radius: 2px; width: 0%;
+      transition: width 0.3s ease;
+    }
+    .model-card .status { color: #666; font-size: 12px; margin-top: 6px; }
+
+    button {
+      background: #1a6ef0; color: #fff; border: none; border-radius: 6px;
+      padding: 12px 28px; font-size: 15px; cursor: pointer; margin-bottom: 24px;
+    }
+    button:disabled { background: #222; color: #555; cursor: not-allowed; }
+
+    .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+    .panel {
+      background: #111; border: 1px solid #1a2a3a; border-radius: 8px;
+      padding: 16px; font-size: 12px; line-height: 1.6;
+    }
+    .panel h3 { color: #aac4e8; margin-bottom: 10px; font-size: 13px; }
+    .panel-log {
+      height: 320px; overflow-y: auto; white-space: pre-wrap; color: #ccc;
+    }
+
+    .log-tool   { color: #f0c85e; }
+    .log-audio  { color: #5ef0a0; }
+    .log-done   { color: #5ef06e; }
+    .log-error  { color: #f06e5e; }
+    .log-info   { color: #888; }
+
+    #results {
+      background: #111; border: 1px solid #2a4a2a; border-radius: 8px;
+      padding: 20px; font-size: 12px; line-height: 1.65; white-space: pre-wrap;
+      display: none;
+    }
+    .verdict {
+      margin-top: 20px; padding: 16px; border-radius: 8px;
+      border: 1px solid #2a3a4a; background: #131820;
+      font-size: 13px; color: #aac4e8; display: none;
+    }
+    .verdict strong { color: #7eb8f7; }
+
+    .prompts-list {
+      margin-bottom: 24px; background: #111; border: 1px solid #222;
+      border-radius: 8px; padding: 16px;
+    }
+    .prompts-list h3 { color: #aac4e8; font-size: 13px; margin-bottom: 10px; }
+    .prompt-item {
+      font-size: 12px; color: #888; padding: 4px 0; border-bottom: 1px solid #1a1a1a;
+    }
+    .prompt-item:last-child { border-bottom: none; }
+    .prompt-item span { color: #ccc; }
+  </style>
+</head>
+<body>
+  <h1>Gemini Live — Function Calling Test</h1>
+  <p class="sub">
+    Tests whether Gemini Live models call <code>spawn_object</code> and <code>trigger_action</code>
+    tools mid-turn, and measures timing relative to audio output.<br/>
+    Sends text prompts (no microphone required). Dev server must be running for <code>/api/gemini-live-token</code>.
+  </p>
+
+  <div class="prompts-list">
+    <h3>Test prompts</h3>
+    <div id="prompts-container"></div>
+  </div>
+
+  <div class="models-grid">
+    <div class="model-card">
+      <h3>Model A</h3>
+      <input id="model-a-name" value="models/gemini-3.1-flash-live-preview" />
+      <input id="model-a-label" value="Gemini 3.1 Flash Live" style="margin-top:6px;" />
+      <div class="progress-bar"><div class="progress-fill" id="progress-a"></div></div>
+      <div class="status" id="status-a">Waiting…</div>
+    </div>
+    <div class="model-card">
+      <h3>Model B</h3>
+      <input id="model-b-name" value="models/gemini-2.5-flash-preview-native-audio-dialog" />
+      <input id="model-b-label" value="Gemini 2.5 Flash Live" style="margin-top:6px;" />
+      <div class="progress-bar"><div class="progress-fill" id="progress-b"></div></div>
+      <div class="status" id="status-b">Waiting…</div>
+    </div>
+  </div>
+
+  <button id="run-btn">Run Function Calling Test</button>
+
+  <div class="panels">
+    <div class="panel">
+      <h3 id="panel-a-title">Model A — Live Log</h3>
+      <div class="panel-log" id="log-a"></div>
+    </div>
+    <div class="panel">
+      <h3 id="panel-b-title">Model B — Live Log</h3>
+      <div class="panel-log" id="log-b"></div>
+    </div>
+  </div>
+
+  <div id="results"></div>
+  <div class="verdict" id="verdict"></div>
+
+  <script type="module">
+    import { MODELS, TEST_PROMPTS, runToolTest, renderToolTestSummary } from '/src/gemini-live-tool-test.ts';
+
+    // Populate prompt list
+    const container = document.getElementById('prompts-container');
+    for (const p of TEST_PROMPTS) {
+      const div = document.createElement('div');
+      div.className = 'prompt-item';
+      div.innerHTML = `<b>${p.id}</b> — <span>"${p.userText}"</span>`;
+      container.appendChild(div);
+    }
+
+    const btn = document.getElementById('run-btn');
+    const resultsEl = document.getElementById('results');
+    const verdictEl = document.getElementById('verdict');
+
+    function getModels() {
+      return [
+        {
+          id: 'model-a',
+          label: document.getElementById('model-a-label').value,
+          model: document.getElementById('model-a-name').value,
+        },
+        {
+          id: 'model-b',
+          label: document.getElementById('model-b-label').value,
+          model: document.getElementById('model-b-name').value,
+        },
+      ];
+    }
+
+    function makeLogger(logEl, colorMap) {
+      return (msg) => {
+        const span = document.createElement('span');
+        let cls = '';
+        if (msg.includes('🔧 toolCall')) cls = 'log-tool';
+        else if (msg.includes('🔊 first audio')) cls = 'log-audio';
+        else if (msg.includes('✓')) cls = 'log-done';
+        else if (msg.includes('✗') || msg.includes('⚠')) cls = 'log-error';
+        else cls = 'log-info';
+        if (cls) span.className = cls;
+        span.textContent = msg + '\n';
+        logEl.appendChild(span);
+        logEl.scrollTop = logEl.scrollHeight;
+      };
+    }
+
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      resultsEl.style.display = 'none';
+      verdictEl.style.display = 'none';
+
+      const models = getModels();
+
+      // Update panel titles and clear logs
+      document.getElementById('panel-a-title').textContent = `${models[0].label} — Live Log`;
+      document.getElementById('panel-b-title').textContent = `${models[1].label} — Live Log`;
+      document.getElementById('log-a').textContent = '';
+      document.getElementById('log-b').textContent = '';
+      document.getElementById('status-a').textContent = 'Running…';
+      document.getElementById('status-b').textContent = 'Waiting…';
+      document.getElementById('progress-a').style.width = '0%';
+      document.getElementById('progress-b').style.width = '0%';
+
+      const loggers = [
+        makeLogger(document.getElementById('log-a')),
+        makeLogger(document.getElementById('log-b')),
+      ];
+
+      try {
+        // Override the module's MODELS with user-configured values
+        const { runToolTest: _run, renderToolTestSummary: _render } = await import('/src/gemini-live-tool-test.ts');
+
+        // Patch MODELS array — import is live binding so we need a workaround
+        // Instead call with patched models via custom runner
+        const results = [];
+        for (let i = 0; i < models.length; i++) {
+          const modelConfig = models[i];
+          const logEl = document.getElementById(`log-${i === 0 ? 'a' : 'b'}`);
+          const progressEl = document.getElementById(`progress-${i === 0 ? 'a' : 'b'}`);
+          const statusEl = document.getElementById(`status-${i === 0 ? 'a' : 'b'}`);
+          const log = makeLogger(logEl);
+
+          statusEl.textContent = 'Running…';
+
+          // Import runner and run with this model config
+          const { runModelConfig } = await import('/src/gemini-live-tool-test.ts');
+          const result = await runModelConfig(
+            modelConfig,
+            log,
+            (pct) => { progressEl.style.width = `${pct}%`; },
+          );
+          results.push(result);
+          statusEl.textContent = result.errorCount > 0 ? `Done (${result.errorCount} errors)` : 'Done ✓';
+          document.getElementById(`status-${i === 0 ? 'b' : 'a'}`).textContent = i === 0 ? 'Running…' : 'Done ✓';
+        }
+
+        const summary = renderToolTestSummary(results);
+        resultsEl.style.display = 'block';
+        resultsEl.textContent = summary;
+
+        // Verdict
+        const [a, b] = results;
+        verdictEl.style.display = 'block';
+        const aRate = Math.round(a.toolBeforeAudioRate * 100);
+        const bRate = Math.round(b.toolBeforeAudioRate * 100);
+        const aViable = a.totalToolCalls > 0;
+        const bViable = b.totalToolCalls > 0;
+
+        let verdictHtml = '<strong>Verdict</strong><br/>';
+        if (!aViable && !bViable) {
+          verdictHtml += '⚠ Neither model called any tools. Function calling may not be supported in Live mode for these models. Stick with the hybrid strategy.';
+        } else if (aViable && !bViable) {
+          verdictHtml += `✓ ${a.model.label} called tools (${a.totalToolCalls} calls, ${aRate}% before audio). ${b.model.label} did not. Use ${a.model.label}.`;
+        } else if (!aViable && bViable) {
+          verdictHtml += `✓ ${b.model.label} called tools (${b.totalToolCalls} calls, ${bRate}% before audio). ${a.model.label} did not. Use ${b.model.label}.`;
+        } else {
+          const winner = aRate >= bRate ? a : b;
+          const loser = aRate >= bRate ? b : a;
+          const winRate = aRate >= bRate ? aRate : bRate;
+          verdictHtml += `✓ Both models support function calling.<br/>
+            ${winner.model.label}: ${winner.totalToolCalls} calls, ${winRate}% before audio<br/>
+            ${loser.model.label}: ${loser.totalToolCalls} calls, ${aRate < bRate ? aRate : bRate}% before audio<br/><br/>`;
+          if (winRate > 50) {
+            verdictHtml += `<strong>Recommendation:</strong> Use ${winner.model.label} — tools fire before audio reliably. Ship as V8 (tool-call strategy) replacing hybrid.`;
+          } else {
+            verdictHtml += `<strong>Recommendation:</strong> Tools fire after audio starts. Useful for accuracy but not for early spawning. Keep hybrid as primary, add tool-call as a confirmation layer.`;
+          }
+        }
+        verdictEl.innerHTML = verdictHtml;
+
+      } catch (err) {
+        const logA = document.getElementById('log-a');
+        const span = document.createElement('span');
+        span.className = 'log-error';
+        span.textContent = `Fatal error: ${err.message}`;
+        logA.appendChild(span);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -3,9 +3,21 @@ import { Analytics } from '@vercel/analytics/react';
 import { SpeedInsights } from '@vercel/speed-insights/react';
 import type { ConnectionStatus } from '@odysseyml/odyssey';
 import charactersData from './data/characters.json';
+import { trackEvent } from './lib/analytics';
 import { OdysseyService, credentialsFromDict, loadImageFile, type ClientCredentials, type StreamState } from './lib/odyssey';
 import { SEO_PAGES, applySeo } from './lib/seo';
 import './App.css';
+
+// Debug logger — silent by default in production.
+// To enable in any environment, open DevTools console and run:
+//   localStorage.setItem('debug', 'true')  then refresh
+// To disable:
+//   localStorage.removeItem('debug')       then refresh
+const debug = (...args: unknown[]) => {
+  if (import.meta.env.DEV || localStorage.getItem('debug') === 'true') {
+    console.log(...args);
+  }
+};
 
 interface Character {
   id: string;
@@ -49,6 +61,22 @@ function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
   return win.SpeechRecognition ?? win.webkitSpeechRecognition ?? null;
 }
 
+function pcmToWav(pcm: ArrayBuffer, sampleRate: number, channels: number, bitDepth: number): ArrayBuffer {
+  const dataLen = pcm.byteLength;
+  const buf = new ArrayBuffer(44 + dataLen);
+  const v = new DataView(buf);
+  const str = (off: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };
+  str(0, 'RIFF'); v.setUint32(4, 36 + dataLen, true);
+  str(8, 'WAVE'); str(12, 'fmt '); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, channels, true);
+  v.setUint32(24, sampleRate, true);
+  v.setUint32(28, sampleRate * channels * bitDepth / 8, true);
+  v.setUint16(32, channels * bitDepth / 8, true); v.setUint16(34, bitDepth, true);
+  str(36, 'data'); v.setUint32(40, dataLen, true);
+  new Uint8Array(buf, 44).set(new Uint8Array(pcm));
+  return buf;
+}
+
 function App() {
   const [credentials, setCredentials] = useState<ClientCredentials | undefined>(undefined);
   const [showLanding, setShowLanding] = useState(true);
@@ -67,6 +95,8 @@ function App() {
   const [textPrompt, setTextPrompt] = useState('');
   const [isCharacterRecording, setIsCharacterRecording] = useState(false);
   const [isCharacterThinking, setIsCharacterThinking] = useState(false);
+  const [isCharacterSpeaking, setIsCharacterSpeaking] = useState(false);
+  const [chatExpanded, setChatExpanded] = useState(false);
   const [characterReply, setCharacterReply] = useState<string | null>(null);
   const [characterSources, setCharacterSources] = useState<{ title: string; url: string }[]>([]);
   const [characterError, setCharacterError] = useState<string | null>(null);
@@ -76,7 +106,7 @@ function App() {
   const [_uploadError, setUploadError] = useState<string | null>(null);
   const [voiceStatus, setVoiceStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
   const [isMusicEnabled, setIsMusicEnabled] = useState(false);
-  const [isMusicPlaying, setIsMusicPlaying] = useState(false);
+  const [, setIsMusicPlaying] = useState(false);
   const [, setVoiceError] = useState<string | null>(null);
   const [, setLastVoiceText] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -85,7 +115,6 @@ function App() {
   const audioChunksRef = useRef<Blob[]>([]);
   const characterRecorderRef = useRef<MediaRecorder | null>(null);
   const characterStreamRef = useRef<MediaStream | null>(null);
-  const characterChunksRef = useRef<Blob[]>([]);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const backgroundAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -102,6 +131,7 @@ function App() {
   const pendingStartRef = useRef<(() => Promise<void>) | null>(null); // startStream fn waiting for onConnected
   const startStreamInFlightRef = useRef(false); // true while startStream is awaited — blocks re-entrant calls
   const streamEndResolverRef = useRef<(() => void) | null>(null); // resolves when onStreamEnded fires during a transition
+  const streamRequestIdRef = useRef(0); // set to requestId just before startStream — onStreamStarted checks for staleness
   const isVoiceAgentSlideRef = useRef(false);
   const greetedCharactersRef = useRef<Set<string>>(new Set()); // tracks which characters have greeted this session
   const ttsSourceRef = useRef<AudioBufferSourceNode | null>(null);
@@ -109,15 +139,43 @@ function App() {
   const lastVoiceActionAtRef = useRef(0);
   const handleInteractRef = useRef<(promptOverride?: string) => void>(() => undefined);
   const ttsAudioCtxRef = useRef<AudioContext | null>(null);
+  const ttsGenerationRef = useRef(0); // incremented on navigation — cancels any in-flight TTS across all await boundaries
   const characterOpenedAtRef = useRef<number | null>(null);
   const hasLoggedFirstPromptRef = useRef(false);
+  const currentPageRef = useRef<string | null>(null);
+  const showLandingRef = useRef(showLanding); // kept in sync below — safe to read in SDK callbacks
+  // Gemini Live session state
+  const geminiLiveWsRef = useRef<WebSocket | null>(null);
+  const geminiLiveCaptureCtxRef = useRef<AudioContext | null>(null);
+  const geminiLivePlayCtxRef = useRef<AudioContext | null>(null);
+  const geminiLiveGenerationRef = useRef(0);
+  const geminiLiveActiveRef = useRef(false);
+  const geminiLivePlaybackTimeRef = useRef(0);
+  const geminiLiveSourceNodesRef = useRef<AudioBufferSourceNode[]>([]);
+  // Two-phase Odyssey transcript buffers — reset each turn
+  const glCurrentUserTextRef = useRef('');
+  const glOutputTranscriptBufferRef = useRef('');
+  const glPhase2FiredRef = useRef(false); // prevents duplicate Phase 2 calls per turn
+  // Odyssey context tracking — for V8/V9/V10 strategies
+  const glLastAckPromptRef = useRef<string>(''); // populated by SDK's onInteractAcknowledged callback
 
-  const logEvent = (event: string, data: Record<string, unknown>) => {
-    fetch('/api/log', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ event, data, timestamp: new Date().toISOString() }),
-    }).catch(() => undefined);
+  const logEvent = (event: string, data: Record<string, unknown>, transport: 'fetch' | 'beacon' = 'fetch') => {
+    trackEvent(event, data, { transport });
+  };
+
+  const closeActiveCharacter = (reason: 'switch' | 'landing_back' | 'page_exit') => {
+    if (!selectedCharacterId || characterOpenedAtRef.current === null) {
+      return;
+    }
+    const timeSpentMs = Date.now() - characterOpenedAtRef.current;
+    const currentCharacter = characters.find((c) => c.id === selectedCharacterId);
+    logEvent('character_closed', {
+      characterId: selectedCharacterId,
+      characterName: currentCharacter?.title ?? selectedCharacterId,
+      timeSpentMs,
+      reason,
+    }, reason === 'page_exit' ? 'beacon' : 'fetch');
+    characterOpenedAtRef.current = null;
   };
 
   const logFirstPromptIfNeeded = (characterId: string, characterName: string, inputMethod: string) => {
@@ -203,7 +261,7 @@ function App() {
     <audio
       ref={backgroundAudioRef}
       src="/background-music.mpeg"
-      preload="auto"
+      preload="none"
       aria-hidden="true"
     />
   );
@@ -211,10 +269,10 @@ function App() {
   const musicToggleButton = (
     <button
       type="button"
-      className={`music-toggle ${isMusicPlaying ? 'is-playing' : 'is-paused'}`}
+      className={`music-toggle ${isMusicEnabled ? 'is-playing' : 'is-paused'}`}
       onClick={handleMusicToggle}
-      aria-label={isMusicPlaying ? 'Pause background music' : 'Play background music'}
-      aria-pressed={isMusicPlaying}
+      aria-label={isMusicEnabled ? 'Pause background music' : 'Play background music'}
+      aria-pressed={isMusicEnabled}
     >
       <span className="music-toggle-bars" aria-hidden="true">
         <span className="music-bar" />
@@ -243,6 +301,24 @@ function App() {
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
+
+  useEffect(() => {
+    const pageName = showLanding
+      ? showAbout
+        ? 'about'
+        : showContact
+          ? 'contact'
+          : 'landing'
+      : `character:${selectedCharacterId ?? 'unknown'}`;
+    if (currentPageRef.current === pageName) {
+      return;
+    }
+    currentPageRef.current = pageName;
+    logEvent('page_view', {
+      pageName,
+      characterId: showLanding ? null : selectedCharacterId,
+    });
+  }, [selectedCharacterId, showAbout, showContact, showLanding]);
 
   useEffect(() => {
     if (showAbout) {
@@ -396,24 +472,30 @@ function App() {
 
   useEffect(() => {
     const handleBeforeUnload = () => {
+      closeActiveCharacter('page_exit');
       releaseOdysseyLease();
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
+      closeActiveCharacter('page_exit');
       releaseOdysseyLease();
     };
-  }, []);
+  }, [selectedCharacterId]);
 
 
   useEffect(() => {
     isStreamingReadyRef.current = isStreamingReady;
   }, [isStreamingReady]);
 
+  useEffect(() => {
+    showLandingRef.current = showLanding;
+  }, [showLanding]);
+
   // Fire a character greeting once per session, only after the stream is ready.
   // greetedCharactersRef guards against re-firing when the effect re-runs.
   useEffect(() => {
-    if (!isStreamingReady) return;
+    if (!isStreamingReady || showLandingRef.current) return;
     const charId = slide.id;
     const greeting = slide.greeting;
     if (!greeting || greetedCharactersRef.current.has(charId)) return;
@@ -442,6 +524,7 @@ function App() {
       setVoiceError('Stream stopped.');
     }
   }, [isStreamingReady, voiceStatus]);
+
 
   useEffect(() => {
     if (isCharacterSlide) {
@@ -473,7 +556,7 @@ function App() {
     service
       .connect({
         onConnected: (stream) => {
-          console.log('[odyssey] onConnected — stream:', stream);
+          debug('[odyssey] onConnected — stream:', stream);
           // Set 'connected' here (not in onStatusChange) so startStream is only
           // called after the data channel is open and ready.
           dataChannelReadyRef.current = true;
@@ -489,8 +572,12 @@ function App() {
           const attach = () => {
             if (videoRef.current) {
               videoRef.current.srcObject = stream;
-              videoRef.current.play().catch((e) => {
+              videoRef.current.play().catch((e: unknown) => {
                 console.warn('[odyssey] video.play failed:', e);
+                // AbortError means play() was interrupted (e.g. mid-render) — retry once
+                if ((e as { name?: string })?.name === 'AbortError') {
+                  setTimeout(() => { videoRef.current?.play().catch(() => undefined); }, 150);
+                }
               });
             } else {
               setTimeout(attach, 100);
@@ -499,23 +586,36 @@ function App() {
           attach();
         },
         onStatusChange: (status) => {
-          console.log('[odyssey] status:', status);
+          debug('[odyssey] status:', status);
           // 'connected' is set in onConnected instead, which fires only after
           // both the video track and data channel are ready.
           if (status !== 'connected') {
             setConnectionStatus(status);
-            dataChannelReadyRef.current = false; // data channel not ready during reconnect
+            dataChannelReadyRef.current = false; // data channel is not ready during reconnect
           }
         },
         onStreamStarted: () => {
-          console.log('[odyssey] onStreamStarted');
+          debug('[odyssey] onStreamStarted');
+          // User navigated back before the stream finished starting — end it and ignore.
+          if (showLandingRef.current) {
+            serviceRef.current?.endStream().catch(() => undefined);
+            return;
+          }
+          // Stale stream — user switched characters before this one finished starting.
+          // requestIdRef holds the latest request; streamRequestIdRef holds which request
+          // called startStream. A mismatch means this onStreamStarted is for an old character.
+          if (streamRequestIdRef.current !== requestIdRef.current) {
+            debug('[odyssey] onStreamStarted — stale stream (requestId mismatch), discarding');
+            serviceRef.current?.endStream().catch(() => undefined);
+            return;
+          }
           streamActiveRef.current = true;
           setStreamState('streaming');
           setIsStreamingReady(true);
           setModerationError(null);
         },
         onStreamEnded: () => {
-          console.log('[odyssey] onStreamEnded');
+          debug('[odyssey] onStreamEnded');
           streamActiveRef.current = false;
           setStreamState('ended');
           setIsStreamingReady(false);
@@ -529,7 +629,7 @@ function App() {
           }
           // Auto-restart the stream so interact() keeps working
           if (retryStreamRef.current) {
-            console.log('[odyssey] auto-restarting stream after end');
+            debug('[odyssey] auto-restarting stream after end');
             setStreamState('starting');
             retryStreamRef.current().catch(() => {
               setStreamState('error');
@@ -550,12 +650,18 @@ function App() {
               setStreamState('starting');
               return;
             }
-            // Real content moderation rejection — retry silently up to 3×, then surface.
+            // Real content moderation rejection — log analytics, retry silently up to 3×, then surface.
+            logEvent('moderation_blocked', {
+              reason: r,
+              message: m,
+              characterId: slide.id,
+              characterName: activeCharacterName,
+            });
             setStreamState('error');
             setIsStreamingReady(false);
             if (moderationRetryCountRef.current < 3 && retryStreamRef.current) {
               moderationRetryCountRef.current++;
-              console.log(`[odyssey] moderation_failed — retrying (attempt ${moderationRetryCountRef.current})`);
+              debug(`[odyssey] moderation_failed — retrying (attempt ${moderationRetryCountRef.current})`);
               setStreamState('starting');
               const retry = retryStreamRef.current;
               setTimeout(() => {
@@ -570,9 +676,18 @@ function App() {
             }
             return;
           }
+          logEvent('stream_error', {
+            reason: r,
+            message: m,
+            characterId: slide.id,
+            characterName: activeCharacterName,
+          });
           setStreamState('error');
           setIsStreamingReady(false);
           setError(`${r}: ${m}`);
+        },
+        onInteractAcknowledged: (prompt) => {
+          glLastAckPromptRef.current = prompt;
         },
         onError: (err) => {
           console.error('[odyssey] onError:', err);
@@ -580,10 +695,22 @@ function App() {
           setStreamState('error');
           setIsStreamingReady(false);
           if (err.message?.includes('moderation_failed')) {
+            logEvent('moderation_blocked', {
+              reason: 'exception',
+              message: err.message,
+              characterId: slide.id,
+              characterName: activeCharacterName,
+            });
             setModerationError('Prompt blocked by moderation. Please try a different request.');
             setError(null);
             return;
           }
+          logEvent('stream_error', {
+            reason: 'client_error',
+            message: err.message,
+            characterId: slide.id,
+            characterName: activeCharacterName,
+          });
           setError(err.message);
         }
       })
@@ -664,10 +791,11 @@ function App() {
       // This avoids the connectionEpoch feedback loop:
       // startStream → SDK reconnects → onConnected → epoch bump → second startStream → deadlock.
       if (!dataChannelReadyRef.current) {
-        console.log('[odyssey] data channel not ready — queuing startStream for onConnected');
+        debug('[odyssey] data channel not ready — queuing startStream for onConnected');
         pendingStartRef.current = async () => {
           if (requestIdRef.current !== requestId) return;
-          console.log('[odyssey] calling startStream (from pending) — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
+          debug('[odyssey] calling startStream (from pending) — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
+          streamRequestIdRef.current = requestId;
           await service.startStream(streamOptions);
           if (requestIdRef.current === requestId) {
             retryStreamRef.current = () => service.startStream(streamOptions).then(() => undefined);
@@ -680,17 +808,18 @@ function App() {
       // Mutex: if a startStream is already awaiting (e.g. triggered by a stale effect re-run from
       // onConnected → setConnectionStatus), bail out — the in-flight call will resolve or retry.
       if (startStreamInFlightRef.current) {
-        console.log('[odyssey] startStream already in flight — skipping duplicate call');
+        debug('[odyssey] startStream already in flight — skipping duplicate call');
         return;
       }
       startStreamInFlightRef.current = true;
-      console.log('[odyssey] calling startStream — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
+      streamRequestIdRef.current = requestId;
+      debug('[odyssey] calling startStream — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
       try {
         await service.startStream(streamOptions);
       } finally {
         startStreamInFlightRef.current = false;
       }
-      console.log('[odyssey] startStream resolved');
+      debug('[odyssey] startStream resolved');
       if (requestIdRef.current === requestId) {
         retryStreamRef.current = () => service.startStream(streamOptions).then(() => undefined);
       }
@@ -715,22 +844,36 @@ function App() {
   // End the stream when the user navigates back to the landing page so the session isn't consumed idle.
   useEffect(() => {
     if (!showLanding) return;
+    // Stop any active Gemini Live session (audio + WebSocket + mic)
+    if (geminiLiveActiveRef.current) {
+      stopGeminiLiveAudio();
+      stopGeminiLiveSession();
+    }
     ++requestIdRef.current; // Invalidate any pending retry closure
     retryStreamRef.current = null;
     if (streamActiveRef.current) {
       streamActiveRef.current = false;
       serviceRef.current?.endStream().catch(() => undefined);
     }
-    // Stop any in-flight TTS fetch and active audio playback
+    // Invalidate any in-flight TTS — checked at every await boundary in playCharacterTTS
+    ++ttsGenerationRef.current;
+    // Stop any in-flight TTS fetch and all scheduled audio playback
     ttsAbortRef.current?.abort();
     ttsAbortRef.current = null;
     try { ttsSourceRef.current?.stop(); } catch { /* already stopped */ }
     ttsSourceRef.current = null;
+    // Close the AudioContext to immediately silence any already-scheduled chunks
+    // (abort() stops new chunks from being fetched but scheduled nodes keep playing)
+    ttsAudioCtxRef.current?.close().catch(() => undefined);
+    ttsAudioCtxRef.current = null;
+    // Reset stream ready state immediately — onStreamEnded fires async so without this,
+    // isStreamingReady stays true and the greeting TTS fires before the stream restarts.
+    setIsStreamingReady(false);
+    setStreamState('idle');
     // Clear the current character's chat state so returning starts fresh
     const charId = slide.id;
     setCharacterReply(null);
     setCharacterHistory((prev) => { const next = { ...prev }; delete next[charId]; return next; });
-    greetedCharactersRef.current.delete(charId);
   }, [showLanding]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
@@ -923,20 +1066,758 @@ function App() {
     'da-vinci': 'magnus'
   };
 
+  // --- Gemini Live helpers ---
+
+  const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  };
+
+  const base64ToUint8Array = (base64: string): Uint8Array => {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  };
+
+  // Schedules a 16-bit PCM chunk for gapless playback via the dedicated Gemini Live play context.
+  // Safe to call from WebSocket message handlers — uses refs, never stale state.
+  const enqueuePCMChunk = (data: Uint8Array, sampleRate: number) => {
+    if (!geminiLivePlayCtxRef.current) return;
+    const ctx = geminiLivePlayCtxRef.current;
+    if (ctx.state === 'suspended') { ctx.resume().catch(() => undefined); }
+    const usable = data.length - (data.length % 2);
+    if (usable === 0) return;
+    const int16 = new Int16Array(data.buffer, data.byteOffset, usable / 2);
+    const float32 = new Float32Array(int16.length);
+    for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+    const audioBuffer = ctx.createBuffer(1, float32.length, sampleRate);
+    audioBuffer.copyToChannel(float32, 0);
+    const source = ctx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(ctx.destination);
+    // Keep playback time from falling behind (e.g. after a pause or barge-in reset)
+    if (geminiLivePlaybackTimeRef.current < ctx.currentTime + 0.05) {
+      geminiLivePlaybackTimeRef.current = ctx.currentTime + 0.05;
+    }
+    geminiLiveSourceNodesRef.current.push(source);
+    source.onended = () => {
+      const idx = geminiLiveSourceNodesRef.current.indexOf(source);
+      if (idx !== -1) geminiLiveSourceNodesRef.current.splice(idx, 1);
+    };
+    source.start(geminiLivePlaybackTimeRef.current);
+    geminiLivePlaybackTimeRef.current += audioBuffer.duration;
+  };
+
+  // Flush all queued Gemini Live audio (e.g. on barge-in). Does NOT close the session.
+  const stopGeminiLiveAudio = () => {
+    for (const source of geminiLiveSourceNodesRef.current) {
+      try { source.stop(); } catch { /* already ended */ }
+    }
+    geminiLiveSourceNodesRef.current = [];
+    geminiLivePlaybackTimeRef.current = 0;
+  };
+
+  // ─── Object-dispatch strategy ─────────────────────────────────────────────
+  // Switch here to change which strategy runs in production.
+  // Options: 'turn-complete' | 'keyword-stream' | 'stage-dir-stream' |
+  //          'predict-at-input' | 'word-threshold' | 'hybrid' | 'speculative-correct' |
+  //          'odyssey-last-prompt' | 'odyssey-ack-inject' | 'odyssey-video-frame'
+  const GL_OBJECT_STRATEGY: string = 'keyword-stream';
+
+  // Extended keyword → scene-object map covering all 8 characters.
+  const GL_KEYWORD_MAP: Array<{ keywords: string[]; object: string }> = [
+    // Physics / Einstein
+    { keywords: ['ball', 'bowling ball', 'heavy ball'], object: 'a heavy ball' },
+    { keywords: ['clock', 'watch', 'timepiece'], object: 'a ticking clock' },
+    { keywords: ['light', 'beam', 'laser', 'photon'], object: 'a beam of light' },
+    { keywords: ['trampoline', 'fabric', 'sheet'], object: 'a trampoline' },
+    { keywords: ['rocket', 'spaceship', 'spacecraft'], object: 'a rocket' },
+    { keywords: ['magnet', 'magnetic'], object: 'a magnet' },
+    { keywords: ['apple', 'gravity'], object: 'a falling apple' },
+    { keywords: ['telescope', 'lens'], object: 'a telescope' },
+    { keywords: ['atom', 'nucleus', 'electron'], object: 'an atom' },
+    { keywords: ['wave', 'ripple'], object: 'a wave' },
+    // Bear
+    { keywords: ['berry', 'berries', 'blueberry', 'strawberry'], object: 'a handful of berries' },
+    { keywords: ['honey', 'honeycomb'], object: 'a honeycomb' },
+    { keywords: ['fish', 'salmon', 'trout'], object: 'a fresh fish' },
+    { keywords: ['pine cone', 'pinecone', 'acorn', 'nut'], object: 'a pine cone' },
+    { keywords: ['mushroom'], object: 'a mushroom' },
+    { keywords: ['log', 'wood', 'stick'], object: 'a log' },
+    // Alexander / warrior
+    { keywords: ['sword', 'blade', 'sabre'], object: 'a gleaming sword' },
+    { keywords: ['shield', 'buckler'], object: 'a battle shield' },
+    { keywords: ['map', 'scroll', 'plan'], object: 'a battle map' },
+    { keywords: ['horse', 'cavalry', 'steed'], object: 'a horse' },
+    { keywords: ['spear', 'lance'], object: 'a spear' },
+    { keywords: ['crown', 'throne', 'king'], object: 'a golden crown' },
+    { keywords: ['army', 'troops', 'soldiers'], object: 'a battle flag' },
+    { keywords: ['arrow', 'bow'], object: 'a bow and arrow' },
+    // Circus Lion
+    { keywords: ['juggling ball', 'circus ball'], object: 'a juggling ball' },
+    { keywords: ['hoop', 'ring'], object: 'a circus hoop' },
+    { keywords: ['juggling pins', 'pins'], object: 'juggling pins' },
+    { keywords: ['rubber chicken'], object: 'a rubber chicken' },
+    { keywords: ['spinning plate', 'plate'], object: 'a spinning plate' },
+    // Cleopatra
+    { keywords: ['lotus', 'lotus flower'], object: 'a golden lotus' },
+    { keywords: ['cat', 'feline', 'bastet'], object: 'an Egyptian cat' },
+    { keywords: ['ankh'], object: 'an ankh' },
+    { keywords: ['sphinx'], object: 'a sphinx' },
+    { keywords: ['pyramid'], object: 'a pyramid' },
+    { keywords: ['papyrus', 'parchment'], object: 'an ancient scroll' },
+    { keywords: ['jewel', 'gem', 'diamond', 'ruby'], object: 'a precious gem' },
+    // Da Vinci
+    { keywords: ['gear', 'cog', 'wheel'], object: 'a brass gear' },
+    { keywords: ['wing', 'flying machine', 'glider'], object: 'a feathered wing' },
+    { keywords: ['compass', 'divider'], object: 'a compass' },
+    { keywords: ['paintbrush', 'brush', 'palette'], object: 'a paintbrush' },
+    { keywords: ['sketch', 'drawing', 'blueprint'], object: 'a technical sketch' },
+    { keywords: ['spring', 'coil'], object: 'a spring' },
+    { keywords: ['mirror'], object: 'a mirror' },
+    // Grandpa Turtle
+    { keywords: ['stone', 'rock', 'pebble'], object: 'a smooth stone' },
+    { keywords: ['leaf', 'leaves', 'foliage'], object: 'a fallen leaf' },
+    { keywords: ['shell', 'turtle shell'], object: 'a shell' },
+    { keywords: ['firefly', 'lightning bug'], object: 'a firefly' },
+    { keywords: ['pond', 'river', 'stream', 'water'], object: 'a pond' },
+    { keywords: ['bark', 'tree', 'oak'], object: 'a piece of bark' },
+    // Steve Jobs
+    { keywords: ['device', 'iphone', 'phone', 'tablet', 'ipad'], object: 'a sleek device' },
+    { keywords: ['chip', 'circuit', 'processor'], object: 'a circuit board' },
+    { keywords: ['button', 'click'], object: 'a single button' },
+    { keywords: ['calligraphy', 'font', 'typography', 'pen'], object: 'a calligraphy pen' },
+  ];
+
+  // Shared: dispatch objects to Odyssey, deduplicated per turn.
+  const glDispatchedThisTurnRef = useRef<Set<string>>(new Set());
+
+  const glDispatchObjects = (objects: string[], myGeneration: number, source: string) => {
+    if (geminiLiveGenerationRef.current !== myGeneration) return;
+    const fresh = objects.filter(o => !glDispatchedThisTurnRef.current.has(o));
+    if (!fresh.length) return;
+    fresh.forEach(o => glDispatchedThisTurnRef.current.add(o));
+    console.log(`[gl-objects][${source}] dispatching:`, fresh, `at +${Date.now() - glTurnStartRef.current}ms`);
+    handleInteractRef.current(`add ${fresh.join(', ')} to the scene`);
+  };
+
+  // Shared: LLM call for objects.
+  const glFetchObjects = (message: string, characterName: string, myGeneration: number, source: string) => {
+    fetch('/api/character/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, character: characterName, history: [] }),
+    })
+      .then(res => res.ok ? res.json() as Promise<{ objects?: string[] }> : Promise.reject())
+      .then(data => {
+        const objects = (data.objects ?? []).filter(Boolean);
+        if (objects.length) glDispatchObjects(objects, myGeneration, source);
+      })
+      .catch(() => undefined);
+  };
+
+  // Shared: extract objects from text via keyword matching.
+  const glKeywordMatch = (text: string): string[] => {
+    const lower = text.toLowerCase();
+    const found: string[] = [];
+    for (const entry of GL_KEYWORD_MAP) {
+      if (entry.keywords.some(k => lower.includes(k))) {
+        found.push(entry.object);
+      }
+    }
+    return found;
+  };
+
+  // Shared: extract stage directions from text.
+  const glExtractStageDirections = (text: string): string[] =>
+    [...text.matchAll(/\*([^*]+)\*/g)].map(m => m[1].trim());
+
+  // Turn-start timestamp for latency logging.
+  const glTurnStartRef = useRef(0);
+
+  // ─── Strategy: Phase 1 (always runs) ─────────────────────────────────────
+  const glPhase1Action = (myGeneration: number) => {
+    if (geminiLiveGenerationRef.current !== myGeneration) return;
+    glTurnStartRef.current = Date.now();
+    glDispatchedThisTurnRef.current = new Set();
+    handleInteractRef.current('listen actively');
+  };
+
+  // ─── Strategy implementations ─────────────────────────────────────────────
+
+  // V1 — turn-complete: LLM call after full response (current baseline).
+  const glStrategy_turnComplete = (userText: string, fullResponse: string, characterName: string, myGeneration: number) => {
+    const message = `User asked: "${userText}". You responded: "${fullResponse}". Based on this, what objects should appear in the scene?`;
+    glFetchObjects(message, characterName, myGeneration, 'turn-complete');
+  };
+
+  // V2 — keyword-stream: client-side keyword match on each transcript chunk.
+  const glStrategy_keywordStream = (chunk: string, myGeneration: number) => {
+    const objects = glKeywordMatch(chunk);
+    if (objects.length) glDispatchObjects(objects, myGeneration, 'keyword-stream');
+  };
+
+  // V3 — stage-dir-stream: extract *stage directions* from each chunk as they arrive.
+  const glStrategy_stageDirStream = (chunk: string, _myGeneration: number) => {
+    const directions = glExtractStageDirections(chunk);
+    if (directions.length) {
+      directions.forEach(d => handleInteractRef.current(d));
+    }
+  };
+
+  // V4 — predict-at-input: LLM call at inputTranscription with only user text.
+  const glStrategy_predictAtInput = (userText: string, characterName: string, myGeneration: number) => {
+    const message = `A user just asked: "${userText}". What physical objects would a ${characterName} character likely reference or show while answering this? Return objects only — do not generate a reply.`;
+    glFetchObjects(message, characterName, myGeneration, 'predict-at-input');
+  };
+
+  // V5 — word-threshold: LLM call once 15+ words are buffered mid-response.
+  const glWordThresholdFiredRef = useRef(false);
+  const glStrategy_wordThreshold = (buffer: string, userText: string, characterName: string, myGeneration: number) => {
+    if (glWordThresholdFiredRef.current) return;
+    const wordCount = buffer.trim().split(/\s+/).length;
+    if (wordCount < 15) return;
+    glWordThresholdFiredRef.current = true;
+    const message = `User asked: "${userText}". Partial response so far: "${buffer}". What objects should appear in the scene?`;
+    glFetchObjects(message, characterName, myGeneration, 'word-threshold');
+  };
+
+  // V6 — hybrid: keyword + stage-dir fire immediately; LLM confirms at turnComplete.
+  const glStrategy_hybrid = {
+    onChunk: (chunk: string, myGeneration: number) => {
+      glStrategy_keywordStream(chunk, myGeneration);
+      glStrategy_stageDirStream(chunk, myGeneration);
+    },
+    onComplete: (userText: string, fullResponse: string, characterName: string, myGeneration: number) => {
+      glStrategy_turnComplete(userText, fullResponse, characterName, myGeneration);
+    },
+  };
+
+  // V7 — speculative-correct: predict objects from user's question and spawn them
+  // immediately (fast but possibly wrong), then at turnComplete send a correction
+  // prompt to Odyssey with the accurate objects Gemini actually used.
+  const glSpeculativeObjectsRef = useRef<string[]>([]);
+  const glStrategy_speculativeCorrect = {
+    onInput: (userText: string, characterName: string, myGeneration: number) => {
+      const msg = `A user just asked a ${characterName} character: "${userText}". What physical objects would this character likely reference or show while answering? Return objects only — do not generate a reply.`;
+      fetch('/api/character/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg, character: characterName, history: [] }),
+      })
+        .then(res => res.ok ? res.json() as Promise<{ objects?: string[] }> : Promise.reject())
+        .then(data => {
+          if (geminiLiveGenerationRef.current !== myGeneration) return;
+          const objects = (data.objects ?? []).filter(Boolean);
+          glSpeculativeObjectsRef.current = objects;
+          if (objects.length) {
+            console.log('[gl-objects][speculative] spawning:', objects, `at +${Date.now() - glTurnStartRef.current}ms`);
+            handleInteractRef.current(`add ${objects.join(', ')} to the scene`);
+          }
+        })
+        .catch(() => undefined);
+    },
+    onComplete: (userText: string, fullResponse: string, characterName: string, myGeneration: number) => {
+      const msg = `User asked: "${userText}". You responded: "${fullResponse}". Based on this, what objects should appear in the scene?`;
+      fetch('/api/character/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg, character: characterName, history: [] }),
+      })
+        .then(res => res.ok ? res.json() as Promise<{ objects?: string[] }> : Promise.reject())
+        .then(data => {
+          if (geminiLiveGenerationRef.current !== myGeneration) return;
+          const correctObjects = (data.objects ?? []).filter(Boolean);
+          if (!correctObjects.length) return;
+          const speculative = glSpeculativeObjectsRef.current;
+          const alreadyCorrect = correctObjects.every(o => speculative.includes(o));
+          if (alreadyCorrect) {
+            // Speculative guess was right — nothing to fix
+            console.log('[gl-objects][correct] speculative was accurate, no correction needed');
+            return;
+          }
+          // Send a correction prompt — Odyssey will update the scene
+          console.log('[gl-objects][correct] correcting scene:', correctObjects, `at +${Date.now() - glTurnStartRef.current}ms`);
+          handleInteractRef.current(`update the scene to show ${correctObjects.join(', ')}`);
+        })
+        .catch(() => undefined);
+    },
+  };
+
+  // ─── V8: odyssey-last-prompt ─────────────────────────────────────────────
+  // At inputTranscription: inject the last prompt sent to Odyssey as scene context,
+  // then ask the LLM what objects should appear given the user's question.
+  const glStrategy_odysseyLastPrompt = (userText: string, characterName: string, myGeneration: number) => {
+    const lastPrompt = serviceRef.current?.lastAppliedPrompt ?? '';
+    const sceneContext = lastPrompt
+      ? `The scene currently shows: "${lastPrompt}". `
+      : '';
+    const msg = `${sceneContext}The user just asked the character: "${userText}". What physical objects should now appear in the scene to complement the character's answer? Return a comma-separated list of objects only. If none, return "none".`;
+    fetch('/api/character/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg, characterName, history: [] }),
+    })
+      .then(r => r.json())
+      .then((data: { reply?: string }) => {
+        if (geminiLiveGenerationRef.current !== myGeneration) return;
+        const reply = (data.reply ?? '').toLowerCase().trim();
+        if (!reply || reply === 'none') return;
+        const objects = reply.split(',').map((s: string) => s.trim()).filter(Boolean);
+        glDispatchObjects(objects, myGeneration, 'odyssey-last-prompt');
+      })
+      .catch(() => undefined);
+  };
+
+  // ─── V9: odyssey-ack-inject ───────────────────────────────────────────────
+  // Same timing as V8 but uses the last acknowledged prompt (tracks scene state
+  // after Odyssey confirms each interact call). Falls back to lastAppliedPrompt.
+  const glStrategy_odysseyAckInject = (userText: string, characterName: string, myGeneration: number) => {
+    const ackPrompt = glLastAckPromptRef.current || serviceRef.current?.lastAppliedPrompt || '';
+    const sceneContext = ackPrompt
+      ? `Odyssey's last confirmed scene state: "${ackPrompt}". `
+      : '';
+    const msg = `${sceneContext}The user just asked: "${userText}". What objects should appear to make the character's answer visually compelling? Return a comma-separated list only. If none, return "none".`;
+    fetch('/api/character/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg, characterName, history: [] }),
+    })
+      .then(r => r.json())
+      .then((data: { reply?: string }) => {
+        if (geminiLiveGenerationRef.current !== myGeneration) return;
+        const reply = (data.reply ?? '').toLowerCase().trim();
+        if (!reply || reply === 'none') return;
+        const objects = reply.split(',').map((s: string) => s.trim()).filter(Boolean);
+        glDispatchObjects(objects, myGeneration, 'odyssey-ack-inject');
+      })
+      .catch(() => undefined);
+  };
+
+  // ─── V10: odyssey-video-frame ─────────────────────────────────────────────
+  // At inputTranscription: capture a frame from the Odyssey video stream,
+  // convert it to a base64 data URL, and send it to the vision LLM alongside
+  // the user's question. Falls back to scene-context string if capture fails.
+  const glStrategy_odysseyVideoFrame = (userText: string, characterName: string, myGeneration: number) => {
+    const runWithDescription = (frameDescription: string) => {
+      const msg = [
+        'You are looking at a live frame of an animated character scene.',
+        `What you see: "${frameDescription}".`,
+        `The user just asked the character: "${userText}".`,
+        'Based on the current scene and the user\'s question, what physical objects should appear next?',
+        'Return a comma-separated list of objects only. If none, return "none".',
+      ].join(' ');
+      fetch('/api/character/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg, characterName, history: [] }),
+      })
+        .then(r => r.json())
+        .then((data: { reply?: string }) => {
+          if (geminiLiveGenerationRef.current !== myGeneration) return;
+          const reply = (data.reply ?? '').toLowerCase().trim();
+          if (!reply || reply === 'none') return;
+          const objects = reply.split(',').map((s: string) => s.trim()).filter(Boolean);
+          glDispatchObjects(objects, myGeneration, 'odyssey-video-frame');
+        })
+        .catch(() => undefined);
+    };
+
+    // Attempt live frame capture from the Odyssey MediaStream
+    const stream = odysseyStreamRef.current;
+    const videoTrack = stream?.getVideoTracks()[0];
+    if (videoTrack) {
+      try {
+        const imageCapture = new (window as unknown as { ImageCapture: new (track: MediaStreamTrack) => { grabFrame(): Promise<ImageBitmap> } }).ImageCapture(videoTrack);
+        imageCapture.grabFrame().then((bitmap: ImageBitmap) => {
+          const canvas = document.createElement('canvas');
+          canvas.width = bitmap.width;
+          canvas.height = bitmap.height;
+          canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
+          const frameDescription = `live video frame (${bitmap.width}×${bitmap.height}) from Odyssey avatar stream`;
+          runWithDescription(frameDescription);
+        }).catch(() => {
+          runWithDescription(serviceRef.current?.lastAppliedPrompt || 'an animated character scene');
+        });
+      } catch {
+        runWithDescription(serviceRef.current?.lastAppliedPrompt || 'an animated character scene');
+      }
+    } else {
+      runWithDescription(serviceRef.current?.lastAppliedPrompt || 'an animated character scene');
+    }
+  };
+
+  // ─── Strategy router ──────────────────────────────────────────────────────
+  // Called on each outputTranscription chunk.
+  const glOnChunk = (chunk: string, buffer: string, userText: string, characterName: string, myGeneration: number) => {
+    if (GL_OBJECT_STRATEGY === 'keyword-stream') glStrategy_keywordStream(chunk, myGeneration);
+    if (GL_OBJECT_STRATEGY === 'stage-dir-stream') glStrategy_stageDirStream(chunk, myGeneration);
+    if (GL_OBJECT_STRATEGY === 'word-threshold') glStrategy_wordThreshold(buffer, userText, characterName, myGeneration);
+    if (GL_OBJECT_STRATEGY === 'hybrid') glStrategy_hybrid.onChunk(chunk, myGeneration);
+  };
+
+  // Called at inputTranscription.
+  const glOnInput = (userText: string, characterName: string, myGeneration: number) => {
+    if (GL_OBJECT_STRATEGY === 'predict-at-input') glStrategy_predictAtInput(userText, characterName, myGeneration);
+    if (GL_OBJECT_STRATEGY === 'speculative-correct') glStrategy_speculativeCorrect.onInput(userText, characterName, myGeneration);
+    if (GL_OBJECT_STRATEGY === 'odyssey-last-prompt') glStrategy_odysseyLastPrompt(userText, characterName, myGeneration);
+    if (GL_OBJECT_STRATEGY === 'odyssey-ack-inject') glStrategy_odysseyAckInject(userText, characterName, myGeneration);
+    if (GL_OBJECT_STRATEGY === 'odyssey-video-frame') glStrategy_odysseyVideoFrame(userText, characterName, myGeneration);
+  };
+
+  // Called at turnComplete.
+  const glOnComplete = (userText: string, fullResponse: string, characterName: string, myGeneration: number) => {
+    if (GL_OBJECT_STRATEGY === 'turn-complete') glStrategy_turnComplete(userText, fullResponse, characterName, myGeneration);
+    if (GL_OBJECT_STRATEGY === 'hybrid') glStrategy_hybrid.onComplete(userText, fullResponse, characterName, myGeneration);
+    if (GL_OBJECT_STRATEGY === 'speculative-correct') glStrategy_speculativeCorrect.onComplete(userText, fullResponse, characterName, myGeneration);
+  };
+
+
+  const GEMINI_LIVE_SYSTEM_PROMPTS: Record<string, string> = {
+    einstein: [
+      'You are Albert Einstein — curious, warm, and full of wonder. You have a gentle sense of humour and love making the impossible feel simple.',
+      'You explain big ideas through everyday objects. When you reach for an analogy, use something real and physical — a ball rolling down a hill, a clock ticking on a moving train, a beam of light racing through space.',
+      'Those objects will literally appear on screen as you speak. So name them clearly and specifically.',
+      'Good examples: "Imagine a heavy ball — watch how it bends the fabric around it." or "Here, a clock — now picture it on a rocket moving near light speed."',
+      'Personality: childlike curiosity, dry wit, self-deprecating charm. You delight in being wrong and correcting yourself.',
+      'Keep every reply under 40 words. Speak as if talking to a curious ten-year-old. Use vivid, physical examples always.',
+    ].join('\n'),
+
+    alexander: [
+      'You are Alexander the Great — bold, magnetic, and utterly certain of your destiny. You speak with the authority of someone who has never lost.',
+      'You think in armies, maps, terrain, and tactics. When you explain something, you use the tools of war and conquest — a sword, a map rolled out on a table, a horse rearing up, a shield raised.',
+      'Those objects will appear on screen as you speak. Name them directly.',
+      'Good examples: "Here — look at this map. The enemy holds the river. We go around." or "A sword is only as strong as the will behind it."',
+      'Personality: commanding but not cruel. You respect courage above all things. Occasionally reveal the loneliness of being the greatest.',
+      'Keep every reply under 40 words. Speak with fire and conviction.',
+    ].join('\n'),
+
+    bear: [
+      'You are Steve the Bear — a big, warm, gentle bear who loves sharing things. You are a natural storyteller with a cozy, campfire energy.',
+      'You love showing things. When you explain something, you pull out an object and hold it up — a fat honeycomb dripping with honey, a fresh-caught fish, a handful of wild berries, a pine cone.',
+      'Those objects will actually appear on screen for your friend to see. You love this — it is how you share.',
+      'Good examples: "Oh, look at this honeycomb I found this morning — smell that?" or "Here, a berry — this is how you know it is ripe, see the colour?"',
+      'Personality: patient, delighted by small things, occasionally distracted by the smell of food. You call the user "little friend" or "friend".',
+      'Keep every reply under 40 words. Warm and unhurried. Always show something.',
+    ].join('\n'),
+
+    'circus-lion': [
+      'You are Leo the Circus Lion — a proud, theatrical showman who lives for the roar of the crowd. Everything you do is a performance.',
+      'You love props. When you make a point, you reach for something physical and show it off — a juggling ball, a hoop, a pair of juggling pins, a rubber chicken, a spinning plate.',
+      'Those props will appear on screen as you perform. Use them constantly.',
+      'Good examples: "Watch this — a ball, in the air, spinning! That is gravity, my friend." or "Here, a hoop — everything in life is about getting through the right hoops!"',
+      'Personality: dramatically confident, loves applause, occasionally goofs up and plays it off as intentional. You treat the user as your most important audience member.',
+      'Keep every reply under 40 words. Theatrical and energetic. Every sentence is a performance.',
+    ].join('\n'),
+
+    cleopatra: [
+      'You are Cleopatra, Queen of the Nile — regal, razor-sharp, and in complete command of every room you enter. You are also warmer than people expect.',
+      'You speak through the symbols of your world — a golden lotus, an ancient scroll, a jewelled crown, a cat, an ankh, a sphinx, desert sand.',
+      'Those objects will appear on screen as you speak. Let them punctuate your words.',
+      'Good examples: "This lotus — in Egypt, it means rebirth. Everything dies, everything returns." or "A scroll holds more power than any sword. Knowledge is my army."',
+      'Personality: supremely confident but never cold. You find humans endlessly interesting. Occasionally amused by how little they understand.',
+      'Keep every reply under 40 words. Speak like every word is deliberate.',
+    ].join('\n'),
+
+    'da-vinci': [
+      'You are Leonardo da Vinci — painter, engineer, anatomist, dreamer. Your mind skips between disciplines the way others breathe.',
+      'You think by making and showing. When an idea strikes you, you reach for something physical — a gear, a feathered wing, a compass, a paintbrush, a lens, a spring, a sketch.',
+      'Those objects will appear on screen as you explore them. Use them to think out loud.',
+      'Good examples: "A gear — now, if I connect it here, the force multiplies. Nature does the same thing with bone and muscle." or "Look at this wing — every feather placed by a logic I spent years learning."',
+      'Personality: endlessly curious, easily distracted by beauty, slightly frustrated that the world cannot keep up. You jump between topics mid-thought.',
+      'Keep every reply under 40 words. Think out loud. Show your work.',
+    ].join('\n'),
+
+    'grandpa-turtle': [
+      'You are Grandpa Turtle — ancient, unhurried, and full of quiet wisdom. You have seen everything at least twice and it no longer surprises you.',
+      'You tell stories through the things you find along the path — a smooth river stone, a fallen leaf, an acorn, a shell, a piece of bark, a firefly.',
+      'Those objects will appear on screen as you talk. Hold them up gently.',
+      'Good examples: "This stone — do you know how long the river rubbed it to make it smooth? Patience. That is all." or "A leaf falls but it feeds the tree that drops it. Nothing is wasted."',
+      'Personality: warm, slow-spoken, occasionally chuckling at something only you understand. You never rush. You ask more questions than you answer.',
+      'Keep every reply under 40 words. Gentle pace. Every word earns its place.',
+    ].join('\n'),
+
+    'steve-jobs': [
+      'You are Steve Jobs — visionary, relentlessly exacting, and convinced that most people settle for far less than they should.',
+      'You think through objects and systems. When you make a point, you pick up something physical — an Apple device, a circuit board, a single clean sheet of paper, a calligraphy pen, an apple.',
+      'Those objects will appear on screen as you speak. Use them to show what simplicity really means.',
+      'Good examples: "Look at this — one button. Every engineer told me it was impossible. They were wrong." or "This chip — the whole world runs on something you can hold in your palm."',
+      'Personality: intense and demanding, but capable of sudden gentleness when something is truly beautiful. You believe most people are capable of far more than they know.',
+      'Keep every reply under 40 words. Precise. No filler. Every word chosen.',
+    ].join('\n'),
+  };
+
+  const buildSystemPrompt = (slideId: string): string => {
+    return GEMINI_LIVE_SYSTEM_PROMPTS[slideId] ?? 'You are a helpful character. Keep replies brief.';
+  };
+
+  // Routes a parsed server message for the current Gemini Live session.
+  const handleGeminiLiveMessage = (msg: Record<string, unknown>, myGeneration: number) => {
+    if (geminiLiveGenerationRef.current !== myGeneration) return;
+
+    const content = msg.serverContent as Record<string, unknown> | undefined;
+    if (!content) return;
+
+    // Barge-in: server detected user speaking mid-response
+    if (content.interrupted) {
+      stopGeminiLiveAudio();
+      setIsCharacterSpeaking(false);
+      handleInteractRef.current('stand idle');
+      glOutputTranscriptBufferRef.current = '';
+      glPhase2FiredRef.current = false;
+      return;
+    }
+
+    // Audio chunks from model turn
+    const parts = ((content.modelTurn as Record<string, unknown> | undefined)?.parts ?? []) as Array<Record<string, unknown>>;
+    let hasAudio = false;
+    for (const part of parts) {
+      const inlineData = part.inlineData as Record<string, string> | undefined;
+      if (inlineData?.mimeType?.startsWith('audio/pcm')) {
+        enqueuePCMChunk(base64ToUint8Array(inlineData.data), 24000);
+        hasAudio = true;
+      }
+    }
+    if (hasAudio) setIsCharacterSpeaking(true);
+
+    // inputTranscription — user stopped speaking; fire Phase 1 + strategy hook
+    const inputTranscription = (content.inputTranscription as Record<string, string> | undefined)?.text;
+    if (inputTranscription) {
+      glCurrentUserTextRef.current = inputTranscription;
+      glOutputTranscriptBufferRef.current = '';
+      glPhase2FiredRef.current = false;
+      glWordThresholdFiredRef.current = false;
+      setCharacterHistory((prev) => ({
+        ...prev,
+        [slide.id]: [...(prev[slide.id] ?? []), { role: 'user' as const, content: inputTranscription }],
+      }));
+      glPhase1Action(myGeneration);                                          // always: 'listen actively'
+      glOnInput(inputTranscription, slide.title, myGeneration);              // strategy hook: predict-at-input
+    }
+
+    // outputTranscription chunk — accumulate and run per-chunk strategy hooks
+    const outputTranscription = (content.outputTranscription as Record<string, string> | undefined)?.text;
+    if (outputTranscription) {
+      glOutputTranscriptBufferRef.current += (glOutputTranscriptBufferRef.current ? ' ' : '') + outputTranscription;
+      glOnChunk(outputTranscription, glOutputTranscriptBufferRef.current, glCurrentUserTextRef.current, slide.title, myGeneration);
+    }
+
+    // turnComplete — update chat, extract stage directions, run completion strategy hook
+    if (content.turnComplete) {
+      setIsCharacterThinking(false);
+      setIsCharacterSpeaking(false);
+      const geminiResponse = glOutputTranscriptBufferRef.current;
+      if (geminiResponse) {
+        // Stage directions → Odyssey actions (always, regardless of strategy)
+        const stageDirections = glExtractStageDirections(geminiResponse);
+        for (const direction of stageDirections) {
+          handleInteractRef.current(direction);
+        }
+        // Strip stage directions from displayed text
+        const displayResponse = geminiResponse.replace(/\*[^*]+\*/g, '').replace(/\s{2,}/g, ' ').trim();
+        setCharacterReply(displayResponse);
+        setCharacterHistory((prev) => ({
+          ...prev,
+          [slide.id]: [...(prev[slide.id] ?? []), { role: 'assistant' as const, content: displayResponse }],
+        }));
+        // Strategy hook: turn-complete / hybrid LLM confirm
+        glOnComplete(glCurrentUserTextRef.current, geminiResponse, slide.title, myGeneration);
+
+        // Miss logging — when keyword-stream fired nothing, record the turn so
+        // the keyword list can be expanded from real user interactions later.
+        if (GL_OBJECT_STRATEGY === 'keyword-stream' && glDispatchedThisTurnRef.current.size === 0) {
+          logEvent('keyword_miss', {
+            character: slide.title,
+            userText: glCurrentUserTextRef.current,
+            response: displayResponse,
+          });
+        }
+      }
+      glOutputTranscriptBufferRef.current = '';
+      glPhase2FiredRef.current = false;
+    }
+  };
+
+  // Closes the Gemini Live WebSocket, releases mic, and resets all session state.
+  // Safe to call multiple times (guarded by geminiLiveActiveRef).
+  const stopGeminiLiveSession = () => {
+    if (!geminiLiveActiveRef.current) return;
+    geminiLiveActiveRef.current = false;
+    geminiLiveGenerationRef.current++;
+    stopGeminiLiveAudio();
+    try {
+      if (geminiLiveWsRef.current?.readyState === WebSocket.OPEN) {
+        geminiLiveWsRef.current.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
+      }
+      geminiLiveWsRef.current?.close();
+    } catch { /* ignore */ }
+    geminiLiveWsRef.current = null;
+    geminiLiveCaptureCtxRef.current?.close().catch(() => undefined);
+    geminiLiveCaptureCtxRef.current = null;
+    geminiLivePlayCtxRef.current?.close().catch(() => undefined);
+    geminiLivePlayCtxRef.current = null;
+    characterStreamRef.current?.getTracks().forEach(t => t.stop());
+    characterStreamRef.current = null;
+    setIsCharacterRecording(false);
+    setIsCharacterSpeaking(false);
+  };
+
+  // Starts a Gemini Live speech-to-speech session for the current slide (Einstein only).
+  // Uses raw WebSocket — exact wire format confirmed working in isolation test.
+  const startGeminiLiveSession = async () => {
+    if (geminiLiveActiveRef.current) return;
+    geminiLiveActiveRef.current = true;
+    const myGeneration = ++geminiLiveGenerationRef.current;
+    setIsCharacterRecording(true);
+    setCharacterError(null);
+    setCharacterReply(null);
+
+    // Unlock AudioContext during user gesture so playback works after async awaits
+    if (!ttsAudioCtxRef.current) {
+      ttsAudioCtxRef.current = new AudioContext();
+    } else {
+      ttsAudioCtxRef.current.resume().catch(() => undefined);
+    }
+
+    // Create BOTH AudioContexts HERE (within user gesture) so the browser starts them RUNNING.
+    // If created later (inside onmessage), the browser suspends them.
+    // capture: 16kHz — mic → Gemini. play: 24kHz — Gemini audio → speaker (matches Gemini's output rate).
+    const captureCtx = new AudioContext({ sampleRate: 16000 });
+    captureCtx.resume().catch(() => undefined);
+    geminiLiveCaptureCtxRef.current = captureCtx;
+    const playCtx = new AudioContext({ sampleRate: 24000 });
+    playCtx.resume().catch(() => undefined);
+    geminiLivePlayCtxRef.current = playCtx;
+
+    // Acquire mic before any awaits to stay within the user-gesture context
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+      });
+    } catch (err) {
+      console.error('[gemini-live] getUserMedia error', err);
+      setCharacterError(err instanceof Error ? err.message : 'Microphone access was blocked.');
+      stopGeminiLiveSession();
+      return;
+    }
+    characterStreamRef.current = stream;
+
+    // Fetch API key from server
+    let apiKey: string;
+    try {
+      const res = await fetch('/api/gemini-live-token', {
+        method: 'POST',
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) throw new Error(`Token endpoint returned ${res.status}`);
+      const data = await res.json() as { token?: string };
+      if (!data.token) throw new Error('Empty token from server');
+      apiKey = data.token;
+    } catch (err) {
+      console.error('[gemini-live] token fetch error', err);
+      setCharacterError('Could not connect to Gemini Live. Try again.');
+      stopGeminiLiveSession();
+      return;
+    }
+
+    if (geminiLiveGenerationRef.current !== myGeneration) {
+      stream.getTracks().forEach(t => t.stop());
+      return;
+    }
+
+    // Open raw WebSocket — model + URL confirmed in isolation test
+    const slideId = slide.id;
+    const ws = new WebSocket(
+      `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`
+    );
+    geminiLiveWsRef.current = ws;
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        setup: {
+          model: 'models/gemini-3.1-flash-live-preview',
+          generationConfig: {
+            responseModalities: ['AUDIO'],
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
+          },
+          systemInstruction: { parts: [{ text: buildSystemPrompt(slideId) }] },
+        },
+      }));
+    };
+
+    ws.onmessage = async (event) => {
+      if (geminiLiveGenerationRef.current !== myGeneration) return;
+      const text: string = event.data instanceof Blob
+        ? await (event.data as Blob).text()
+        : (event.data as string);
+      let msg: Record<string, unknown>;
+      try { msg = JSON.parse(text) as Record<string, unknown>; } catch { return; }
+
+      // setupComplete — start streaming mic audio
+      if (msg.setupComplete !== undefined) {
+        try {
+          // Use the AudioContext created in user-gesture context (not a new suspended one)
+          const captureCtx = geminiLiveCaptureCtxRef.current;
+          if (!captureCtx) throw new Error('capture context missing');
+          // Resume explicitly here — async ops (getUserMedia, token fetch) can cause
+          // the browser to re-suspend the AudioContext even if resume() was called earlier.
+          if (captureCtx.state === 'suspended') await captureCtx.resume();
+          const micSrc = captureCtx.createMediaStreamSource(stream);
+          // ScriptProcessorNode buffer must be power of 2; 2048 @ 16kHz = 128ms
+          const scriptNode = captureCtx.createScriptProcessor(2048, 1, 1);
+          scriptNode.onaudioprocess = (ev) => {
+            if (geminiLiveGenerationRef.current !== myGeneration || ws.readyState !== WebSocket.OPEN) return;
+            const f32 = ev.inputBuffer.getChannelData(0);
+            const int16 = new Int16Array(f32.length);
+            for (let i = 0; i < f32.length; i++) {
+              const s = Math.max(-1, Math.min(1, f32[i]));
+              int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            }
+            ws.send(JSON.stringify({
+              realtimeInput: { audio: { data: arrayBufferToBase64(int16.buffer), mimeType: 'audio/pcm;rate=16000' } },
+            }));
+          };
+          micSrc.connect(scriptNode);
+          scriptNode.connect(captureCtx.destination);
+        } catch (err) {
+          console.error('[gemini-live] mic setup error', err);
+          stopGeminiLiveSession();
+        }
+        return;
+      }
+
+      if (msg.goAway !== undefined) { stopGeminiLiveSession(); return; }
+
+      handleGeminiLiveMessage(msg, myGeneration);
+    };
+
+    ws.onerror = () => { if (geminiLiveGenerationRef.current === myGeneration) stopGeminiLiveSession(); };
+    ws.onclose = (e) => {
+      console.log('[gemini-live] closed', e.code, e.reason);
+      if (geminiLiveGenerationRef.current === myGeneration) stopGeminiLiveSession();
+    };
+  };
+
   const playCharacterTTS = async (text: string, slideId?: string) => {
+    const generation = ttsGenerationRef.current; // snapshot — if this changes, navigation happened
     if (!ttsAudioCtxRef.current) {
       ttsAudioCtxRef.current = new AudioContext();
     }
     const ctx = ttsAudioCtxRef.current;
-    console.log('[tts] playCharacterTTS called, text:', text.slice(0, 80));
-    console.log('[tts] AudioContext state:', ctx ? ctx.state : 'null (no ctx)');
+    debug('[tts] playCharacterTTS called, text:', text.slice(0, 80));
+    debug('[tts] AudioContext state:', ctx ? ctx.state : 'null (no ctx)');
     if (!ctx) return;
     try {
       await ctx.resume();
-      console.log('[tts] AudioContext resumed, state:', ctx.state);
+      if (ttsGenerationRef.current !== generation) return; // navigated away during resume
+      debug('[tts] AudioContext resumed, state:', ctx.state);
       const slideVoiceId = slideId ? VOICE_BY_SLIDE_ID[slideId] : '';
       const resolvedVoiceId = slideVoiceId || null;
-      console.log('[tts] sending fetch to /api/character/tts, voiceId:', resolvedVoiceId ?? 'default');
+      debug('[tts] sending fetch to /api/character/tts, voiceId:', resolvedVoiceId ?? 'default');
       ttsAbortRef.current?.abort();
       const ttsAbort = new AbortController();
       ttsAbortRef.current = ttsAbort;
@@ -951,52 +1832,99 @@ function App() {
         });
       } catch (fetchErr) {
         console.error('[tts] fetch failed or timed out:', fetchErr);
-        setCharacterError('TTS request timed out — check server logs for Smallest AI errors.');
+        if (ttsGenerationRef.current === generation) {
+          setCharacterError('TTS request timed out — check server logs for Smallest AI errors.');
+        }
         return;
       } finally {
         clearTimeout(ttsClientTimeout);
       }
-      console.log('[tts] server response status:', ttsRes.status, ttsRes.statusText);
-      console.log('[tts] content-type:', ttsRes.headers.get('content-type'));
+      if (ttsGenerationRef.current !== generation) return; // navigated away during fetch
+      debug('[tts] server response status:', ttsRes.status, ttsRes.statusText);
+      debug('[tts] content-type:', ttsRes.headers.get('content-type'));
       if (!ttsRes.ok) {
         const errBody = await ttsRes.text();
         console.error('[tts] server error body:', errBody);
         return;
       }
-      const arrayBuffer = await ttsRes.arrayBuffer();
-      console.log('[tts] arrayBuffer size:', arrayBuffer.byteLength, 'bytes');
-      if (arrayBuffer.byteLength < 200) {
-        const text = new TextDecoder().decode(arrayBuffer);
-        console.warn('[tts] suspiciously small buffer — raw content:', text);
-      }
-      const contentType = ttsRes.headers.get('content-type') || '';
-      const sampleRate = parseInt(ttsRes.headers.get('x-sample-rate') || '24000', 10);
-      if (contentType.includes('pcm') || contentType.includes('octet-stream')) {
-        // Raw 16-bit signed little-endian PCM — decode manually
-        const samples = new Int16Array(arrayBuffer);
-        const float32 = new Float32Array(samples.length);
-        for (let i = 0; i < samples.length; i++) {
-          float32[i] = samples[i] / 32768;
+      const contentType = ttsRes.headers.get('content-type') ?? '';
+      if (contentType.includes('audio/pcm') && ttsRes.body) {
+        // Streaming PCM — schedule chunks for playback as they arrive
+        const sampleRate = parseInt(ttsRes.headers.get('x-sample-rate') ?? '24000', 10);
+        const reader = ttsRes.body.getReader();
+        let playbackTime = ctx.currentTime + 0.05; // 50ms initial buffer
+        let leftover = new Uint8Array(0);
+        debug('[tts] streaming PCM playback started, sampleRate:', sampleRate);
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (ttsGenerationRef.current !== generation) return; // navigated away mid-stream
+            // Combine leftover odd byte from previous chunk
+            let data: Uint8Array;
+            if (leftover.length > 0) {
+              data = new Uint8Array(leftover.length + value.length);
+              data.set(leftover);
+              data.set(value, leftover.length);
+            } else {
+              data = value;
+            }
+            // Int16 PCM — process in 2-byte pairs
+            const usable = data.length - (data.length % 2);
+            leftover = data.slice(usable);
+            if (usable === 0) continue;
+            const int16 = new Int16Array(data.buffer, data.byteOffset, usable / 2);
+            const float32 = new Float32Array(int16.length);
+            for (let i = 0; i < int16.length; i++) {
+              float32[i] = int16[i] / 32768;
+            }
+            const audioBuffer = ctx.createBuffer(1, float32.length, sampleRate);
+            audioBuffer.copyToChannel(float32, 0);
+            const source = ctx.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(ctx.destination);
+            source.start(playbackTime);
+            playbackTime += audioBuffer.duration;
+          }
+          debug('[tts] streaming playback scheduled, total duration:', (playbackTime - ctx.currentTime).toFixed(2), 's');
+        } catch (err) {
+          console.error('[tts] streaming playback error:', err);
         }
-        const buffer = ctx.createBuffer(1, float32.length, sampleRate);
-        buffer.copyToChannel(float32, 0);
-        const source = ctx.createBufferSource();
-        source.buffer = buffer;
-        source.connect(ctx.destination);
-        ttsSourceRef.current = source;
-        source.onended = () => { ttsSourceRef.current = null; };
-        source.start();
-        console.log('[tts] PCM audio playback started, duration:', (float32.length / sampleRate).toFixed(2), 's');
       } else {
-        const decoded = await ctx.decodeAudioData(arrayBuffer);
-        console.log('[tts] decoded audio duration:', decoded.duration.toFixed(2), 's');
-        const source = ctx.createBufferSource();
-        source.buffer = decoded;
-        source.connect(ctx.destination);
-        ttsSourceRef.current = source;
-        source.onended = () => { ttsSourceRef.current = null; };
-        source.start();
-        console.log('[tts] audio playback started');
+        // Fallback: buffer full response then decode
+        const arrayBuffer = await ttsRes.arrayBuffer();
+        debug('[tts] arrayBuffer size:', arrayBuffer.byteLength, 'bytes');
+        // Raw PCM can't be decoded directly — wrap it in a WAV container first
+        const sampleRate = parseInt(ttsRes.headers.get('x-sample-rate') ?? '24000', 10);
+        const bitDepth = parseInt(ttsRes.headers.get('x-bit-depth') ?? '16', 10);
+        const channels = parseInt(ttsRes.headers.get('x-channels') ?? '1', 10);
+        const audioData = contentType.includes('audio/pcm')
+          ? pcmToWav(arrayBuffer, sampleRate, channels, bitDepth)
+          : arrayBuffer;
+        try {
+          const decoded = await ctx.decodeAudioData(audioData);
+          debug('[tts] decoded audio duration:', decoded.duration.toFixed(2), 's');
+          const source = ctx.createBufferSource();
+          source.buffer = decoded;
+          source.connect(ctx.destination);
+          ttsSourceRef.current = source;
+          source.onended = () => { ttsSourceRef.current = null; };
+          source.start();
+          debug('[tts] audio playback started');
+        } catch (err) {
+          console.warn('[tts] decodeAudioData failed, falling back to HTMLAudioElement', err);
+          const mime = contentType || 'audio/wav';
+          const blob = new Blob([arrayBuffer], { type: mime });
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          audio.onended = () => URL.revokeObjectURL(url);
+          try {
+            await audio.play();
+            debug('[tts] fallback audio playback started');
+          } catch (playErr) {
+            console.error('[tts] fallback audio play failed', playErr);
+          }
+        }
       }
     } catch (err) {
       console.error('[tts] error', err);
@@ -1018,6 +1946,12 @@ function App() {
       body: JSON.stringify({ message: userText, history, character: characterName, enableSearch })
     });
     if (!chatResponse.ok) {
+      logEvent('response_failed', {
+        characterId: slideId,
+        characterName,
+        latencyMs: Date.now() - chatStartedAt,
+        status: chatResponse.status,
+      });
       const errBody = await chatResponse.json().catch(() => ({})) as { error?: string; detail?: string };
       throw new Error(`Character response failed: ${errBody.detail || errBody.error || chatResponse.status}`);
     }
@@ -1049,110 +1983,6 @@ function App() {
     const streamPrompt = `${action}.${objectPrompt}`.trim();
     handleInteractRef.current(streamPrompt);
     playCharacterTTS(trimmedReply, slideId);
-  };
-
-  const startCharacterRecording = async () => {
-    if (isCharacterRecording || isCharacterThinking) {
-      return;
-    }
-    setCharacterError(null);
-    setCharacterReply(null);
-    // Unlock AudioContext during user gesture so TTS can play after async awaits
-    if (!ttsAudioCtxRef.current) {
-      ttsAudioCtxRef.current = new AudioContext();
-    } else {
-      ttsAudioCtxRef.current.resume();
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      const slideId = slide.id;
-      const characterName = activeCharacterName;
-
-      characterStreamRef.current = stream;
-      characterRecorderRef.current = recorder;
-      characterChunksRef.current = [];
-
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          characterChunksRef.current.push(event.data);
-        }
-      };
-
-      recorder.onstop = async () => {
-        setIsCharacterRecording(false);
-        setIsCharacterThinking(true);
-
-        const blob = new Blob(characterChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
-        characterChunksRef.current = [];
-
-        try {
-          const form = new FormData();
-          form.append('audio', blob, 'character.webm');
-
-          const sttResponse = await fetch('/api/character/stt', {
-            method: 'POST',
-            body: form
-          });
-
-          if (!sttResponse.ok) {
-            let detail = '';
-            try {
-              const raw = await sttResponse.text();
-              if (raw) {
-                try {
-                  const data = JSON.parse(raw);
-                  detail = String(data?.details ?? data?.error ?? raw);
-                } catch {
-                  detail = raw;
-                }
-              }
-            } catch {
-              // ignore read errors
-            }
-            const statusLine = `STT failed (${sttResponse.status})`;
-            const message = detail ? `${statusLine}: ${detail}` : statusLine;
-            throw new Error(message);
-          }
-
-          const sttData = (await sttResponse.json()) as { text?: string };
-          const transcript = (sttData.text ?? '').trim();
-          if (!transcript) {
-            setCharacterError('We did not hear anything. Try again.');
-            return;
-          }
-
-          logFirstPromptIfNeeded(slideId, characterName, 'stt');
-          logEvent('prompt_sent', {
-            characterId: slideId,
-            characterName,
-            inputMethod: 'stt',
-            promptLength: transcript.length,
-          });
-          await runCharacterInteraction(transcript, slideId, characterName);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Character flow failed.';
-          const isInputError =
-            /stt/i.test(message) ||
-            /microphone/i.test(message) ||
-            /hear anything/i.test(message);
-          if (isInputError) {
-            setCharacterError(message);
-          } else {
-            console.warn('[character] non-input error', message);
-          }
-        } finally {
-          setIsCharacterThinking(false);
-          characterStreamRef.current?.getTracks().forEach((track) => track.stop());
-          characterStreamRef.current = null;
-        }
-      };
-
-      setIsCharacterRecording(true);
-      recorder.start();
-    } catch (err) {
-      setCharacterError(err instanceof Error ? err.message : 'Microphone access was blocked.');
-    }
   };
 
   const startUploadStream = (file: File) => {
@@ -1297,9 +2127,20 @@ function App() {
               handleVoiceUtterance(transcript, 'stt');
             }
           } else {
+            logEvent('stt_empty', {
+              characterId: slide.id,
+              characterName: activeCharacterName,
+              inputMethod: 'world_voice',
+            });
             setSpeechError('We did not hear anything. Try again.');
           }
         } catch (err) {
+          logEvent('stt_failed', {
+            characterId: slide.id,
+            characterName: activeCharacterName,
+            inputMethod: 'world_voice',
+            message: err instanceof Error ? err.message : 'Transcription failed',
+          });
           const browserStarted = startBrowserSTT();
           if (!browserStarted) {
             setSpeechError('Transcription failed. Try again.');
@@ -1314,6 +2155,11 @@ function App() {
       setIsRecording(true);
       recorder.start();
     } catch (err) {
+      logEvent('world_mic_blocked', {
+        characterId: slide.id,
+        characterName: activeCharacterName,
+        message: err instanceof Error ? err.message : 'Microphone access was blocked.',
+      });
       const browserStarted = startBrowserSTT();
       if (!browserStarted) {
         setSpeechError('Microphone access was blocked.');
@@ -1341,6 +2187,10 @@ function App() {
     };
 
     recognition.onerror = () => {
+      logEvent('browser_stt_failed', {
+        characterId: slide.id,
+        characterName: activeCharacterName,
+      });
       setSpeechError('Browser speech failed.');
     };
 
@@ -1360,7 +2210,7 @@ function App() {
       if (isCharacterRecording || isCharacterThinking) {
         return false;
       }
-      startCharacterRecording();
+      void startGeminiLiveSession();
       return true;
     }
     if (isRecording || isTranscribing) {
@@ -1371,9 +2221,7 @@ function App() {
   };
   pttStopRef.current = () => {
     if (isCharacterSlide) {
-      if (isCharacterRecording) {
-        stopCharacterRecording();
-      }
+      // Gemini Live uses server-side VAD — don't stop on key release
       return;
     }
     recognitionRef.current?.stop();
@@ -1383,16 +2231,8 @@ function App() {
   };
 
   const handleSelectCharacter = (id: string) => {
-    // Log time spent on previous character before switching
-    if (selectedCharacterId && characterOpenedAtRef.current !== null) {
-      const timeSpentMs = Date.now() - characterOpenedAtRef.current;
-      const prevCharacter = characters.find((c) => c.id === selectedCharacterId);
-      logEvent('character_closed', {
-        characterId: selectedCharacterId,
-        characterName: prevCharacter?.title ?? selectedCharacterId,
-        timeSpentMs,
-      });
-    }
+    stopGeminiLiveSession();  // B3: clean up any active session before switching characters
+    closeActiveCharacter('switch');
     const newCharacter = characters.find((c) => c.id === id);
     logEvent('character_opened', {
       characterId: id,
@@ -1700,94 +2540,73 @@ function App() {
           muted
         />
         <div className="video-overlay" />
-        {!isStreamingReady && streamState !== 'error' && (
-          <div className="stream-loading-badge" aria-live="polite">
-            <span className="stream-loading-dot" aria-hidden />
-            Waking up {activeCharacterName}…
-          </div>
-        )}
       </div>
 
       <div className="ui">
         <header className="top-bar">
-          <button className="btn ghost back-to-landing" onClick={() => setShowLanding(true)}>
+          <button className="btn ghost back-to-landing" onClick={() => {
+            closeActiveCharacter('landing_back');
+            setShowLanding(true);
+          }}>
             Back
           </button>
         </header>
 
         {isCharacterSlide ? (
-          <aside className="einstein-chat">
-            <div className="einstein-chat-header">{activeCharacterName} Chat</div>
-            <div className="einstein-chat-body">
-              {activeCharacterHistory.slice(-8).map((msg, idx) => (
-                <div
-                  key={`${msg.role}-${idx}`}
-                  className={`einstein-chat-line ${msg.role === 'user' ? 'user' : 'assistant'}`}
-                >
-                  <span className="einstein-chat-role">{msg.role === 'user' ? 'You' : activeCharacterName}:</span>
-                  <span className="einstein-chat-text">{msg.content}</span>
-                </div>
-              ))}
-              {characterReply && !activeCharacterHistory.some((m) => m.content === characterReply) ? (
-                <div className="einstein-chat-line assistant">
-                  <span className="einstein-chat-role">{activeCharacterName}:</span>
-                  <span className="einstein-chat-text">{characterReply}</span>
-                  {characterSources.length > 0 && (
-                    <div className="chat-sources">
-                      {characterSources.map((s, i) => (
-                        <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" className="chat-source-link">{s.title}</a>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ) : null}
-            </div>
+          <aside className={`einstein-chat ${chatExpanded ? 'einstein-chat--open' : ''}`}>
+            <button className="einstein-chat-header" onClick={() => setChatExpanded((e) => !e)}>
+              <span>{activeCharacterName} Chat</span>
+              <span className="einstein-chat-toggle">{chatExpanded ? '▾' : '▸'}</span>
+            </button>
+            {chatExpanded && (
+              <div className="einstein-chat-body">
+                {activeCharacterHistory.slice(-8).map((msg, idx) => (
+                  <div
+                    key={`${msg.role}-${idx}`}
+                    className={`einstein-chat-line ${msg.role === 'user' ? 'user' : 'assistant'}`}
+                  >
+                    <span className="einstein-chat-role">{msg.role === 'user' ? 'You' : activeCharacterName}:</span>
+                    <span className="einstein-chat-text">{msg.content}</span>
+                  </div>
+                ))}
+                {characterReply && !activeCharacterHistory.some((m) => m.content === characterReply) ? (
+                  <div className="einstein-chat-line assistant">
+                    <span className="einstein-chat-role">{activeCharacterName}:</span>
+                    <span className="einstein-chat-text">{characterReply}</span>
+                    {characterSources.length > 0 && (
+                      <div className="chat-sources">
+                        {characterSources.map((s, i) => (
+                          <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" className="chat-source-link">{s.title}</a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            )}
           </aside>
         ) : null}
 
         <main className="slide-shell" />
 
-        <footer className="story-bar">
-          <div className="story-text">
-            <p>{slide.body}</p>
-            {speechError ? <div className="speech-preview speech-error">{speechError}</div> : null}
-            {characterError ? <div className="speech-preview speech-error">{characterError}</div> : null}
-            {moderationError ? <div className="speech-preview speech-error">{moderationError}</div> : null}
-          </div>
+        <div className="story-bar-wrap">
+          {!isStreamingReady && streamState !== 'error' && (
+            <div className="stream-loading-badge" aria-live="polite">
+              <span className="stream-loading-dot" aria-hidden />
+              Waking up {activeCharacterName}…
+            </div>
+          )}
+
+        <footer className={`story-bar ${isCharacterSlide ? 'story-bar--compact' : ''}`}>
+          {!isCharacterSlide ? (
+            <div className="story-text">
+              <p>{slide.body}</p>
+              {speechError ? <div className="speech-preview speech-error">{speechError}</div> : null}
+              {characterError ? <div className="speech-preview speech-error">{characterError}</div> : null}
+              {moderationError ? <div className="speech-preview speech-error">{moderationError}</div> : null}
+            </div>
+          ) : null}
           <div className="story-actions">
-            {isCharacterSlide ? (
-              <button
-                className="btn accent ptt-btn"
-                onClick={isCharacterRecording ? stopCharacterRecording : startCharacterRecording}
-                disabled={isCharacterThinking}
-                aria-label={
-                  isCharacterRecording
-                    ? 'Stop recording'
-                    : isCharacterThinking
-                      ? 'Thinking'
-                      : `Start recording for ${activeCharacterName}`
-                }
-                data-tooltip="Hold Ctrl + Space to talk"
-              >
-                {isCharacterRecording
-                  ? 'Stop'
-                  : isCharacterThinking
-                    ? 'Thinking...'
-                      : (
-                        <svg
-                          className="recording-icon"
-                          aria-hidden="true"
-                          xmlns="http://www.w3.org/2000/svg"
-                          viewBox="0 0 24 24"
-                          fill="currentColor"
-                          width="20"
-                          height="20"
-                        >
-                          <path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm-1 18.93V22h2v-2.07A8.001 8.001 0 0 0 20 12h-2a6 6 0 0 1-12 0H4a8.001 8.001 0 0 0 7 7.93z"/>
-                        </svg>
-                      )}
-              </button>
-            ) : null}
             {isUploadSlide ? (
               <label className="upload-pill">
                 <input type="file" accept="image/*" onChange={handleUploadChange} />
@@ -1807,8 +2626,35 @@ function App() {
                 Send
               </button>
             </div>
+            {isCharacterSlide ? (
+              isCharacterRecording ? (
+                <button
+                  className={[
+                    'voice-orb',
+                    isCharacterThinking ? 'voice-orb--thinking' : '',
+                    isCharacterSpeaking ? 'voice-orb--speaking' : 'voice-orb--listening',
+                  ].filter(Boolean).join(' ')}
+                  onClick={stopGeminiLiveSession}
+                  aria-label={isCharacterSpeaking ? `${activeCharacterName} is speaking — click to end` : 'Listening — click to end'}
+                />
+              ) : (
+                <button
+                  className="btn accent ptt-btn"
+                  onClick={startGeminiLiveSession}
+                  aria-label={`Talk to ${activeCharacterName}`}
+                >
+                  <img
+                    className="recording-icon"
+                    src="/images/recording_icon_v3.png"
+                    alt=""
+                    aria-hidden="true"
+                  />
+                </button>
+              )
+            ) : null}
           </div>
         </footer>
+        </div>
       </div>
     </div>
   );

@@ -333,59 +333,53 @@
   async function doStartMic() {
     if (!sessionReady) { log('err', 'Not connected'); return; }
 
-    log('info', 'Requesting mic access…');
     try {
+      log('info', 'Requesting mic access…');
       micStream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
       });
-    } catch (err) {
-      log('err', `getUserMedia failed: ${err.message}`);
-      return;
-    }
+      log('ok', `Mic granted — tracks: ${micStream.getTracks().length}`);
 
-    // 16 kHz AudioContext for capture
-    captureCtx = new AudioContext({ sampleRate: 16000 });
-    const micSource = captureCtx.createMediaStreamSource(micStream);
+      // 16 kHz AudioContext for capture
+      captureCtx = new AudioContext({ sampleRate: 16000 });
+      log('info', `AudioContext created — sampleRate: ${captureCtx.sampleRate}, state: ${captureCtx.state}`);
 
-    // 100ms chunks → 1600 samples @ 16kHz
-    const CHUNK_SAMPLES = 1600;
-    scriptNode = captureCtx.createScriptProcessor(CHUNK_SAMPLES, 1, 1);
+      // ScriptProcessorNode buffer size MUST be a power of 2 (256–16384)
+      // 2048 samples @ 16kHz = 128ms per chunk — good balance of latency vs overhead
+      const CHUNK_SAMPLES = 2048;
+      const micSource = captureCtx.createMediaStreamSource(micStream);
+      scriptNode = captureCtx.createScriptProcessor(CHUNK_SAMPLES, 1, 1);
 
-    scriptNode.onaudioprocess = (ev) => {
-      if (!sessionReady || !ws || ws.readyState !== WebSocket.OPEN) return;
+      scriptNode.onaudioprocess = (ev) => {
+        if (!sessionReady || !ws || ws.readyState !== WebSocket.OPEN) return;
 
-      const float32 = ev.inputBuffer.getChannelData(0);
-      const int16 = float32ToInt16(float32);
+        const float32 = ev.inputBuffer.getChannelData(0);
+        const int16 = float32ToInt16(float32);
+        const b64 = arrayBufferToBase64(int16.buffer);
 
-      // base64 the raw PCM bytes
-      const b64 = arrayBufferToBase64(int16.buffer);
-
-      // ── AUDIO INPUT MESSAGE (exact wire format) ───────────────────────────
-      // Root: "realtimeInput" (camelCase)
-      // Field: "audio" (NOT "mediaChunks")
-      // mimeType: "audio/pcm;rate=16000" (include rate parameter)
-      // data: base64-encoded 16-bit LE signed PCM, no headers
-      ws.send(JSON.stringify({
-        realtimeInput: {
-          audio: {
-            data: b64,
-            mimeType: 'audio/pcm;rate=16000'
+        ws.send(JSON.stringify({
+          realtimeInput: {
+            audio: { data: b64, mimeType: 'audio/pcm;rate=16000' }
           }
-        }
-      }));
+        }));
 
-      pcmSentCount++;
-      if (pcmSentCount % 10 === 0) updateChunks(); // update every 1s
-    };
+        pcmSentCount++;
+        if (pcmSentCount % 8 === 0) updateChunks();
+      };
 
-    micSource.connect(scriptNode);
-    // connect to destination to keep the graph alive (can be silent)
-    scriptNode.connect(captureCtx.destination);
+      micSource.connect(scriptNode);
+      scriptNode.connect(captureCtx.destination);
 
-    badge('mic active', 'on');
-    log('ok', `Mic started — streaming 16kHz PCM (${CHUNK_SAMPLES} samples / 100ms chunks)`);
-    document.getElementById('btn-mic-start').disabled = true;
-    document.getElementById('btn-mic-stop').disabled = false;
+      badge('mic active', 'on');
+      log('ok', `Mic streaming — ${CHUNK_SAMPLES} samples (128ms chunks) at 16kHz. Speak now.`);
+      document.getElementById('btn-mic-start').disabled = true;
+      document.getElementById('btn-mic-stop').disabled = false;
+
+    } catch (err) {
+      log('err', `Mic setup failed: ${err.name}: ${err.message}`);
+      if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+      if (captureCtx) { captureCtx.close().catch(() => {}); captureCtx = null; }
+    }
   }
 
   function doStopMic() {

@@ -1,0 +1,116 @@
+Bug Report: Image-to-Video Capability Lost in Client Credentials Flow
+======================================================================
+
+Reported by: Interact Studio
+Date: 2026-04-12
+Severity: High — blocks image-to-video in all browser clients using the secure credentials flow
+Affected SDK: @odysseyml/odyssey
+Affected methods: createClientCredentials() / connectWithCredentials()
+
+
+SUMMARY
+-------
+When using the recommended secure client credentials flow, the Odyssey SDK drops the session's
+capabilities field before it reaches the browser. As a result, the browser-side SDK object always
+initializes with image_to_video: false, causing startStream({ image }) to fail — even when the
+server has provisioned a session with image-to-video capability.
+
+We have traced this to specific lines in the SDK source. This is not a misconfiguration on our
+end — the bug is in the SDK itself.
+
+
+THE PROBLEM
+-----------
+createClientCredentials() correctly receives capabilities from requestSessionFromApi(), but drops
+them when building the return value — only signalingUrl, sessionToken, and expiresIn are forwarded.
+
+On the browser side, connectWithCredentials() never sets this.capabilities, so it stays at the
+constructor default { image_to_video: false }. startStream({ image }) then rejects the call even
+when the session was provisioned correctly server-side.
+
+
+ROOT CAUSE: SDK SOURCE
+----------------------
+
+Step 1 — createClientCredentials() drops capabilities when building its return value:
+
+    // session.capabilities exists here but is never passed forward
+    const session = await this.requestSessionFromApi(...);
+    const tokenInfo = await this.fetchSessionToken(session.sessionId);
+    return createClientCredentials(session.signalingUrl, tokenInfo.token, tokenInfo.expiresIn);
+    //                             ^ capabilities dropped
+
+The helper function createClientCredentials (lowercase) only accepts three arguments and has no
+knowledge of capabilities:
+
+    function createClientCredentials(signalingUrl, sessionToken, expiresIn) {
+      return {
+        sessionId: extractSessionId(sessionToken),
+        signalingUrl,
+        sessionToken,
+        expiresIn
+        // no capabilities field
+      };
+    }
+
+Step 2 — connectWithCredentials() never sets this.capabilities:
+
+    // this.capabilities never updated, stays { image_to_video: false }
+    this.sessionId = credentials.sessionId;
+    this.currentSignalingUrl = credentials.signalingUrl;
+    this.sessionToken = credentials.sessionToken;
+    // missing: this.capabilities = credentials.capabilities
+
+The direct connect() flow with an API key was never broken — this is specific to the
+createClientCredentials / connectWithCredentials path.
+
+
+CURRENT WORKAROUND
+------------------
+We are patching the SDK object manually after instantiation:
+
+    this.client = new Odyssey({});
+    // Force image_to_video true — connectWithCredentials drops capabilities so it stays false.
+    (this.client as unknown as { capabilities: { image_to_video: boolean } }).capabilities.image_to_video = true;
+
+This is brittle for two reasons:
+  1. It accesses a private internal property via a type cast — breaks silently if SDK internals change.
+  2. It unconditionally forces image_to_video: true regardless of actual session provisioning.
+
+
+SUGGESTED FIX
+-------------
+In createClientCredentials(), pass session.capabilities through to the return value:
+
+    async createClientCredentials() {
+      this.requireApiKey();
+      await this.exchangeApiKeyForToken();
+      const session = await this.requestSessionFromApi(...);
+      const tokenInfo = await this.fetchSessionToken(session.sessionId);
+      return {
+        sessionId: extractSessionId(tokenInfo.token),
+        signalingUrl: session.signalingUrl,
+        sessionToken: tokenInfo.token,
+        expiresIn: tokenInfo.expiresIn,
+        capabilities: session.capabilities  // <- add this
+      };
+    }
+
+In connectWithCredentials(), apply the capabilities if present:
+
+    async connectWithCredentials(credentials, handlers) {
+      // ...existing fields...
+      if (credentials.capabilities) {
+        this.capabilities = credentials.capabilities;  // <- add this
+      }
+    }
+
+No changes are needed on the client application side once this is fixed.
+
+
+ENVIRONMENT
+-----------
+SDK:               @odysseyml/odyssey (latest as of 2026-04-12)
+Connection method: connectWithCredentials() (secure credentials flow)
+Server:            Node.js / Express — provisions sessions via createClientCredentials()
+Browser:           Chrome / Edge (Chromium-based)

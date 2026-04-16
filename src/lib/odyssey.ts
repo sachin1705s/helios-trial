@@ -1,5 +1,7 @@
 import { Odyssey, credentialsFromDict, type ClientCredentials, type OdysseyEventHandlers } from '@odysseyml/odyssey';
 
+export { Odyssey };
+
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 
 export type { ClientCredentials };
@@ -22,8 +24,12 @@ export class OdysseyService {
     return this.client.connectWithCredentials(this.credentials, handlers);
   }
 
-  async startStream(options?: { prompt?: string; portrait?: boolean; image?: File | Blob }) {
+  async startStream(options?: { prompt?: string; portrait?: boolean; image?: File | Blob; broadcast?: boolean }) {
     return this.client.startStream(options);
+  }
+
+  get lastAppliedPrompt(): string | null {
+    return this.client.lastAppliedPrompt;
   }
 
   async interact(prompt: string) {
