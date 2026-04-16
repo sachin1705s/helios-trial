@@ -742,12 +742,6 @@ function App() {
       const hadActiveStream = streamActiveRef.current;
       streamActiveRef.current = false;
 
-      if (isUploadSlide) {
-        if (hadActiveStream) await service.endStream().catch(() => undefined);
-        setStreamState('idle');
-        return;
-      }
-
       if (hadActiveStream) {
         // Wait for onStreamEnded, not just endStream() — the SDK needs the stream fully
         // torn down before it can accept a new startStream. Calling startStream while the
@@ -828,7 +822,7 @@ function App() {
       startStreamInFlightRef.current = false;
       pendingStartRef.current = null;
     };
-  }, [connectionStatus, showLanding, selectedCharacterId, slide.id, slide.image, slide.prompt, isUploadSlide]);
+  }, [connectionStatus, showLanding, selectedCharacterId, slide.id, slide.image, slide.prompt]);
 
   // End the stream when the user navigates back to the landing page so the session isn't consumed idle.
   useEffect(() => {
@@ -1242,6 +1236,9 @@ function App() {
 
 
 
+  // NOTE: These prompts are for the Gemini Live audio path only.
+  // The text-chat path uses a separate set of prompts in server/index.js (promptByCharacter).
+  // Keep both in sync when editing character personalities.
   const GEMINI_LIVE_SYSTEM_PROMPTS: Record<string, string> = {
     einstein: [
       'You are Albert Einstein — curious, warm, and full of wonder. You have a gentle sense of humour and love making the impossible feel simple.',
@@ -1795,23 +1792,19 @@ function App() {
       return;
     }
     setTextPrompt('');
-    if (isCharacterSlide) {
-      if (!ttsAudioCtxRef.current) {
-        ttsAudioCtxRef.current = new AudioContext();
-      } else {
-        ttsAudioCtxRef.current.resume();
-      }
-      logFirstPromptIfNeeded(slide.id, activeCharacterName, 'text');
-      logEvent('prompt_sent', {
-        characterId: slide.id,
-        characterName: activeCharacterName,
-        inputMethod: 'text',
-        promptLength: prompt.length,
-      });
-      runCharacterInteraction(prompt, slide.id, activeCharacterName).catch(() => {});
+    if (!ttsAudioCtxRef.current) {
+      ttsAudioCtxRef.current = new AudioContext();
     } else {
-      handleInteract(prompt);
+      ttsAudioCtxRef.current.resume();
     }
+    logFirstPromptIfNeeded(slide.id, activeCharacterName, 'text');
+    logEvent('prompt_sent', {
+      characterId: slide.id,
+      characterName: activeCharacterName,
+      inputMethod: 'text',
+      promptLength: prompt.length,
+    });
+    runCharacterInteraction(prompt, slide.id, activeCharacterName).catch(() => {});
   };
 
   const handleTextPromptKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -1839,18 +1832,7 @@ function App() {
     }
     setUploadError(null);
     setUploadImage(file);
-    if (isUploadSlide && connectionStatus === 'connected') {
-      startUploadStream(file);
-    }
   };
-
-  useEffect(() => {
-    if (!isUploadSlide || !uploadImage || connectionStatus !== 'connected') {
-      return;
-    }
-    setUploadError(null);
-    startUploadStream(uploadImage);
-  }, [isUploadSlide, uploadImage, connectionStatus]);
 
   const startBackendRecording = async () => {
     if (isRecording || isTranscribing) {
@@ -1982,28 +1964,14 @@ function App() {
   // Keep PTT refs pointing to latest function instances to avoid stale closures
   pttStartRef.current = () => {
     setSpeechError(null);
-    if (isCharacterSlide) {
-      if (isCharacterRecording || isCharacterThinking) {
-        return false;
-      }
-      void startGeminiLiveSession();
-      return true;
-    }
-    if (isRecording || isTranscribing) {
+    if (isCharacterRecording || isCharacterThinking) {
       return false;
     }
-    startBackendRecording();
+    void startGeminiLiveSession();
     return true;
   };
   pttStopRef.current = () => {
-    if (isCharacterSlide) {
-      // Gemini Live uses server-side VAD — don't stop on key release
-      return;
-    }
-    recognitionRef.current?.stop();
-    if (mediaRecorderRef.current?.state === 'recording') {
-      mediaRecorderRef.current.stop();
-    }
+    // Gemini Live uses server-side VAD — don't stop on key release
   };
 
   const handleSelectCharacter = (id: string) => {
@@ -2334,8 +2302,7 @@ function App() {
           </button>
         </header>
 
-        {isCharacterSlide ? (
-          <aside className={`einstein-chat ${chatExpanded ? 'einstein-chat--open' : ''}`}>
+        <aside className={`einstein-chat ${chatExpanded ? 'einstein-chat--open' : ''}`}>
             <button className="einstein-chat-header" onClick={() => setChatExpanded((e) => !e)}>
               <span>{activeCharacterName} Chat</span>
               <span className="einstein-chat-toggle">{chatExpanded ? '▾' : '▸'}</span>
@@ -2366,8 +2333,7 @@ function App() {
                 ) : null}
               </div>
             )}
-          </aside>
-        ) : null}
+        </aside>
 
         <main className="slide-shell" />
 
@@ -2379,22 +2345,8 @@ function App() {
             </div>
           )}
 
-        <footer className={`story-bar ${isCharacterSlide ? 'story-bar--compact' : ''}`}>
-          {!isCharacterSlide ? (
-            <div className="story-text">
-              <p>{slide.body}</p>
-              {speechError ? <div className="speech-preview speech-error">{speechError}</div> : null}
-              {characterError ? <div className="speech-preview speech-error">{characterError}</div> : null}
-              {moderationError ? <div className="speech-preview speech-error">{moderationError}</div> : null}
-            </div>
-          ) : null}
+        <footer className="story-bar story-bar--compact">
           <div className="story-actions">
-            {isUploadSlide ? (
-              <label className="upload-pill">
-                <input type="file" accept="image/*" onChange={handleUploadChange} />
-                <span>{uploadImage ? uploadImage.name : 'Upload image'}</span>
-              </label>
-            ) : null}
             <div className="prompt-input">
               <input
                 type="text"
@@ -2408,32 +2360,30 @@ function App() {
                 Send
               </button>
             </div>
-            {isCharacterSlide ? (
-              isCharacterRecording ? (
-                <button
-                  className={[
-                    'voice-orb',
-                    isCharacterThinking ? 'voice-orb--thinking' : '',
-                    isCharacterSpeaking ? 'voice-orb--speaking' : 'voice-orb--listening',
-                  ].filter(Boolean).join(' ')}
-                  onClick={stopGeminiLiveSession}
-                  aria-label={isCharacterSpeaking ? `${activeCharacterName} is speaking — click to end` : 'Listening — click to end'}
+            {isCharacterRecording ? (
+              <button
+                className={[
+                  'voice-orb',
+                  isCharacterThinking ? 'voice-orb--thinking' : '',
+                  isCharacterSpeaking ? 'voice-orb--speaking' : 'voice-orb--listening',
+                ].filter(Boolean).join(' ')}
+                onClick={stopGeminiLiveSession}
+                aria-label={isCharacterSpeaking ? `${activeCharacterName} is speaking — click to end` : 'Listening — click to end'}
+              />
+            ) : (
+              <button
+                className="btn accent ptt-btn"
+                onClick={startGeminiLiveSession}
+                aria-label={`Talk to ${activeCharacterName}`}
+              >
+                <img
+                  className="recording-icon"
+                  src="/images/recording_icon_v3.png"
+                  alt=""
+                  aria-hidden="true"
                 />
-              ) : (
-                <button
-                  className="btn accent ptt-btn"
-                  onClick={startGeminiLiveSession}
-                  aria-label={`Talk to ${activeCharacterName}`}
-                >
-                  <img
-                    className="recording-icon"
-                    src="/images/recording_icon_v3.png"
-                    alt=""
-                    aria-hidden="true"
-                  />
-                </button>
-              )
-            ) : null}
+              </button>
+            )}
           </div>
         </footer>
         </div>

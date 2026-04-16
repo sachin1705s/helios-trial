@@ -557,6 +557,9 @@ app.post('/api/character/chat', aiLimiter, async (req, res) => {
     }
 
     const characterModel = process.env.EINSTEIN_MODEL || model;
+    // NOTE: These prompts are for the text-chat path (/api/character/chat).
+    // The Gemini Live audio path uses a separate set in src/App.tsx (GEMINI_LIVE_SYSTEM_PROMPTS).
+    // Keep both in sync when editing character personalities.
     const promptByCharacter = {
       'Alexander': loadPrompt('alexander.txt', 'You are Alexander. Be confident, strategic, and bold.'),
       'Steve the Bear': loadPrompt('bear.txt', 'You are a gentle, wise bear who explains things warmly.'),
