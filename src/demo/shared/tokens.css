@@ -1,0 +1,101 @@
+/* =============================================================
+   Demo design tokens — three directions, scoped to root classes.
+   Atrium  → warm editorial, cinematic inside (full fidelity)
+   Storyline → picture-book first (low fidelity, landing only)
+   Studio  → dark cinematic premium (low fidelity, landing only)
+   ============================================================= */
+
+/* ---------- Fonts (load once for all variants) ---------- */
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@300;400;500;600;700&family=Nunito:wght@500;700;800&family=Reckless+Neue:wght@400;500;700&display=swap');
+
+/* ---------- Atrium ---------- */
+.atrium {
+  --paper: #F5F1E8;
+  --paper-edge: #ECE5D2;
+  --mist: #E8E3D5;
+  --ink: #142826;
+  --ink-soft: #3E5450;
+  --ink-mute: #6B7B72;
+  --moss: #2F5E48;
+  --moss-deep: #1F4632;
+  --clay: #D9492B;
+  --clay-soft: #E8745A;
+  --sun: #F0B546;
+  --night: #0E1614;
+  --night-soft: #19251F;
+  --glow: #F8E5C8;
+  --glow-warm: #E8B779;
+
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 22px;
+  --radius-xl: 32px;
+  --radius-pill: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --space-9: 96px;
+  --space-10: 128px;
+
+  --shadow-sm: 0 1px 2px rgba(20,40,38,0.06), 0 2px 6px rgba(20,40,38,0.04);
+  --shadow-md: 0 4px 14px rgba(20,40,38,0.08), 0 12px 32px rgba(20,40,38,0.05);
+  --shadow-lg: 0 16px 60px rgba(20,40,38,0.16);
+
+  --display: 'Fraunces', ui-serif, Georgia, serif;
+  --body: 'Inter', system-ui, -apple-system, sans-serif;
+
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* ---------- Storyline ---------- */
+.storyline {
+  --cream: #FFF8EB;
+  --cream-deep: #F4E7CC;
+  --ink: #1F2540;
+  --ink-soft: #4A547A;
+  --crayon-red: #E6553F;
+  --crayon-blue: #4A7BD9;
+  --crayon-yellow: #F2C14E;
+  --crayon-green: #5BA67A;
+  --crayon-purple: #8262C4;
+  --night: #1A1F36;
+
+  --radius-md: 18px;
+  --radius-lg: 28px;
+  --radius-pill: 999px;
+
+  --shadow-card: 4px 6px 0 #1F2540;
+  --shadow-soft: 0 8px 32px rgba(31,37,64,0.18);
+
+  --display: 'Reckless Neue', 'Fraunces', ui-serif, Georgia, serif;
+  --body: 'Inter', system-ui, sans-serif;
+  --kid: 'Nunito', system-ui, sans-serif;
+}
+
+/* ---------- Studio Black ---------- */
+.studio {
+  --obsidian: #0A0B0F;
+  --obsidian-2: #11131A;
+  --obsidian-3: #181A22;
+  --chalk: #F2EEE6;
+  --chalk-soft: rgba(242,238,230,0.62);
+  --chalk-mute: rgba(242,238,230,0.38);
+  --ember: #E84F2A;
+  --ember-soft: rgba(232,79,42,0.18);
+  --gold: #D4A24C;
+  --forest: #1F3A2E;
+  --glass: rgba(255,255,255,0.04);
+  --hairline: rgba(255,255,255,0.08);
+
+  --display: 'Fraunces', ui-serif, Georgia, serif;
+  --body: 'Inter', system-ui, sans-serif;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
