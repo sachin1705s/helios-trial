@@ -157,9 +157,11 @@
 }
 .atrium .nav__mark {
   display: inline-block;
-  font-size: 22px;
-  color: var(--clay);
-  transform: translateY(-1px);
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  vertical-align: middle;
+  flex-shrink: 0;
 }
 .atrium .nav__links {
   display: flex;
@@ -594,7 +596,6 @@
   font-size: 28px;
   letter-spacing: -0.02em;
 }
-.atrium .foot__brand .nav__mark { color: var(--glow-warm); }
 .atrium .foot__cols {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

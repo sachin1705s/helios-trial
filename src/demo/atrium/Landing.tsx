@@ -205,7 +205,7 @@ export function AtriumNav() {
   return (
     <nav className="nav" aria-label="Primary">
       <Link to="/" className="nav__brand">
-        <span className="nav__mark">◐</span>
+        <img src="/favicon.jpeg" alt="" className="nav__mark" aria-hidden="true" />
         Interact Studio
       </Link>
       <div className="nav__links">
@@ -225,7 +225,7 @@ export function AtriumFooter() {
     <footer className="foot">
       <div className="foot__top">
         <div className="foot__brand">
-          <span className="nav__mark">◐</span>
+          <img src="/favicon.jpeg" alt="" className="nav__mark" aria-hidden="true" />
           <span>Interact Studio</span>
         </div>
         <div className="foot__cols">
