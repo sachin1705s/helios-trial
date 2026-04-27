@@ -433,8 +433,8 @@
   margin-bottom: 14px;
   letter-spacing: -0.01em;
   text-decoration: line-through;
-  text-decoration-thickness: 1px;
-  text-decoration-color: rgba(217,73,43,0.5);
+  text-decoration-thickness: 3px;
+  text-decoration-color: var(--clay);
 }
 .atrium .manifesto article p:last-child {
   font-size: 15px;
