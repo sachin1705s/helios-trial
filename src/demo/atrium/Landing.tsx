@@ -39,7 +39,7 @@ export default function AtriumLanding() {
             no autoplay feed in sight.
           </p>
           <div className="hero__ctas">
-            <Link to="/demo/home" className="btn btn--primary">
+            <Link to="/home" className="btn btn--primary">
               Try a character
               <span className="btn__arrow">→</span>
             </Link>
@@ -165,7 +165,7 @@ export default function AtriumLanding() {
         </header>
         <div className="preview__grid">
           {featuredCharacters.map((c) => (
-            <Link key={c.id} to={`/demo/character/${c.id}`} className="preview__card">
+            <Link key={c.id} to={`/character/${c.id}`} className="preview__card">
               <div className="preview__photo">
                 <img src={c.image} alt={c.title} loading="lazy" />
               </div>
@@ -179,7 +179,7 @@ export default function AtriumLanding() {
           ))}
         </div>
         <div className="preview__more">
-          <Link to="/demo/home" className="btn btn--ghost btn--lg">
+          <Link to="/home" className="btn btn--ghost btn--lg">
             See all eight →
           </Link>
         </div>
@@ -204,16 +204,16 @@ export default function AtriumLanding() {
 export function AtriumNav() {
   return (
     <nav className="nav" aria-label="Primary">
-      <Link to="/demo/landing" className="nav__brand">
+      <Link to="/" className="nav__brand">
         <span className="nav__mark">◐</span>
         Interact Studio
       </Link>
       <div className="nav__links">
         <a href="#how">How it works</a>
-        <Link to="/demo/home">Characters</Link>
+        <Link to="/home">Characters</Link>
         <a href="#" onClick={(e) => e.preventDefault()}>About</a>
       </div>
-      <Link to="/demo/home" className="btn btn--primary btn--sm">
+      <Link to="/home" className="btn btn--primary btn--sm">
         Try a character
       </Link>
     </nav>
@@ -231,7 +231,7 @@ export function AtriumFooter() {
         <div className="foot__cols">
           <div>
             <h4>Product</h4>
-            <Link to="/demo/home">Characters</Link>
+            <Link to="/home">Characters</Link>
             <a href="#how">How it works</a>
             <a href="#" onClick={(e) => e.preventDefault()}>What's new</a>
           </div>

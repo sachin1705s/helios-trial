@@ -86,7 +86,7 @@ export default function AtriumHome() {
       {filter === 'all' || (tags[featured.id] ?? []).includes(filter) || (tags[coFeatured.id] ?? []).includes(filter) ? (
         <section className="featured" aria-label="Featured characters">
           {[featured, coFeatured].map((c, i) => (
-            <Link key={c.id} to={`/demo/character/${c.id}`} className={`featured__card featured__card--${i}`}>
+            <Link key={c.id} to={`/character/${c.id}`} className={`featured__card featured__card--${i}`}>
               <div className="featured__photo">
                 <img src={c.image} alt={c.title} />
                 <div className="featured__overlay" />
@@ -109,7 +109,7 @@ export default function AtriumHome() {
       <section className="cast" aria-label="Full cast">
         <div className="cast__grid">
           {others.map((c) => (
-            <Link key={c.id} to={`/demo/character/${c.id}`} className="cast__card">
+            <Link key={c.id} to={`/character/${c.id}`} className="cast__card">
               <div className="cast__photo">
                 <img src={c.image} alt={c.title} loading="lazy" />
               </div>

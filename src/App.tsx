@@ -69,13 +69,13 @@ function pcmToWav(pcm: ArrayBuffer, sampleRate: number, channels: number, bitDep
   return buf;
 }
 
-function App() {
+function App({ initialCharacterId }: { initialCharacterId?: string }) {
   const [credentials, setCredentials] = useState<ClientCredentials | undefined>(undefined);
-  const [showLanding, setShowLanding] = useState(true);
+  const [showLanding, setShowLanding] = useState(!initialCharacterId);
   const [showAbout, setShowAbout] = useState(false);
   const [showContact, setShowContact] = useState(false);
   const [showVideoModal, setShowVideoModal] = useState(false);
-  const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(characters[0]?.id ?? null);
+  const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(initialCharacterId ?? characters[0]?.id ?? null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [streamState, setStreamState] = useState<StreamState>('idle');
   const [_error, setError] = useState<string | null>(null);
@@ -2117,10 +2117,10 @@ function App() {
   );
 }
 
-function AppWithAnalytics() {
+function AppWithAnalytics({ initialCharacterId }: { initialCharacterId?: string } = {}) {
   return (
     <>
-      <App />
+      <App initialCharacterId={initialCharacterId} />
       <Analytics />
       <SpeedInsights />
     </>
