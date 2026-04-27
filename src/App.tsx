@@ -956,17 +956,6 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   };
 
 
-  const VOICE_BY_SLIDE_ID: Record<string, string> = {
-    'grandpa-turtle': 'magnus',
-    'cleopatra': 'sophia',
-    'bear': 'liam',
-    'alexander': 'alex',
-    'circus-lion': 'alex',
-    'einstein': 'magnus',
-    'steve-jobs': 'alex',
-    'da-vinci': 'magnus'
-  };
-
   // Gemini Live prebuilt voices — one unique voice per character.
   // Male-coded: Orus, Charon, Fenrir, Puck (firm/warm/excitable/upbeat).
   // Female-coded: Kore, Aoede (firm/breathy) — used for Cleopatra to match TTS 'sophia'.
