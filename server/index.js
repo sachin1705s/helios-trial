@@ -205,12 +205,29 @@ const guardPromptLeak = (message, history) => {
   return history.some((entry) => isPromptLeakAttempt(entry?.content));
 };
 
+// Strips every known stage-direction format from model output so nothing leaks
+// into displayed text or TTS. Used at the chat endpoint AND the TTS endpoint.
+const stripActionTags = (text) => {
+  return text
+    // <stone_appears>, <action>, any angle-bracket tag
+    .replace(/<[^>]+>/g, '')
+    // [SCENE_ACTION: spawn_object("ball")] — official format
+    .replace(/\[SCENE_ACTION:[^\]]*\]/gi, '')
+    // [any bracketed annotation] — e.g. [sighs], [holds up stone] (≤80 chars to avoid false positives)
+    .replace(/\[[^\]]{1,80}\]/g, '')
+    // `backtick spans` — e.g. `hold up honeycomb`
+    .replace(/`[^`\n]+`/g, '')
+    // *stage direction* / **action** — strip the whole match including its content
+    .replace(/\*{1,3}[^*\n]{1,120}\*{1,3}/g, '')
+    // collapse extra whitespace left behind
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+};
+
 const sanitizeModelReply = (text) => {
   if (!text) return '';
   if (isPromptLeakAttempt(text)) return '';
-  // Strip backtick-wrapped stage directions (e.g. `hold up honeycomb`) that the
-  // model sometimes embeds in the reply instead of using proper [SCENE_ACTION:] tags.
-  return text.replace(/`[^`]+`/g, '').replace(/\s{2,}/g, ' ').trim();
+  return stripActionTags(text);
 };
 
 const ODYSSEY_KEY_LIMIT = Math.max(1, Number(process.env.ODYSSEY_KEY_LIMIT || 5));
@@ -979,12 +996,7 @@ app.post('/api/character/tts', async (req, res) => {
     };
     const rawText = Object.entries(abbrevMap).reduce(
       (t, [pattern, replacement]) => t.replace(new RegExp(pattern, 'gi'), replacement),
-      String(req.body?.text ?? '')
-        .replace(/\*+/g, '')
-        // Strip scene/action tags so they are never spoken aloud (e.g. <stone_appears>, [SCENE_ACTION:...], `emote`)
-        .replace(/<[^>]+>/g, '')
-        .replace(/\[SCENE_ACTION:[^\]]+\]/g, '')
-        .replace(/`[^`]+`/g, '')
+      stripActionTags(String(req.body?.text ?? ''))
         // Lowercase all-caps words (2+ letters) so TTS doesn't spell them out
         .replace(/\b([A-Z]{2,})\b/g, (m) => m.charAt(0) + m.slice(1).toLowerCase())
     ).trim();
@@ -1187,7 +1199,7 @@ app.post('/api/einstein/tts', async (req, res) => {
   try {
     const smallestApiKey = runtimeConfig.smallestApiKey;
     if (!smallestApiKey) return res.status(503).json({ error: 'TTS service not configured.' });
-    const text = String(req.body?.text ?? '').trim();
+    const text = stripActionTags(String(req.body?.text ?? ''));
     if (!text) return res.status(400).json({ error: 'Missing text.' });
 
     const voiceModel = 'lightning-v3.1';
