@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { characters } from '../shared/characters';
 import MusicToggle from './MusicToggle';
 import '../shared/tokens.css';
@@ -202,8 +202,16 @@ export default function AtriumLanding() {
 }
 
 export function AtriumNav() {
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 24);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
   return (
-    <nav className="nav" aria-label="Primary">
+    <nav className={`nav${scrolled ? ' nav--scrolled' : ''}`} aria-label="Primary">
       <Link to="/" className="nav__brand">
         Interact Studio
       </Link>
