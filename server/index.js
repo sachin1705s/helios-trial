@@ -989,26 +989,69 @@ app.post('/api/character/tts', async (req, res) => {
     // ── Gemini TTS path ───────────────────────────────────────────────────────
     const geminiVoice = String(req.body?.geminiVoice ?? '').trim();
     if (geminiVoice) {
-      const ai = getAiClient();
-      if (!ai) return res.status(503).json({ error: 'Gemini not configured.' });
-      console.log('[character/tts] gemini voice:', geminiVoice);
-      const ttsResponse = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-preview-tts',
-        contents: [{ role: 'user', parts: [{ text: rawText }] }],
-        config: {
-          responseModalities: ['AUDIO'],
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: geminiVoice } } },
-        },
-      });
-      const part = ttsResponse.candidates?.[0]?.content?.parts?.[0];
+      const apiKey = runtimeConfig.geminiApiKey;
+      if (!apiKey) return res.status(503).json({ error: 'Gemini not configured.' });
+      console.log('[character/tts] gemini voice:', geminiVoice, '| text length:', rawText.length);
+
+      const ttsRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: rawText }] }],
+            generationConfig: {
+              responseModalities: ['AUDIO'],
+              speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: geminiVoice } } },
+            },
+          }),
+        }
+      );
+      if (!ttsRes.ok) {
+        const errText = await ttsRes.text();
+        console.error('[character/tts] Gemini TTS HTTP error:', ttsRes.status, errText.slice(0, 300));
+        return res.status(500).json({ error: 'Gemini TTS failed.', details: errText.slice(0, 200) });
+      }
+      const ttsJson = await ttsRes.json();
+      const part = ttsJson.candidates?.[0]?.content?.parts?.[0];
       if (!part?.inlineData?.data) {
-        console.error('[character/tts] Gemini TTS returned no audio');
+        console.error('[character/tts] Gemini TTS no audio part:', JSON.stringify(ttsJson).slice(0, 300));
         return res.status(500).json({ error: 'Gemini TTS returned no audio.' });
       }
-      const audioBuffer = Buffer.from(part.inlineData.data, 'base64');
-      const mimeType = part.inlineData.mimeType || 'audio/wav';
-      res.setHeader('Content-Type', mimeType);
-      return res.send(audioBuffer);
+      const audioData = Buffer.from(part.inlineData.data, 'base64');
+      const mimeType = part.inlineData.mimeType || '';
+      console.log('[character/tts] gemini mimeType:', mimeType, '| size:', audioData.length, '| first4:', audioData.slice(0, 4).toString('ascii'));
+
+      // Gemini TTS returns raw PCM (audio/L16;rate=N) — browsers need a WAV container.
+      // Only wrap if the data doesn't already have a RIFF header.
+      const isRawPcm = audioData.length < 4 || !audioData.slice(0, 4).toString('ascii').startsWith('RIFF');
+      if (isRawPcm) {
+        const sampleRateMatch = mimeType.match(/rate=(\d+)/);
+        const sampleRate = sampleRateMatch ? parseInt(sampleRateMatch[1], 10) : 24000;
+        const numChannels = 1;
+        const bitsPerSample = 16;
+        const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+        const blockAlign = numChannels * (bitsPerSample / 8);
+        const header = Buffer.alloc(44);
+        header.write('RIFF', 0);
+        header.writeUInt32LE(36 + audioData.length, 4);
+        header.write('WAVE', 8);
+        header.write('fmt ', 12);
+        header.writeUInt32LE(16, 16);
+        header.writeUInt16LE(1, 20);
+        header.writeUInt16LE(numChannels, 22);
+        header.writeUInt32LE(sampleRate, 24);
+        header.writeUInt32LE(byteRate, 28);
+        header.writeUInt16LE(blockAlign, 32);
+        header.writeUInt16LE(bitsPerSample, 34);
+        header.write('data', 36);
+        header.writeUInt32LE(audioData.length, 40);
+        const wavBuffer = Buffer.concat([header, audioData]);
+        res.setHeader('Content-Type', 'audio/wav');
+        return res.send(wavBuffer);
+      }
+      res.setHeader('Content-Type', 'audio/wav');
+      return res.send(audioData);
     }
 
     // ── Smallest AI path ──────────────────────────────────────────────────────
