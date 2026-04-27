@@ -139,11 +139,25 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 14px clamp(20px, 5vw, 64px);
-  background: rgba(245,241,232,0.82);
-  backdrop-filter: saturate(160%) blur(14px);
-  -webkit-backdrop-filter: saturate(160%) blur(14px);
-  border-bottom: 1px solid rgba(20,40,38,0.06);
+  padding: 14px clamp(20px, 5vw, 48px);
+
+  /* Liquid glass: warm paper tint + heavy blur + vibrancy */
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.22) 0%,
+    rgba(245, 241, 232, 0.52) 100%
+  );
+  backdrop-filter: blur(28px) saturate(200%) brightness(1.06);
+  -webkit-backdrop-filter: blur(28px) saturate(200%) brightness(1.06);
+
+  /* Specular glass edge — bright top highlight, faint bottom rule */
+  border-top: none;
+  border-bottom: 1px solid rgba(20, 40, 38, 0.06);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.80),   /* top-edge specular */
+    inset 0 -1px 0 rgba(20, 40, 38, 0.04),      /* bottom-edge depth */
+    0 4px 24px rgba(20, 40, 38, 0.06),           /* ambient depth */
+    0 1px 3px rgba(20, 40, 38, 0.04);
 }
 .atrium .nav__brand {
   display: inline-flex;
@@ -162,11 +176,41 @@
   object-fit: contain;
   vertical-align: middle;
   flex-shrink: 0;
+  border-radius: 4px;
 }
 .atrium .nav__actions {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+/* Nav glass button overrides — frosted surfaces need lighter ghost treatment */
+.atrium .nav .btn--ghost {
+  background: rgba(255, 255, 255, 0.30);
+  color: var(--ink);
+  border-color: rgba(255, 255, 255, 0.60);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.80);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.atrium .nav .btn--ghost:hover {
+  background: rgba(255, 255, 255, 0.50);
+  border-color: rgba(255, 255, 255, 0.80);
+}
+.atrium .nav .btn--primary {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: transparent;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 4px 14px rgba(20, 40, 38, 0.28);
+}
+.atrium .nav .btn--primary:hover {
+  background: var(--moss-deep);
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 8px 24px rgba(20, 40, 38, 0.36);
 }
 
 /* ---------- Hero ---------- */
