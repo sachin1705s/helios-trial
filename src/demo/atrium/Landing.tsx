@@ -126,7 +126,7 @@ export default function AtriumLanding() {
         </h2>
         <div className="manifesto__grid">
           <article>
-            <span className="cross">×</span>
+
             <p className="strike">Not a feed</p>
             <p>
               Nothing autoplays. Nothing scrolls. You don't open the app to
@@ -134,7 +134,7 @@ export default function AtriumLanding() {
             </p>
           </article>
           <article>
-            <span className="cross">×</span>
+
             <p className="strike">Not a script</p>
             <p>
               Every conversation runs once. The character is reacting to
@@ -142,7 +142,7 @@ export default function AtriumLanding() {
             </p>
           </article>
           <article>
-            <span className="cross">×</span>
+
             <p className="strike">Not a chatbot</p>
             <p>
               There's a face. A scene. Eyes that meet yours. You're not
