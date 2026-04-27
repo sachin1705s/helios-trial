@@ -171,7 +171,6 @@ export default function AtriumLanding() {
                 <img src={c.image} alt={c.title} loading="lazy" />
               </div>
               <div className="preview__meta">
-                <span className="preview__sub">{c.subtitle}</span>
                 <h3>{c.title}</h3>
                 <p>{c.body}</p>
               </div>

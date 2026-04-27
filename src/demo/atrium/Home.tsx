@@ -93,7 +93,6 @@ export default function AtriumHome() {
                 <div className="featured__overlay" />
               </div>
               <div className="featured__meta">
-                <span className="featured__sub">{c.subtitle}</span>
                 <h2>{c.title}</h2>
                 <p className="featured__greeting">"{c.greeting}"</p>
                 <span className="featured__cta">
@@ -115,7 +114,6 @@ export default function AtriumHome() {
                 <img src={c.image} alt={c.title} loading="lazy" />
               </div>
               <div className="cast__meta">
-                <span className="cast__sub">{c.subtitle}</span>
                 <h3>{c.title}</h3>
                 <p>{c.body}</p>
               </div>
