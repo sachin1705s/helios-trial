@@ -189,10 +189,9 @@ export default function AtriumLanding() {
       <section className="quote">
         <blockquote>
           <p>
-            The first medium that's <em>actually</em> interactive — not a feed
-            you scroll, but a conversation you have.
+            The story changes when <em>you</em> speak.
           </p>
-          <footer>— what we're trying to make</footer>
+          <footer>— Interact Studio</footer>
         </blockquote>
       </section>
 
