@@ -36,7 +36,7 @@ export default function AtriumLanding() {
           </h1>
           <p className="lede">
             Speak to a character. Step into a scene. Watch the story bend
-            around your voice — in real time, with no script, no scroll, and
+            around your voice, in real time, with no script, no scroll, and
             no autoplay feed in sight.
           </p>
           <div className="hero__ctas">
@@ -105,7 +105,7 @@ export default function AtriumLanding() {
             <h3>Speak in your own voice.</h3>
             <p>
               Press once and talk. No keyboard, no commands. The character is
-              listening — and they remember what you said two minutes ago.
+              listening, and they remember what you said two minutes ago.
             </p>
           </li>
           <li>
@@ -160,7 +160,7 @@ export default function AtriumLanding() {
             Eight characters. <em>One conversation each.</em>
           </h2>
           <p className="lede lede--center">
-            From a thoughtful turtle to the last pharaoh of Egypt — pick the
+            From a thoughtful turtle to the last pharaoh of Egypt. Pick the
             voice you want to spend ten minutes with.
           </p>
         </header>
