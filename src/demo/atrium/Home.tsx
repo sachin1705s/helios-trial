@@ -27,20 +27,11 @@ const filterLabel: Record<Filter, string> = {
   visionaries: 'Visionaries',
 };
 
-const FEATURED_IDS = ['bear', 'da-vinci'];
-
 export default function AtriumHome() {
   const [filter, setFilter] = useState<Filter>('all');
 
-  const featured = FEATURED_IDS.map((id) => characters.find((c) => c.id === id)!);
-
-  // On "all": featured row gets the two hero cards, cast grid gets the rest.
-  // On any filter: skip the featured row entirely — show all matches uniformly.
   const castCharacters = useMemo(
-    () =>
-      filter === 'all'
-        ? characters.filter((c) => !FEATURED_IDS.includes(c.id))
-        : characters.filter((c) => (tags[c.id] ?? ['all']).includes(filter)),
+    () => characters.filter((c) => (tags[c.id] ?? ['all']).includes(filter)),
     [filter],
   );
 
@@ -83,28 +74,6 @@ export default function AtriumHome() {
           })}
         </div>
       </section>
-
-      {/* Featured row — only shown on "All eight" */}
-      {filter === 'all' && (
-        <section className="featured" aria-label="Featured characters">
-          {featured.map((c, i) => (
-            <Link key={c.id} to={`/character/${c.id}`} className={`featured__card featured__card--${i}`}>
-              <div className="featured__photo">
-                <img src={c.image} alt={c.title} />
-                <div className="featured__overlay" />
-              </div>
-              <div className="featured__meta">
-                <h2>{c.title}</h2>
-                <p className="featured__greeting">"{c.greeting}"</p>
-                <span className="featured__cta">
-                  Talk to {c.title.split(' ')[0]}
-                  <span className="btn__arrow">→</span>
-                </span>
-              </div>
-            </Link>
-          ))}
-        </section>
-      )}
 
       {/* Cast grid — uniform design, all matching characters */}
       <section className="cast" aria-label="Full cast">
