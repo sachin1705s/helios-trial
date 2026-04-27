@@ -956,8 +956,6 @@ app.post('/api/voice-clone', uploadVoiceClone.single('audio'), async (req, res) 
 
 app.post('/api/character/tts', async (req, res) => {
   try {
-    const smallestApiKey = runtimeConfig.smallestApiKey;
-    if (!smallestApiKey) return res.status(503).json({ error: 'TTS service not configured.' });
     // Expand internet abbreviations so TTS pronounces them correctly
     const abbrevMap = {
       '\\brn\\b': 'right now',
@@ -987,6 +985,35 @@ app.post('/api/character/tts', async (req, res) => {
         .replace(/\b([A-Z]{2,})\b/g, (m) => m.charAt(0) + m.slice(1).toLowerCase())
     ).trim();
     if (!rawText) return res.status(400).json({ error: 'Missing text.' });
+
+    // ── Gemini TTS path ───────────────────────────────────────────────────────
+    const geminiVoice = String(req.body?.geminiVoice ?? '').trim();
+    if (geminiVoice) {
+      const ai = getAiClient();
+      if (!ai) return res.status(503).json({ error: 'Gemini not configured.' });
+      console.log('[character/tts] gemini voice:', geminiVoice);
+      const ttsResponse = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-preview-tts',
+        contents: [{ role: 'user', parts: [{ text: rawText }] }],
+        config: {
+          responseModalities: ['AUDIO'],
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: geminiVoice } } },
+        },
+      });
+      const part = ttsResponse.candidates?.[0]?.content?.parts?.[0];
+      if (!part?.inlineData?.data) {
+        console.error('[character/tts] Gemini TTS returned no audio');
+        return res.status(500).json({ error: 'Gemini TTS returned no audio.' });
+      }
+      const audioBuffer = Buffer.from(part.inlineData.data, 'base64');
+      const mimeType = part.inlineData.mimeType || 'audio/wav';
+      res.setHeader('Content-Type', mimeType);
+      return res.send(audioBuffer);
+    }
+
+    // ── Smallest AI path ──────────────────────────────────────────────────────
+    const smallestApiKey = runtimeConfig.smallestApiKey;
+    if (!smallestApiKey) return res.status(503).json({ error: 'TTS service not configured.' });
     // lightning-v3.1 has a 140-char limit — truncate at last sentence boundary before limit
     const TTS_LIMIT = 140;
     let text = rawText;

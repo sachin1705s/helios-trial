@@ -967,6 +967,20 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
     'da-vinci': 'magnus'
   };
 
+  // Gemini Live prebuilt voices — one unique voice per character.
+  // Male-coded: Orus, Charon, Fenrir, Puck (firm/warm/excitable/upbeat).
+  // Female-coded: Kore, Aoede (firm/breathy) — used for Cleopatra to match TTS 'sophia'.
+  const GEMINI_VOICE_BY_SLIDE_ID: Record<string, string> = {
+    'alexander':     'Orus',
+    'bear':          'Charon',
+    'circus-lion':   'Fenrir',
+    'cleopatra':     'Kore',
+    'da-vinci':      'Puck',
+    'einstein':      'Zephyr',
+    'grandpa-turtle':'Leda',
+    'steve-jobs':    'Aoede',
+  };
+
   // --- Gemini Live helpers ---
 
   const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
@@ -1403,7 +1417,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
           model: 'models/gemini-3.1-flash-live-preview',
           generationConfig: {
             responseModalities: ['AUDIO'],
-            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: GEMINI_VOICE_BY_SLIDE_ID[slideId] ?? 'Puck' } } },
           },
           systemInstruction: { parts: [{ text: buildSystemPrompt(slideId) }] },
         },
@@ -1490,9 +1504,8 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
       await ctx.resume();
       if (ttsGenerationRef.current !== generation) return; // navigated away during resume
       debug('[tts] AudioContext resumed, state:', ctx.state);
-      const slideVoiceId = slideId ? VOICE_BY_SLIDE_ID[slideId] : '';
-      const resolvedVoiceId = slideVoiceId || null;
-      debug('[tts] sending fetch to /api/character/tts, voiceId:', resolvedVoiceId ?? 'default');
+      const geminiVoice = slideId ? (GEMINI_VOICE_BY_SLIDE_ID[slideId] ?? '') : '';
+      debug('[tts] sending fetch to /api/character/tts, geminiVoice:', geminiVoice || 'default');
       ttsAbortRef.current?.abort();
       const ttsAbort = new AbortController();
       ttsAbortRef.current = ttsAbort;
@@ -1502,7 +1515,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
         ttsRes = await fetch('/api/character/tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, character: activeCharacterName, ...(resolvedVoiceId ? { voiceId: resolvedVoiceId } : {}) }),
+          body: JSON.stringify({ text, character: activeCharacterName, ...(geminiVoice ? { geminiVoice } : {}) }),
           signal: ttsAbort.signal,
         });
       } catch (fetchErr) {
