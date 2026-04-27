@@ -208,14 +208,14 @@ export function AtriumNav() {
         <img src="/favicon.jpeg" alt="" className="nav__mark" aria-hidden="true" />
         Interact Studio
       </Link>
-      <div className="nav__links">
-        <a href="/#how">How it works</a>
-        <Link to="/home">Characters</Link>
-        <Link to="/about-us">About</Link>
+      <div className="nav__actions">
+        <Link to="/about-us" className="btn btn--ghost btn--sm">
+          About
+        </Link>
+        <Link to="/home" className="btn btn--primary btn--sm">
+          Try a character
+        </Link>
       </div>
-      <a href="mailto:hello.interactstudio@gmail.com" className="btn btn--primary btn--sm">
-        Get in touch
-      </a>
     </nav>
   );
 }
