@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Analytics } from '@vercel/analytics/react';
 import { SpeedInsights } from '@vercel/speed-insights/react';
 import type { ConnectionStatus } from '@odysseyml/odyssey';
@@ -70,6 +71,7 @@ function pcmToWav(pcm: ArrayBuffer, sampleRate: number, channels: number, bitDep
 }
 
 function App({ initialCharacterId }: { initialCharacterId?: string }) {
+  const navigate = useNavigate();
   const [credentials, setCredentials] = useState<ClientCredentials | undefined>(undefined);
   const [showLanding, setShowLanding] = useState(!initialCharacterId);
   const [showAbout, setShowAbout] = useState(false);
@@ -1735,11 +1737,9 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
                 type="button"
                 className="brand-mark"
                 onClick={() => {
-                  setShowLanding(true);
                   setShowAbout(false);
                   setShowContact(false);
-                  setSelectedCharacterId((prev) => prev ?? (characters[0]?.id ?? null));
-                  window.history.pushState({}, '', '/');
+                  navigate('/');
                 }}
               >
                 Interact Studio
@@ -1821,11 +1821,9 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
                 type="button"
                 className="brand-mark"
                 onClick={() => {
-                  setShowLanding(true);
                   setShowAbout(false);
                   setShowContact(false);
-                  setSelectedCharacterId((prev) => prev ?? (characters[0]?.id ?? null));
-                  window.history.pushState({}, '', '/');
+                  navigate('/');
                 }}
               >
                 Interact Studio
@@ -1839,8 +1837,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
                   event.preventDefault();
                   setShowAbout(true);
                   setShowContact(false);
-                  setShowLanding(true);
-                  window.history.pushState({}, '', '/about-us');
+                  navigate('/about-us');
                 }}
               >
                 About us
@@ -1872,11 +1869,9 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
                 type="button"
                 className="brand-mark"
                 onClick={() => {
-                  setShowLanding(true);
                   setShowAbout(false);
                   setShowContact(false);
-                  setSelectedCharacterId((prev) => prev ?? (characters[0]?.id ?? null));
-                  window.history.pushState({}, '', '/');
+                  navigate('/');
                 }}
               >
                 Interact Studio
@@ -1890,8 +1885,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
                   event.preventDefault();
                   setShowAbout(true);
                   setShowContact(false);
-                  setShowLanding(true);
-                  window.history.pushState({}, '', '/about-us');
+                  navigate('/about-us');
                 }}
               >
                 About us
@@ -2021,7 +2015,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
         <header className="top-bar">
           <button className="btn ghost back-to-landing" onClick={() => {
             closeActiveCharacter('landing_back');
-            setShowLanding(true);
+            navigate('/home');
           }}>
             Back
           </button>
