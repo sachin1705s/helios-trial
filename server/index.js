@@ -208,7 +208,9 @@ const guardPromptLeak = (message, history) => {
 const sanitizeModelReply = (text) => {
   if (!text) return '';
   if (isPromptLeakAttempt(text)) return '';
-  return text;
+  // Strip backtick-wrapped stage directions (e.g. `hold up honeycomb`) that the
+  // model sometimes embeds in the reply instead of using proper [SCENE_ACTION:] tags.
+  return text.replace(/`[^`]+`/g, '').replace(/\s{2,}/g, ' ').trim();
 };
 
 const ODYSSEY_KEY_LIMIT = Math.max(1, Number(process.env.ODYSSEY_KEY_LIMIT || 5));
