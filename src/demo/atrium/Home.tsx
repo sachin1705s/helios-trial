@@ -7,7 +7,7 @@ import '../shared/tokens.css';
 import './Atrium.css';
 import './Home.css';
 
-type Filter = 'all' | 'storytellers' | 'historical' | 'modern';
+type Filter = 'all' | 'storytellers' | 'historical' | 'visionaries';
 
 const tags: Record<string, Filter[]> = {
   bear: ['all', 'storytellers'],
@@ -16,31 +16,32 @@ const tags: Record<string, Filter[]> = {
   alexander: ['all', 'historical'],
   cleopatra: ['all', 'historical'],
   'da-vinci': ['all', 'historical'],
-  einstein: ['all', 'historical', 'modern'],
-  'steve-jobs': ['all', 'modern'],
+  einstein: ['all', 'historical', 'visionaries'],
+  'steve-jobs': ['all', 'visionaries'],
 };
 
 const filterLabel: Record<Filter, string> = {
   all: 'All eight',
   storytellers: 'Storytellers',
   historical: 'Historical',
-  modern: 'Modern minds',
+  visionaries: 'Visionaries',
 };
+
+const FEATURED_IDS = ['bear', 'da-vinci'];
 
 export default function AtriumHome() {
   const [filter, setFilter] = useState<Filter>('all');
-  const [featuredId] = useState('bear');
-  const [coFeaturedId] = useState('da-vinci');
 
-  const featured = characters.find((c) => c.id === featuredId)!;
-  const coFeatured = characters.find((c) => c.id === coFeaturedId)!;
+  const featured = FEATURED_IDS.map((id) => characters.find((c) => c.id === id)!);
 
-  const others = useMemo(
+  // On "all": featured row gets the two hero cards, cast grid gets the rest.
+  // On any filter: skip the featured row entirely — show all matches uniformly.
+  const castCharacters = useMemo(
     () =>
-      characters.filter(
-        (c) => c.id !== featuredId && c.id !== coFeaturedId && (tags[c.id] ?? ['all']).includes(filter),
-      ),
-    [filter, featuredId, coFeaturedId],
+      filter === 'all'
+        ? characters.filter((c) => !FEATURED_IDS.includes(c.id))
+        : characters.filter((c) => (tags[c.id] ?? ['all']).includes(filter)),
+    [filter],
   );
 
   return (
@@ -83,10 +84,10 @@ export default function AtriumHome() {
         </div>
       </section>
 
-      {/* Featured row — two oversized cards */}
-      {filter === 'all' || (tags[featured.id] ?? []).includes(filter) || (tags[coFeatured.id] ?? []).includes(filter) ? (
+      {/* Featured row — only shown on "All eight" */}
+      {filter === 'all' && (
         <section className="featured" aria-label="Featured characters">
-          {[featured, coFeatured].map((c, i) => (
+          {featured.map((c, i) => (
             <Link key={c.id} to={`/character/${c.id}`} className={`featured__card featured__card--${i}`}>
               <div className="featured__photo">
                 <img src={c.image} alt={c.title} />
@@ -103,12 +104,12 @@ export default function AtriumHome() {
             </Link>
           ))}
         </section>
-      ) : null}
+      )}
 
-      {/* Quieter row — 4-up grid for the rest */}
+      {/* Cast grid — uniform design, all matching characters */}
       <section className="cast" aria-label="Full cast">
         <div className="cast__grid">
-          {others.map((c) => (
+          {castCharacters.map((c) => (
             <Link key={c.id} to={`/character/${c.id}`} className="cast__card">
               <div className="cast__photo">
                 <img src={c.image} alt={c.title} loading="lazy" />
@@ -121,11 +122,11 @@ export default function AtriumHome() {
             </Link>
           ))}
         </div>
-        {others.length === 0 ? (
+        {castCharacters.length === 0 && (
           <p className="cast__empty">
             No one in this group right now. <button onClick={() => setFilter('all')}>See all eight →</button>
           </p>
-        ) : null}
+        )}
       </section>
 
       <AtriumFooter />
