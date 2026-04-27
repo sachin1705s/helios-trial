@@ -297,14 +297,10 @@
   background: var(--night);
   box-shadow: var(--shadow-lg);
   border: 1px solid rgba(20,40,38,0.1);
-  transform: rotate(0.6deg);
   transition: transform 0.6s var(--ease);
-  /* Safari fix: border-radius + overflow:hidden breaks on transformed elements */
-  -webkit-mask-image: -webkit-radial-gradient(white, black);
-  mask-image: radial-gradient(white, black);
 }
 .atrium .hero__viewfinder:hover .viewfinder {
-  transform: rotate(0deg) translateY(-4px);
+  transform: translateY(-4px);
 }
 .atrium .viewfinder video {
   width: 100%;
