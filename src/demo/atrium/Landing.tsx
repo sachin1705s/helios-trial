@@ -205,7 +205,6 @@ export function AtriumNav() {
   return (
     <nav className="nav" aria-label="Primary">
       <Link to="/" className="nav__brand">
-        <img src="/favicon.jpeg" alt="" className="nav__mark" aria-hidden="true" />
         Interact Studio
       </Link>
       <div className="nav__actions">
