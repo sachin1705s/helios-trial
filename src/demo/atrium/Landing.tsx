@@ -209,13 +209,13 @@ export function AtriumNav() {
         Interact Studio
       </Link>
       <div className="nav__links">
-        <a href="#how">How it works</a>
+        <a href="/#how">How it works</a>
         <Link to="/home">Characters</Link>
-        <a href="#" onClick={(e) => e.preventDefault()}>About</a>
+        <Link to="/about-us">About</Link>
       </div>
-      <Link to="/home" className="btn btn--primary btn--sm">
-        Try a character
-      </Link>
+      <a href="mailto:hello.interactstudio@gmail.com" className="btn btn--primary btn--sm">
+        Get in touch
+      </a>
     </nav>
   );
 }
@@ -232,14 +232,12 @@ export function AtriumFooter() {
           <div>
             <h4>Product</h4>
             <Link to="/home">Characters</Link>
-            <a href="#how">How it works</a>
-            <a href="#" onClick={(e) => e.preventDefault()}>What's new</a>
+            <a href="/#how">How it works</a>
           </div>
           <div>
             <h4>Company</h4>
-            <a href="#" onClick={(e) => e.preventDefault()}>About</a>
-            <a href="#" onClick={(e) => e.preventDefault()}>Press</a>
-            <a href="#" onClick={(e) => e.preventDefault()}>Contact</a>
+            <Link to="/about-us">About</Link>
+            <a href="mailto:hello.interactstudio@gmail.com">Contact</a>
           </div>
           <div>
             <h4>Community</h4>

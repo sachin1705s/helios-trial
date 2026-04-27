@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Left half filled with clay red -->
+  <path d="M50,5 A45,45 0 0,0 50,95 L50,5 Z" fill="#D9492B"/>
+  <!-- Full circle outline in ink dark -->
+  <circle cx="50" cy="50" r="45" fill="none" stroke="#142826" stroke-width="5"/>
+  <!-- Center divider line -->
+  <line x1="50" y1="5" x2="50" y2="95" stroke="#142826" stroke-width="5"/>
+</svg>
