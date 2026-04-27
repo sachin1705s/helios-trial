@@ -88,6 +88,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   const [isCharacterThinking, setIsCharacterThinking] = useState(false);
   const [isCharacterSpeaking, setIsCharacterSpeaking] = useState(false);
   const [chatExpanded, setChatExpanded] = useState(false);
+  const [chatEverOpened, setChatEverOpened] = useState(() => localStorage.getItem('chat-seen') === 'true');
   const [characterReply, setCharacterReply] = useState<string | null>(null);
   const [characterSources, setCharacterSources] = useState<{ title: string; url: string }[]>([]);
   const [, setCharacterError] = useState<string | null>(null);
@@ -2023,42 +2024,51 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
           </button>
         </header>
 
-        <aside className={`einstein-chat ${chatExpanded ? 'einstein-chat--open' : ''}`}>
-            <button className="einstein-chat-header" onClick={() => setChatExpanded((e) => !e)}>
-              <span>{activeCharacterName} Chat</span>
-              <span className="einstein-chat-toggle">{chatExpanded ? '▾' : '▸'}</span>
-            </button>
-            {chatExpanded && (
-              <div className="einstein-chat-body">
-                {activeCharacterHistory.slice(-8).map((msg, idx) => (
-                  <div
-                    key={`${msg.role}-${idx}`}
-                    className={`einstein-chat-line ${msg.role === 'user' ? 'user' : 'assistant'}`}
-                  >
-                    <span className="einstein-chat-role">{msg.role === 'user' ? 'You' : activeCharacterName}:</span>
-                    <span className="einstein-chat-text">{msg.content}</span>
-                  </div>
-                ))}
-                {characterReply && !activeCharacterHistory.some((m) => m.content === characterReply) ? (
-                  <div className="einstein-chat-line assistant">
-                    <span className="einstein-chat-role">{activeCharacterName}:</span>
-                    <span className="einstein-chat-text">{characterReply}</span>
-                    {characterSources.length > 0 && (
-                      <div className="chat-sources">
-                        {characterSources.map((s, i) => (
-                          <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" className="chat-source-link">{s.title}</a>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-            )}
-        </aside>
-
         <main className="slide-shell" />
 
         <div className="story-bar-wrap">
+          {/* Slide-up transcript drawer */}
+          <div className={`chat-drawer ${chatExpanded ? 'chat-drawer--open' : ''}`}>
+            <div className="chat-drawer__body">
+              {activeCharacterHistory.slice(-8).map((msg, idx) => (
+                <div key={`${msg.role}-${idx}`} className={`einstein-chat-line ${msg.role === 'user' ? 'user' : 'assistant'}`}>
+                  <span className="einstein-chat-role">{msg.role === 'user' ? 'You' : activeCharacterName}:</span>
+                  <span className="einstein-chat-text">{msg.content}</span>
+                </div>
+              ))}
+              {characterReply && !activeCharacterHistory.some((m) => m.content === characterReply) && (
+                <div className="einstein-chat-line assistant">
+                  <span className="einstein-chat-role">{activeCharacterName}:</span>
+                  <span className="einstein-chat-text">{characterReply}</span>
+                  {characterSources.length > 0 && (
+                    <div className="chat-sources">
+                      {characterSources.map((s, i) => (
+                        <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" className="chat-source-link">{s.title}</a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Chevron pill trigger */}
+          <button
+            className={`chat-chevron ${chatExpanded ? 'chat-chevron--open' : ''} ${chatEverOpened ? '' : 'chat-chevron--hint'}`}
+            onClick={() => {
+              setChatExpanded(e => !e);
+              if (!chatEverOpened) {
+                setChatEverOpened(true);
+                localStorage.setItem('chat-seen', 'true');
+              }
+            }}
+            aria-label={chatExpanded ? 'Collapse transcript' : 'Expand transcript'}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+              <path d="M2 9L7 4L12 9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+
           {!isStreamingReady && streamState !== 'error' && (
             <div className="stream-loading-badge" aria-live="polite">
               <span className="stream-loading-dot" aria-hidden />
