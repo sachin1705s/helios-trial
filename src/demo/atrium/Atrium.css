@@ -6,6 +6,7 @@
 
 .atrium {
   margin: 0;
+  padding-top: 16px; /* prevents nav margin-top collapsing through to body */
   background: var(--paper);
   color: var(--ink);
   font-family: var(--body);
@@ -140,28 +141,28 @@
   justify-content: space-between;
   gap: 16px;
 
-  /* Floating pill: wide at top, contracts on scroll */
-  width: calc(100% - 48px);
-  margin: 16px auto 0;
+  /* Floating pill centered — narrower than page like Kavana */
+  width: calc(100% - 120px);
+  margin: 0 auto;
   padding: 10px 20px;
   border-radius: 18px;
   transition: width 0.5s var(--ease), border-radius 0.5s var(--ease);
 
-  /* Liquid glass */
-  background: rgba(245, 241, 232, 0.72);
+  /* Liquid glass — slightly brighter than paper so it reads */
+  background: rgba(255, 255, 255, 0.68);
   backdrop-filter: blur(28px) saturate(180%) brightness(1.04);
   -webkit-backdrop-filter: blur(28px) saturate(180%) brightness(1.04);
 
-  /* Specular edge: bright top rim + subtle outline + depth shadow */
+  /* Visible edge: dark 1px outline + specular top rim + depth shadow */
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.90),
-    0 0 0 1px rgba(255, 255, 255, 0.55),
-    0 8px 32px rgba(20, 40, 38, 0.10),
-    0 2px 8px rgba(20, 40, 38, 0.06);
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 0 0 1px rgba(20, 40, 38, 0.10),
+    0 8px 32px rgba(20, 40, 38, 0.12),
+    0 2px 8px rgba(20, 40, 38, 0.07);
 }
 
 .atrium .nav--scrolled {
-  width: calc(100% - 160px);
+  width: calc(100% - 240px);
   border-radius: 999px;
 }
 .atrium .nav__brand {
