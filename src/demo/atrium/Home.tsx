@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { useState, useMemo } from 'react';
 import { characters } from '../shared/characters';
 import { AtriumNav, AtriumFooter } from './Landing';
+import MusicToggle from './MusicToggle';
 import '../shared/tokens.css';
 import './Atrium.css';
 import './Home.css';
@@ -130,6 +131,7 @@ export default function AtriumHome() {
       </section>
 
       <AtriumFooter />
+      <MusicToggle />
     </div>
   );
 }

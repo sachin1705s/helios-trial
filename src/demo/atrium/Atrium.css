@@ -633,3 +633,80 @@
   flex-wrap: wrap;
   gap: 12px;
 }
+
+/* ========================================================================
+   Music toggle — fixed bottom-left, atrium palette
+   ======================================================================== */
+
+.atrium-music-toggle {
+  position: fixed;
+  left: clamp(20px, 3vw, 36px);
+  bottom: clamp(20px, 3vw, 32px);
+  z-index: 100;
+  width: 44px;
+  height: 44px;
+  border: 1px solid rgba(20, 40, 38, 0.18);
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--paper);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 24px rgba(20, 40, 38, 0.18);
+  cursor: pointer;
+  transition: transform 0.25s var(--ease), background 0.25s ease, opacity 0.25s ease;
+}
+
+.atrium-music-toggle:hover {
+  transform: translateY(-2px) scale(1.04);
+  background: var(--moss);
+}
+
+.atrium-music-toggle:focus-visible {
+  outline: 2px solid var(--moss);
+  outline-offset: 3px;
+}
+
+.atrium-music-toggle.is-paused {
+  opacity: 0.65;
+}
+
+.atrium-music-toggle.is-playing {
+  opacity: 1;
+}
+
+.atrium-music-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 14px;
+}
+
+.atrium-music-bar {
+  width: 3px;
+  border-radius: 999px;
+  background: currentColor;
+  transform-origin: center bottom;
+  animation: atrium-bar-bounce 1.2s ease-in-out infinite;
+}
+
+.atrium-music-bar:nth-child(1) { height: 7px;  animation-delay: -0.40s; }
+.atrium-music-bar:nth-child(2) { height: 11px; animation-delay: -0.15s; }
+.atrium-music-bar:nth-child(3) { height: 8px;  animation-delay: -0.28s; }
+.atrium-music-bar:nth-child(4) { height: 10px; animation-delay: -0.05s; }
+.atrium-music-bar:nth-child(5) { height: 8px;  animation-delay: -0.34s; }
+
+.atrium-music-toggle.is-paused .atrium-music-bar {
+  animation-play-state: paused;
+  opacity: 0.55;
+}
+
+.atrium-music-toggle.is-playing .atrium-music-bar {
+  animation-play-state: running;
+  opacity: 1;
+}
+
+@keyframes atrium-bar-bounce {
+  0%, 100% { transform: scaleY(0.72); }
+  50%       { transform: scaleY(1.12); }
+}

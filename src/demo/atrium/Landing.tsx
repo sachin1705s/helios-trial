@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useEffect, useRef } from 'react';
 import { characters } from '../shared/characters';
+import MusicToggle from './MusicToggle';
 import '../shared/tokens.css';
 import './Atrium.css';
 
@@ -197,6 +198,7 @@ export default function AtriumLanding() {
       </section>
 
       <AtriumFooter />
+      <MusicToggle />
     </div>
   );
 }
