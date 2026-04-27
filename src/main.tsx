@@ -5,6 +5,7 @@ import './index.css';
 import App from './App.tsx';
 import AtriumLanding from './demo/atrium/Landing';
 import AtriumHome from './demo/atrium/Home';
+import AtriumAbout from './demo/atrium/About';
 
 function CharacterRoute() {
   const { id } = useParams<{ id: string }>();
@@ -17,6 +18,7 @@ createRoot(document.getElementById('root')!).render(
       <Routes>
         <Route path="/" element={<AtriumLanding />} />
         <Route path="/home" element={<AtriumHome />} />
+        <Route path="/about-us" element={<AtriumAbout />} />
         <Route path="/character/:id" element={<CharacterRoute />} />
         <Route path="*" element={<App />} />
       </Routes>
