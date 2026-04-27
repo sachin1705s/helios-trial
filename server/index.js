@@ -981,6 +981,10 @@ app.post('/api/character/tts', async (req, res) => {
       (t, [pattern, replacement]) => t.replace(new RegExp(pattern, 'gi'), replacement),
       String(req.body?.text ?? '')
         .replace(/\*+/g, '')
+        // Strip scene/action tags so they are never spoken aloud (e.g. <stone_appears>, [SCENE_ACTION:...], `emote`)
+        .replace(/<[^>]+>/g, '')
+        .replace(/\[SCENE_ACTION:[^\]]+\]/g, '')
+        .replace(/`[^`]+`/g, '')
         // Lowercase all-caps words (2+ letters) so TTS doesn't spell them out
         .replace(/\b([A-Z]{2,})\b/g, (m) => m.charAt(0) + m.slice(1).toLowerCase())
     ).trim();
