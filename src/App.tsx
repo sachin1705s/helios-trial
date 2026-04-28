@@ -124,6 +124,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   const greetedCharactersRef = useRef<Set<string>>(new Set()); // tracks which characters have greeted this session
   const ttsSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const ttsAbortRef = useRef<AbortController | null>(null);
+  const ttsHtmlAudioRef = useRef<HTMLAudioElement | null>(null);
   const handleInteractRef = useRef<(promptOverride?: string) => void>(() => undefined);
   const ttsAudioCtxRef = useRef<AudioContext | null>(null);
   const ttsGenerationRef = useRef(0); // incremented on navigation — cancels any in-flight TTS across all await boundaries
@@ -832,6 +833,8 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
     ttsAbortRef.current = null;
     try { ttsSourceRef.current?.stop(); } catch { /* already stopped */ }
     ttsSourceRef.current = null;
+    ttsHtmlAudioRef.current?.pause();
+    ttsHtmlAudioRef.current = null;
     // Close the AudioContext to immediately silence any already-scheduled chunks
     // (abort() stops new chunks from being fetched but scheduled nodes keep playing)
     ttsAudioCtxRef.current?.close().catch(() => undefined);
@@ -1602,7 +1605,8 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
           const blob = new Blob([arrayBuffer], { type: mime });
           const url = URL.createObjectURL(blob);
           const audio = new Audio(url);
-          audio.onended = () => URL.revokeObjectURL(url);
+          ttsHtmlAudioRef.current = audio;
+          audio.onended = () => { URL.revokeObjectURL(url); ttsHtmlAudioRef.current = null; };
           try {
             await audio.play();
             debug('[tts] fallback audio playback started');
@@ -1720,6 +1724,10 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
     ttsAbortRef.current = null;
     try { ttsSourceRef.current?.stop(); } catch { /* already stopped */ }
     ttsSourceRef.current = null;
+    ttsHtmlAudioRef.current?.pause();
+    ttsHtmlAudioRef.current = null;
+    ttsAudioCtxRef.current?.close().catch(() => undefined);
+    ttsAudioCtxRef.current = null;
     const newCharacter = characters.find((c) => c.id === id);
     logEvent('character_opened', {
       characterId: id,
