@@ -145,8 +145,8 @@
   width: calc(100% - 120px);
   margin: 0 auto;
   padding: 10px 20px;
-  border-radius: 18px;
-  transition: width 0.5s var(--ease), border-radius 0.5s var(--ease);
+  border-radius: 999px;
+  transition: width 0.5s var(--ease);
 
   /* Liquid glass — slightly brighter than paper so it reads */
   background: rgba(255, 255, 255, 0.68);
