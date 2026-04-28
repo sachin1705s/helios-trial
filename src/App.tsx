@@ -935,7 +935,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   }, []);
 
   const handleInteract = (promptOverride?: string) => {
-    if (!serviceRef.current || !isStreamingReady) {
+    if (!serviceRef.current || !isStreamingReadyRef.current) {
       return;
     }
     const prompt = (promptOverride ?? slide.cta).trim();
@@ -1269,7 +1269,9 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
     const outputTranscription = (content.outputTranscription as Record<string, string> | undefined)?.text;
     if (outputTranscription) {
       glOutputTranscriptBufferRef.current += (glOutputTranscriptBufferRef.current ? ' ' : '') + outputTranscription;
-      glDispatchKeywords(outputTranscription, myGeneration);
+      // Search the full accumulated buffer so keywords split across chunk boundaries are caught.
+      // Deduplication in glDispatchObjects prevents re-dispatching objects already sent this turn.
+      glDispatchKeywords(glOutputTranscriptBufferRef.current, myGeneration);
     }
 
     // turnComplete — update chat, extract stage directions, run completion strategy hook
@@ -1291,14 +1293,19 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
           [slide.id]: [...(prev[slide.id] ?? []), { role: 'assistant' as const, content: displayResponse }],
         }));
 
-        // Miss logging — when keyword-stream fired nothing, record the turn so
-        // the keyword list can be expanded from real user interactions later.
+        // Fallback: if keyword-stream dispatched nothing during streaming (e.g. Odyssey
+        // wasn't ready for a chunk), try one final match on the complete response now.
         if (glDispatchedThisTurnRef.current.size === 0) {
-          logEvent('keyword_miss', {
-            character: slide.title,
-            userText: glCurrentUserTextRef.current,
-            response: displayResponse,
-          });
+          const fallbackObjects = glKeywordMatch(displayResponse);
+          if (fallbackObjects.length) {
+            glDispatchObjects(fallbackObjects, myGeneration, 'turnComplete-fallback');
+          } else {
+            logEvent('keyword_miss', {
+              character: slide.title,
+              userText: glCurrentUserTextRef.current,
+              response: displayResponse,
+            });
+          }
         }
       }
       glOutputTranscriptBufferRef.current = '';
