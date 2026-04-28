@@ -1228,7 +1228,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
 
   const buildSystemPrompt = (slideId: string): string => {
     const base = GEMINI_LIVE_SYSTEM_PROMPTS[slideId] ?? 'You are a helpful character. Keep replies brief.';
-    return base + '\nLANGUAGE: Detect the language the user is speaking and always reply in that same language. Keep any stage direction text in English since it drives animations.';
+    return base + '\nLANGUAGE: Detect the language the user is speaking and always reply in that same language. Do NOT use stage directions, action descriptions, or asterisk-wrapped text (e.g. *holds up honeycomb*) — never narrate your own actions. Objects appear on screen automatically when you name them in your spoken reply.';
   };
 
   // Routes a parsed server message for the current Gemini Live session.
