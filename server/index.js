@@ -219,6 +219,8 @@ const stripActionTags = (text) => {
     .replace(/`[^`\n]+`/g, '')
     // *stage direction* / **action** — strip the whole match including its content
     .replace(/\*{1,3}[^*\n]{1,120}\*{1,3}/g, '')
+    // (parenthetical stage directions) — e.g. (Holds up a honeycomb), (sighs deeply)
+    .replace(/\([^)\n]{1,120}\)/g, '')
     // collapse extra whitespace left behind
     .replace(/\s{2,}/g, ' ')
     .trim();
