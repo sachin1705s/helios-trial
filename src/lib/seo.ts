@@ -41,7 +41,7 @@ const ORGANIZATION_SCHEMA = {
   sameAs: [
     'https://x.com/interact_studio',
     'https://www.instagram.com/iinteractstudio/',
-    'https://discord.gg/bSx4Vhyc',
+    'https://discord.gg/S4b2sJrsuS',
   ],
   contactPoint: [
     {

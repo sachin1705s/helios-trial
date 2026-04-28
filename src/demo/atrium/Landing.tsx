@@ -194,7 +194,7 @@ export function AtriumFooter() {
           </div>
           <div>
             <h4>Community</h4>
-            <a href="https://discord.gg/bSx4Vhyc" target="_blank" rel="noreferrer">Discord</a>
+            <a href="https://discord.gg/S4b2sJrsuS" target="_blank" rel="noreferrer">Discord</a>
             <a href="https://x.com/interact_studio" target="_blank" rel="noreferrer">X / Twitter</a>
             <a href="https://www.instagram.com/iinteractstudio/" target="_blank" rel="noreferrer">Instagram</a>
           </div>

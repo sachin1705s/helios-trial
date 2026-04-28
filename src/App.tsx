@@ -2015,7 +2015,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
             <div className="landing-footer-title">Interact Studio</div>
             <div className="landing-footer-links">
               <span>Join our community:</span>
-              <a href="https://discord.gg/bSx4Vhyc" target="_blank" rel="noreferrer">Discord</a>
+              <a href="https://discord.gg/S4b2sJrsuS" target="_blank" rel="noreferrer">Discord</a>
               <span className="footer-sep">•</span>
               <a href="https://x.com/interact_studio" target="_blank" rel="noreferrer">X</a>
               <span className="footer-sep">•</span>
