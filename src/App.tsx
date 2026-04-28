@@ -2067,6 +2067,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
             </div>
           </div>
 
+        <footer className="story-bar story-bar--compact">
           {/* Chevron pill trigger */}
           <button
             className={`chat-chevron ${chatExpanded ? 'chat-chevron--open' : ''} ${chatEverOpened ? '' : 'chat-chevron--hint'}`}
@@ -2090,8 +2091,6 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
               Waking up {activeCharacterName}…
             </div>
           )}
-
-        <footer className="story-bar story-bar--compact">
           <div className="story-actions">
             <div className="prompt-input">
               <input
