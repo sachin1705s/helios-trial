@@ -87,8 +87,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   const [isCharacterRecording, setIsCharacterRecording] = useState(false);
   const [isCharacterThinking, setIsCharacterThinking] = useState(false);
   const [isCharacterSpeaking, setIsCharacterSpeaking] = useState(false);
-  const [chatExpanded, setChatExpanded] = useState(false);
-  const [chatEverOpened, setChatEverOpened] = useState(() => localStorage.getItem('chat-seen') === 'true');
+  const [chatExpanded] = useState(false);
   const [characterReply, setCharacterReply] = useState<string | null>(null);
   const [characterSources, setCharacterSources] = useState<{ title: string; url: string }[]>([]);
   const [, setCharacterError] = useState<string | null>(null);
