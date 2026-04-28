@@ -206,20 +206,42 @@ const guardPromptLeak = (message, history) => {
 };
 
 // Strips every known stage-direction format from model output so nothing leaks
-// into displayed text or TTS. Used at the chat endpoint AND the TTS endpoint.
+// into displayed text or TTS. Used at the chat endpoint AND the TTS endpoints.
+//
+// Models nest formats unpredictably: `[holds up stone]`, *[juggles]*, (`offers gently`).
+// One pass leaves orphan markers (the outer pair becomes empty, which the outer
+// regex can't match because it requires non-empty content). We iterate until the
+// string stops changing, then sweep any leftover lone markers.
 const stripActionTags = (text) => {
-  return text
-    // <stone_appears>, <action>, any angle-bracket tag
-    .replace(/<[^>]+>/g, '')
-    // [SCENE_ACTION: spawn_object("ball")] — official format
-    .replace(/\[SCENE_ACTION:[^\]]*\]/gi, '')
-    // [any bracketed annotation] — e.g. [sighs], [holds up stone] (≤80 chars to avoid false positives)
-    .replace(/\[[^\]]{1,80}\]/g, '')
-    // `backtick spans` — e.g. `hold up honeycomb`
-    .replace(/`[^`\n]+`/g, '')
-    // *stage direction* / **action** — strip the whole match including its content
-    .replace(/\*{1,3}[^*\n]{1,120}\*{1,3}/g, '')
-    // collapse extra whitespace left behind
+  let prev;
+  let current = text;
+  let safety = 5; // bound iterations against pathological input
+  do {
+    prev = current;
+    current = current
+      // <stone_appears>, <action>, any angle-bracket tag
+      .replace(/<[^>]+>/g, '')
+      // [SCENE_ACTION: spawn_object("ball")] — official format
+      .replace(/\[SCENE_ACTION:[^\]]*\]/gi, '')
+      // [bracketed annotation] — [sighs], [holds up a long description…]
+      .replace(/\[[^\]\n]+\]/g, '')
+      // `backtick spans` — `hold up honeycomb`
+      .replace(/`[^`\n]+`/g, '')
+      // *stage direction* / **action** — strip the entire match, content included
+      .replace(/\*{1,3}[^*\n]+\*{1,3}/g, '')
+      // (parenthetical stage directions) — (Holds up honeycomb), (sighs deeply)
+      .replace(/\([^)\n]+\)/g, '');
+  } while (current !== prev && --safety > 0);
+
+  return current
+    // Sweep any orphan markers left after nested-format unwrapping
+    .replace(/`+/g, '')
+    .replace(/\*+/g, '')
+    .replace(/<\s*>/g, '')
+    .replace(/\[\s*\]/g, '')
+    .replace(/\(\s*\)/g, '')
+    // Tidy stray whitespace introduced by removals: " ." → "."
+    .replace(/\s+([.,!?;:])/g, '$1')
     .replace(/\s{2,}/g, ' ')
     .trim();
 };

@@ -88,6 +88,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   const [isCharacterThinking, setIsCharacterThinking] = useState(false);
   const [isCharacterSpeaking, setIsCharacterSpeaking] = useState(false);
   const [chatExpanded, setChatExpanded] = useState(false);
+  const [chatEverOpened, setChatEverOpened] = useState(() => localStorage.getItem('chat-seen') === 'true');
   const [characterReply, setCharacterReply] = useState<string | null>(null);
   const [characterSources, setCharacterSources] = useState<{ title: string; url: string }[]>([]);
   const [, setCharacterError] = useState<string | null>(null);
@@ -121,8 +122,9 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   const streamRequestIdRef = useRef(0); // set to requestId just before startStream — onStreamStarted checks for staleness
   const isVoiceAgentSlideRef = useRef(false);
   const greetedCharactersRef = useRef<Set<string>>(new Set()); // tracks which characters have greeted this session
-  const ttsSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const ttsSourceNodesRef = useRef<AudioBufferSourceNode[]>([]);
   const ttsAbortRef = useRef<AbortController | null>(null);
+  const ttsHtmlAudioRef = useRef<HTMLAudioElement | null>(null);
   const handleInteractRef = useRef<(promptOverride?: string) => void>(() => undefined);
   const ttsAudioCtxRef = useRef<AudioContext | null>(null);
   const ttsGenerationRef = useRef(0); // incremented on navigation — cancels any in-flight TTS across all await boundaries
@@ -829,10 +831,12 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
     // Stop any in-flight TTS fetch and all scheduled audio playback
     ttsAbortRef.current?.abort();
     ttsAbortRef.current = null;
-    try { ttsSourceRef.current?.stop(); } catch { /* already stopped */ }
-    ttsSourceRef.current = null;
+    for (const node of ttsSourceNodesRef.current) { try { node.stop(); } catch { /* already stopped */ } }
+    ttsSourceNodesRef.current = [];
+    ttsHtmlAudioRef.current?.pause();
+    ttsHtmlAudioRef.current = null;
     // Close the AudioContext to immediately silence any already-scheduled chunks
-    // (abort() stops new chunks from being fetched but scheduled nodes keep playing)
+    // (abort() stops new chunks from being fetched but tracked nodes keep playing until stopped above)
     ttsAudioCtxRef.current?.close().catch(() => undefined);
     ttsAudioCtxRef.current = null;
     // Reset stream ready state immediately — onStreamEnded fires async so without this,
@@ -1567,6 +1571,10 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
             const source = ctx.createBufferSource();
             source.buffer = audioBuffer;
             source.connect(ctx.destination);
+            ttsSourceNodesRef.current.push(source);
+            source.onended = () => {
+              ttsSourceNodesRef.current = ttsSourceNodesRef.current.filter(n => n !== source);
+            };
             source.start(playbackTime);
             playbackTime += audioBuffer.duration;
           }
@@ -1591,8 +1599,10 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
           const source = ctx.createBufferSource();
           source.buffer = decoded;
           source.connect(ctx.destination);
-          ttsSourceRef.current = source;
-          source.onended = () => { ttsSourceRef.current = null; };
+          ttsSourceNodesRef.current.push(source);
+          source.onended = () => {
+            ttsSourceNodesRef.current = ttsSourceNodesRef.current.filter(n => n !== source);
+          };
           source.start();
           debug('[tts] audio playback started');
         } catch (err) {
@@ -1601,7 +1611,8 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
           const blob = new Blob([arrayBuffer], { type: mime });
           const url = URL.createObjectURL(blob);
           const audio = new Audio(url);
-          audio.onended = () => URL.revokeObjectURL(url);
+          ttsHtmlAudioRef.current = audio;
+          audio.onended = () => { URL.revokeObjectURL(url); ttsHtmlAudioRef.current = null; };
           try {
             await audio.play();
             debug('[tts] fallback audio playback started');
@@ -1717,8 +1728,12 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
     ++ttsGenerationRef.current;
     ttsAbortRef.current?.abort();
     ttsAbortRef.current = null;
-    try { ttsSourceRef.current?.stop(); } catch { /* already stopped */ }
-    ttsSourceRef.current = null;
+    for (const node of ttsSourceNodesRef.current) { try { node.stop(); } catch { /* already stopped */ } }
+    ttsSourceNodesRef.current = [];
+    ttsHtmlAudioRef.current?.pause();
+    ttsHtmlAudioRef.current = null;
+    // Keep the AudioContext alive — closing it leaves the replacement context suspended
+    // (new AudioContext starts paused and ctx.resume() requires a user-gesture stack)
     const newCharacter = characters.find((c) => c.id === id);
     logEvent('character_opened', {
       characterId: id,
@@ -2030,50 +2045,58 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
           </button>
         </header>
 
-        <aside className={`einstein-chat ${chatExpanded ? 'einstein-chat--open' : ''}`}>
-            <button className="einstein-chat-header" onClick={() => setChatExpanded((e) => !e)}>
-              <span>{activeCharacterName} Chat</span>
-              <span className="einstein-chat-toggle">{chatExpanded ? '▾' : '▸'}</span>
-            </button>
-            {chatExpanded && (
-              <div className="einstein-chat-body">
-                {activeCharacterHistory.slice(-8).map((msg, idx) => (
-                  <div
-                    key={`${msg.role}-${idx}`}
-                    className={`einstein-chat-line ${msg.role === 'user' ? 'user' : 'assistant'}`}
-                  >
-                    <span className="einstein-chat-role">{msg.role === 'user' ? 'You' : activeCharacterName}:</span>
-                    <span className="einstein-chat-text">{msg.content}</span>
-                  </div>
-                ))}
-                {characterReply && !activeCharacterHistory.some((m) => m.content === characterReply) ? (
-                  <div className="einstein-chat-line assistant">
-                    <span className="einstein-chat-role">{activeCharacterName}:</span>
-                    <span className="einstein-chat-text">{characterReply}</span>
-                    {characterSources.length > 0 && (
-                      <div className="chat-sources">
-                        {characterSources.map((s, i) => (
-                          <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" className="chat-source-link">{s.title}</a>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-            )}
-        </aside>
-
         <main className="slide-shell" />
 
         <div className="story-bar-wrap">
+          {/* Slide-up transcript drawer */}
+          <div className={`chat-drawer ${chatExpanded ? 'chat-drawer--open' : ''}`}>
+            <div className="chat-drawer__body">
+              {activeCharacterHistory.slice(-8).map((msg, idx) => (
+                <div key={`${msg.role}-${idx}`} className={`einstein-chat-line ${msg.role === 'user' ? 'user' : 'assistant'}`}>
+                  <span className="einstein-chat-role">{msg.role === 'user' ? 'You' : activeCharacterName}:</span>
+                  <span className="einstein-chat-text">{msg.content}</span>
+                </div>
+              ))}
+              {characterReply && !activeCharacterHistory.some((m) => m.content === characterReply) && (
+                <div className="einstein-chat-line assistant">
+                  <span className="einstein-chat-role">{activeCharacterName}:</span>
+                  <span className="einstein-chat-text">{characterReply}</span>
+                  {characterSources.length > 0 && (
+                    <div className="chat-sources">
+                      {characterSources.map((s, i) => (
+                        <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" className="chat-source-link">{s.title}</a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+        <footer className="story-bar story-bar--compact">
+          {/* Chevron pill trigger */}
+          <button
+            className={`chat-chevron ${chatExpanded ? 'chat-chevron--open' : ''} ${chatEverOpened ? '' : 'chat-chevron--hint'}`}
+            onClick={() => {
+              setChatExpanded(e => !e);
+              if (!chatEverOpened) {
+                setChatEverOpened(true);
+                localStorage.setItem('chat-seen', 'true');
+              }
+            }}
+            aria-label={chatExpanded ? 'Collapse transcript' : 'Expand transcript'}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+              <path d="M2 9L7 4L12 9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+
           {!isStreamingReady && streamState !== 'error' && (
             <div className="stream-loading-badge" aria-live="polite">
               <span className="stream-loading-dot" aria-hidden />
               Waking up {activeCharacterName}…
             </div>
           )}
-
-        <footer className="story-bar story-bar--compact">
           <div className="story-actions">
             <div className="prompt-input">
               <input
