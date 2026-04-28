@@ -427,44 +427,6 @@
   max-height: calc(40vh - 24px);
 }
 
-/* ---------- Chevron pill trigger ---------- */
-.chat-chevron {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 999px;
-  border: 1px solid var(--stroke);
-  background: rgba(12, 16, 24, 0.45);
-  backdrop-filter: blur(12px);
-  color: rgba(231, 237, 246, 0.75);
-  cursor: pointer;
-  margin-bottom: 4px;
-  transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
-              background 0.2s ease,
-              color 0.2s ease;
-}
-
-.chat-chevron:hover {
-  background: rgba(12, 16, 24, 0.70);
-  color: rgba(231, 237, 246, 1);
-}
-
-.chat-chevron--open svg {
-  transform: rotate(180deg);
-}
-
-/* Bounce hint — stops once user clicks (class removed) */
-@keyframes chat-hint-bounce {
-  0%, 100% { transform: translateY(0); }
-  45%       { transform: translateY(-7px); }
-  65%       { transform: translateY(-3px); }
-}
-
-.chat-chevron--hint {
-  animation: chat-hint-bounce 1.4s ease-in-out infinite;
-}
 
 /* ---------- Shared chat line styles ---------- */
 .einstein-chat-body {

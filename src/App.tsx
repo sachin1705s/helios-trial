@@ -1030,70 +1030,78 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
     geminiLivePlaybackTimeRef.current = 0;
   };
 
-  // Extended keyword → scene-object map covering all 8 characters.
-  const GL_KEYWORD_MAP: Array<{ keywords: string[]; object: string }> = [
-    // Physics / Einstein
-    { keywords: ['ball', 'bowling ball', 'heavy ball'], object: 'a heavy ball' },
-    { keywords: ['clock', 'watch', 'timepiece'], object: 'a ticking clock' },
-    { keywords: ['light', 'beam', 'laser', 'photon'], object: 'a beam of light' },
-    { keywords: ['trampoline', 'fabric', 'sheet'], object: 'a trampoline' },
-    { keywords: ['rocket', 'spaceship', 'spacecraft'], object: 'a rocket' },
-    { keywords: ['magnet', 'magnetic'], object: 'a magnet' },
-    { keywords: ['apple', 'gravity'], object: 'a falling apple' },
-    { keywords: ['telescope', 'lens'], object: 'a telescope' },
-    { keywords: ['atom', 'nucleus', 'electron'], object: 'an atom' },
-    { keywords: ['wave', 'ripple'], object: 'a wave' },
-    // Bear
-    { keywords: ['berry', 'berries', 'blueberry', 'strawberry'], object: 'a handful of berries' },
-    { keywords: ['honey', 'honeycomb'], object: 'a honeycomb' },
-    { keywords: ['fish', 'salmon', 'trout'], object: 'a fresh fish' },
-    { keywords: ['pine cone', 'pinecone', 'acorn', 'nut'], object: 'a pine cone' },
-    { keywords: ['mushroom'], object: 'a mushroom' },
-    { keywords: ['log', 'wood', 'stick'], object: 'a log' },
-    // Alexander / warrior
-    { keywords: ['sword', 'blade', 'sabre'], object: 'a gleaming sword' },
-    { keywords: ['shield', 'buckler'], object: 'a battle shield' },
-    { keywords: ['map', 'scroll', 'plan'], object: 'a battle map' },
-    { keywords: ['horse', 'cavalry', 'steed'], object: 'a horse' },
-    { keywords: ['spear', 'lance'], object: 'a spear' },
-    { keywords: ['crown', 'throne', 'king'], object: 'a golden crown' },
-    { keywords: ['army', 'troops', 'soldiers'], object: 'a battle flag' },
-    { keywords: ['arrow', 'bow'], object: 'a bow and arrow' },
-    // Circus Lion
-    { keywords: ['juggling ball', 'circus ball'], object: 'a juggling ball' },
-    { keywords: ['hoop', 'ring'], object: 'a circus hoop' },
-    { keywords: ['juggling pins', 'pins'], object: 'juggling pins' },
-    { keywords: ['rubber chicken'], object: 'a rubber chicken' },
-    { keywords: ['spinning plate', 'plate'], object: 'a spinning plate' },
-    // Cleopatra
-    { keywords: ['lotus', 'lotus flower'], object: 'a golden lotus' },
-    { keywords: ['cat', 'feline', 'bastet'], object: 'an Egyptian cat' },
-    { keywords: ['ankh'], object: 'an ankh' },
-    { keywords: ['sphinx'], object: 'a sphinx' },
-    { keywords: ['pyramid'], object: 'a pyramid' },
-    { keywords: ['papyrus', 'parchment'], object: 'an ancient scroll' },
-    { keywords: ['jewel', 'gem', 'diamond', 'ruby'], object: 'a precious gem' },
-    // Da Vinci
-    { keywords: ['gear', 'cog', 'wheel'], object: 'a brass gear' },
-    { keywords: ['wing', 'flying machine', 'glider'], object: 'a feathered wing' },
-    { keywords: ['compass', 'divider'], object: 'a compass' },
-    { keywords: ['paintbrush', 'brush', 'palette'], object: 'a paintbrush' },
-    { keywords: ['sketch', 'drawing', 'blueprint'], object: 'a technical sketch' },
-    { keywords: ['spring', 'coil'], object: 'a spring' },
-    { keywords: ['mirror'], object: 'a mirror' },
-    // Grandpa Turtle
-    { keywords: ['stone', 'rock', 'pebble'], object: 'a smooth stone' },
-    { keywords: ['leaf', 'leaves', 'foliage'], object: 'a fallen leaf' },
-    { keywords: ['shell', 'turtle shell'], object: 'a shell' },
-    { keywords: ['firefly', 'lightning bug'], object: 'a firefly' },
-    { keywords: ['pond', 'river', 'stream', 'water'], object: 'a pond' },
-    { keywords: ['bark', 'tree', 'oak'], object: 'a piece of bark' },
-    // Steve Jobs
-    { keywords: ['device', 'iphone', 'phone', 'tablet', 'ipad'], object: 'a sleek device' },
-    { keywords: ['chip', 'circuit', 'processor'], object: 'a circuit board' },
-    { keywords: ['button', 'click'], object: 'a single button' },
-    { keywords: ['calligraphy', 'font', 'typography', 'pen'], object: 'a calligraphy pen' },
-  ];
+  // Per-character keyword → scene-object map. Only the active character's entries are searched.
+  const GL_KEYWORD_MAP: Record<string, Array<{ keywords: string[]; object: string }>> = {
+    einstein: [
+      { keywords: ['ball', 'bowling ball', 'heavy ball'], object: 'a heavy ball' },
+      { keywords: ['clock', 'watch', 'timepiece'], object: 'a ticking clock' },
+      { keywords: ['light', 'beam', 'laser', 'photon'], object: 'a beam of light' },
+      { keywords: ['trampoline', 'fabric', 'sheet'], object: 'a trampoline' },
+      { keywords: ['rocket', 'spaceship', 'spacecraft'], object: 'a rocket' },
+      { keywords: ['magnet', 'magnetic'], object: 'a magnet' },
+      { keywords: ['apple', 'gravity'], object: 'a falling apple' },
+      { keywords: ['telescope', 'lens'], object: 'a telescope' },
+      { keywords: ['atom', 'nucleus', 'electron'], object: 'an atom' },
+      { keywords: ['wave', 'ripple'], object: 'a wave' },
+    ],
+    bear: [
+      { keywords: ['berry', 'berries', 'blueberry', 'strawberry'], object: 'a handful of berries' },
+      { keywords: ['honey', 'honeycomb'], object: 'a honeycomb' },
+      { keywords: ['fish', 'salmon', 'trout'], object: 'a fresh fish' },
+      { keywords: ['pine cone', 'pinecone', 'acorn', 'nut'], object: 'a pine cone' },
+      { keywords: ['mushroom'], object: 'a mushroom' },
+      { keywords: ['log', 'wood', 'stick'], object: 'a log' },
+    ],
+    alexander: [
+      { keywords: ['sword', 'blade', 'sabre'], object: 'a gleaming sword' },
+      { keywords: ['shield', 'buckler'], object: 'a battle shield' },
+      { keywords: ['map', 'scroll', 'plan'], object: 'a battle map' },
+      { keywords: ['horse', 'cavalry', 'steed'], object: 'a horse' },
+      { keywords: ['spear', 'lance'], object: 'a spear' },
+      { keywords: ['crown', 'throne', 'king'], object: 'a golden crown' },
+      { keywords: ['army', 'troops', 'soldiers'], object: 'a battle flag' },
+      { keywords: ['arrow', 'bow'], object: 'a bow and arrow' },
+    ],
+    'circus-lion': [
+      { keywords: ['juggling ball', 'circus ball'], object: 'a juggling ball' },
+      { keywords: ['hoop', 'ring'], object: 'a circus hoop' },
+      { keywords: ['juggling pins', 'pins'], object: 'juggling pins' },
+      { keywords: ['rubber chicken'], object: 'a rubber chicken' },
+      { keywords: ['spinning plate', 'plate'], object: 'a spinning plate' },
+    ],
+    cleopatra: [
+      { keywords: ['lotus', 'lotus flower'], object: 'a golden lotus' },
+      { keywords: ['cat', 'feline', 'bastet'], object: 'an Egyptian cat' },
+      { keywords: ['ankh'], object: 'an ankh' },
+      { keywords: ['sphinx'], object: 'a sphinx' },
+      { keywords: ['pyramid'], object: 'a pyramid' },
+      { keywords: ['papyrus', 'parchment'], object: 'an ancient scroll' },
+      { keywords: ['jewel', 'gem', 'diamond', 'ruby'], object: 'a precious gem' },
+    ],
+    'da-vinci': [
+      { keywords: ['gear', 'cog', 'wheel'], object: 'a brass gear' },
+      { keywords: ['wing', 'flying machine', 'glider'], object: 'a feathered wing' },
+      { keywords: ['compass', 'divider'], object: 'a compass' },
+      { keywords: ['paintbrush', 'brush', 'palette'], object: 'a paintbrush' },
+      { keywords: ['sketch', 'drawing', 'blueprint'], object: 'a technical sketch' },
+      { keywords: ['spring', 'coil'], object: 'a spring' },
+      { keywords: ['mirror'], object: 'a mirror' },
+    ],
+    'grandpa-turtle': [
+      { keywords: ['stone', 'rock', 'pebble'], object: 'a smooth stone' },
+      { keywords: ['leaf', 'leaves', 'foliage'], object: 'a fallen leaf' },
+      { keywords: ['shell', 'turtle shell'], object: 'a shell' },
+      { keywords: ['firefly', 'lightning bug'], object: 'a firefly' },
+      { keywords: ['pond', 'river', 'stream', 'water'], object: 'a pond' },
+      { keywords: ['bark', 'tree', 'oak'], object: 'a piece of bark' },
+    ],
+    'steve-jobs': [
+      { keywords: ['device', 'iphone', 'phone', 'tablet', 'ipad'], object: 'a sleek device' },
+      { keywords: ['chip', 'circuit', 'processor'], object: 'a circuit board' },
+      { keywords: ['button', 'click'], object: 'a single button' },
+      { keywords: ['calligraphy', 'font', 'typography', 'pen'], object: 'a calligraphy pen' },
+    ],
+  };
 
   // Shared: dispatch objects to Odyssey, deduplicated per turn.
   const glDispatchedThisTurnRef = useRef<Set<string>>(new Set());
@@ -1107,11 +1115,12 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
     handleInteractRef.current(`add ${fresh.join(', ')} to the scene`);
   };
 
-  // Shared: extract objects from text via keyword matching.
-  const glKeywordMatch = (text: string): string[] => {
+  // Shared: extract objects from text via keyword matching, scoped to the active character.
+  const glKeywordMatch = (text: string, characterId: string): string[] => {
     const lower = text.toLowerCase();
+    const entries = GL_KEYWORD_MAP[characterId] ?? [];
     const found: string[] = [];
-    for (const entry of GL_KEYWORD_MAP) {
+    for (const entry of entries) {
       if (entry.keywords.some(k => lower.includes(k))) {
         found.push(entry.object);
       }
@@ -1138,7 +1147,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
 
   // Keyword-stream: dispatch objects from each outputTranscription chunk via keyword matching.
   const glDispatchKeywords = (chunk: string, myGeneration: number) => {
-    const objects = glKeywordMatch(chunk);
+    const objects = glKeywordMatch(chunk, selectedCharacterId ?? '');
     if (objects.length) glDispatchObjects(objects, myGeneration, 'keyword-stream');
   };
 
@@ -1299,7 +1308,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
         // Fallback: if keyword-stream dispatched nothing during streaming (e.g. Odyssey
         // wasn't ready for a chunk), try one final match on the complete response now.
         if (glDispatchedThisTurnRef.current.size === 0) {
-          const fallbackObjects = glKeywordMatch(displayResponse);
+          const fallbackObjects = glKeywordMatch(displayResponse, selectedCharacterId ?? '');
           if (fallbackObjects.length) {
             glDispatchObjects(fallbackObjects, myGeneration, 'turnComplete-fallback');
           } else {
@@ -2074,23 +2083,6 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
           </div>
 
         <footer className="story-bar story-bar--compact">
-          {/* Chevron pill trigger */}
-          <button
-            className={`chat-chevron ${chatExpanded ? 'chat-chevron--open' : ''} ${chatEverOpened ? '' : 'chat-chevron--hint'}`}
-            onClick={() => {
-              setChatExpanded(e => !e);
-              if (!chatEverOpened) {
-                setChatEverOpened(true);
-                localStorage.setItem('chat-seen', 'true');
-              }
-            }}
-            aria-label={chatExpanded ? 'Collapse transcript' : 'Expand transcript'}
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
-              <path d="M2 9L7 4L12 9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-          </button>
-
           {!isStreamingReady && streamState !== 'error' && (
             <div className="stream-loading-badge" aria-live="polite">
               <span className="stream-loading-dot" aria-hidden />
