@@ -492,7 +492,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
     }));
     handleInteractRef.current('smile and wave hello warmly');
     // TTS is best-effort — AudioContext may be suspended until first user gesture
-    playCharacterTTS(greeting, charId).catch(() => undefined);
+    playGreetingTTS(greeting, charId).catch(() => undefined);
   }, [isStreamingReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -1497,6 +1497,44 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
       console.log('[gemini-live] closed', e.code, e.reason);
       if (geminiLiveGenerationRef.current === myGeneration) stopGeminiLiveSession();
     };
+  };
+
+  // Fast path for greetings: static WAV pre-rendered by scripts/render-greetings.mjs.
+  // Falls through to playCharacterTTS (live Gemini synth) if the asset is missing.
+  const playGreetingTTS = async (text: string, slideId: string) => {
+    const generation = ttsGenerationRef.current;
+    if (!ttsAudioCtxRef.current) ttsAudioCtxRef.current = new AudioContext();
+    const ctx = ttsAudioCtxRef.current;
+    try {
+      await ctx.resume();
+      if (ttsGenerationRef.current !== generation) return;
+      ttsAbortRef.current?.abort();
+      const ttsAbort = new AbortController();
+      ttsAbortRef.current = ttsAbort;
+      const res = await fetch(`/greetings/${slideId}.wav`, { signal: ttsAbort.signal });
+      if (ttsGenerationRef.current !== generation) return;
+      if (!res.ok) {
+        debug('[tts] greeting asset missing, falling back to live synth:', res.status);
+        return playCharacterTTS(text, slideId);
+      }
+      const buf = await res.arrayBuffer();
+      if (ttsGenerationRef.current !== generation) return;
+      const decoded = await ctx.decodeAudioData(buf);
+      if (ttsGenerationRef.current !== generation) return;
+      const source = ctx.createBufferSource();
+      source.buffer = decoded;
+      source.connect(ctx.destination);
+      ttsSourceNodesRef.current.push(source);
+      source.onended = () => {
+        ttsSourceNodesRef.current = ttsSourceNodesRef.current.filter(n => n !== source);
+      };
+      source.start();
+      debug('[tts] greeting played from static asset, duration:', decoded.duration.toFixed(2), 's');
+    } catch (err) {
+      if ((err as { name?: string })?.name === 'AbortError') return;
+      console.warn('[tts] greeting fast path failed, falling back:', err);
+      return playCharacterTTS(text, slideId);
+    }
   };
 
   const playCharacterTTS = async (text: string, slideId?: string) => {

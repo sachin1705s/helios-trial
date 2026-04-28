@@ -9,7 +9,8 @@
     "dev:server": "node server/index.js",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "render:greetings": "node scripts/render-greetings.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.42.0",
