@@ -194,14 +194,14 @@
 .atrium .nav .btn--ghost {
   background: rgba(255, 255, 255, 0.30);
   color: var(--ink);
-  border-color: rgba(255, 255, 255, 0.60);
+  border-color: rgba(20, 40, 38, 0.30);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.80);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
 }
 .atrium .nav .btn--ghost:hover {
   background: rgba(255, 255, 255, 0.50);
-  border-color: rgba(255, 255, 255, 0.80);
+  border-color: rgba(20, 40, 38, 0.50);
 }
 .atrium .nav .btn--primary {
   background: var(--ink);
