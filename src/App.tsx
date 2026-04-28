@@ -1127,10 +1127,6 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
     return found;
   };
 
-  // Shared: extract stage directions from text.
-  const glExtractStageDirections = (text: string): string[] =>
-    [...text.matchAll(/\*([^*]+)\*/g)].map(m => m[1].trim());
-
   // Turn-start timestamp for latency logging.
   const glTurnStartRef = useRef(0);
 
