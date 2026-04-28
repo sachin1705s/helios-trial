@@ -113,11 +113,11 @@ export default function AtriumLanding() {
         <header>
           <span className="eyebrow">The cast</span>
           <h2 id="preview-title">
-            Eight characters. <em>One conversation each.</em>
+            A cast of characters. <em>One conversation each.</em>
           </h2>
           <p className="lede lede--center">
-            From a thoughtful turtle to the last pharaoh of Egypt. Pick the
-            voice you want to spend ten minutes with.
+            From a wise bear to the last pharaoh of Egypt. Pick the
+            voice you want to spend time with.
           </p>
         </header>
         <div className="preview__grid">
@@ -130,13 +130,13 @@ export default function AtriumLanding() {
                 <h3>{c.title}</h3>
                 <p>{c.body}</p>
               </div>
-              <span className="preview__cta">Talk to {c.title.split(' ')[0]} →</span>
+              <span className="preview__cta">Talk to {c.title} →</span>
             </Link>
           ))}
         </div>
         <div className="preview__more">
           <Link to="/home" className="btn btn--ghost btn--lg">
-            See all eight →
+            Meet the full cast →
           </Link>
         </div>
       </section>
