@@ -1134,12 +1134,13 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   // Turn-start timestamp for latency logging.
   const glTurnStartRef = useRef(0);
 
-  // ─── Strategy: Phase 1 (always runs) ─────────────────────────────────────
+  // Resets per-turn state at the start of each user turn.
   const glPhase1Action = (myGeneration: number) => {
     if (geminiLiveGenerationRef.current !== myGeneration) return;
     glTurnStartRef.current = Date.now();
     glDispatchedThisTurnRef.current = new Set();
-    handleInteractRef.current('listen actively');
+    // Intentionally no 'listen actively' interact call — it queues ahead of object
+    // dispatch in Odyssey and adds ~200–400ms of latency before objects can land.
   };
 
   // ─── Strategy implementations ─────────────────────────────────────────────
@@ -1276,27 +1277,24 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
       glPhase1Action(myGeneration);                                          // always: 'listen actively'
     }
 
-    // outputTranscription chunk — accumulate and run per-chunk strategy hooks
+    // outputTranscription chunk — accumulate and run per-chunk keyword match.
     const outputTranscription = (content.outputTranscription as Record<string, string> | undefined)?.text;
     if (outputTranscription) {
       glOutputTranscriptBufferRef.current += (glOutputTranscriptBufferRef.current ? ' ' : '') + outputTranscription;
       // Search the full accumulated buffer so keywords split across chunk boundaries are caught.
-      // Deduplication in glDispatchObjects prevents re-dispatching objects already sent this turn.
+      // glDispatchObjects deduplicates so the same object is never dispatched twice per turn.
       glDispatchKeywords(glOutputTranscriptBufferRef.current, myGeneration);
     }
 
-    // turnComplete — update chat, extract stage directions, run completion strategy hook
+    // turnComplete — update chat and run fallback keyword match if nothing fired mid-stream.
     if (content.turnComplete) {
       setIsCharacterThinking(false);
       setIsCharacterSpeaking(false);
       const geminiResponse = glOutputTranscriptBufferRef.current;
       if (geminiResponse) {
-        // Stage directions → Odyssey actions (always, regardless of strategy)
-        const stageDirections = glExtractStageDirections(geminiResponse);
-        for (const direction of stageDirections) {
-          handleInteractRef.current(direction);
-        }
-        // Strip stage directions from displayed text
+        // Strip stage directions from displayed text only — do NOT send them to Odyssey as
+        // interact commands. Stage-direction dispatch conflicts with keyword-stream objects
+        // already dispatched mid-turn and causes visible scene corrections.
         const displayResponse = geminiResponse.replace(/\*[^*]+\*/g, '').replace(/\s{2,}/g, ' ').trim();
         setCharacterReply(displayResponse);
         setCharacterHistory((prev) => ({
@@ -1304,10 +1302,10 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
           [slide.id]: [...(prev[slide.id] ?? []), { role: 'assistant' as const, content: displayResponse }],
         }));
 
-        // Fallback: if keyword-stream dispatched nothing during streaming (e.g. Odyssey
-        // wasn't ready for a chunk), try one final match on the complete response now.
+        // Fallback: search the raw response (before stage-direction stripping) so keywords
+        // that only appear inside *stage directions* are still caught.
         if (glDispatchedThisTurnRef.current.size === 0) {
-          const fallbackObjects = glKeywordMatch(displayResponse, selectedCharacterId ?? '');
+          const fallbackObjects = glKeywordMatch(geminiResponse, selectedCharacterId ?? '');
           if (fallbackObjects.length) {
             glDispatchObjects(fallbackObjects, myGeneration, 'turnComplete-fallback');
           } else {
