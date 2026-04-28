@@ -2119,13 +2119,13 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
             </div>
           </div>
 
-        <footer className="story-bar story-bar--compact">
           {!isStreamingReady && streamState !== 'error' && (
             <div className="stream-loading-badge" aria-live="polite">
               <span className="stream-loading-dot" aria-hidden />
               Waking up {activeCharacterName}…
             </div>
           )}
+        <footer className="story-bar story-bar--compact">
           <div className="story-actions">
             <div className="prompt-input">
               <input
