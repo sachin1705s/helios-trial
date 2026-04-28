@@ -2078,6 +2078,14 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
       <div className="ui">
         <header className="top-bar">
           <button className="btn ghost back-to-landing" onClick={() => {
+            stopGeminiLiveSession();
+            ++ttsGenerationRef.current;
+            ttsAbortRef.current?.abort();
+            ttsAbortRef.current = null;
+            for (const node of ttsSourceNodesRef.current) { try { node.stop(); } catch { /* already stopped */ } }
+            ttsSourceNodesRef.current = [];
+            ttsHtmlAudioRef.current?.pause();
+            ttsHtmlAudioRef.current = null;
             closeActiveCharacter('landing_back');
             navigate('/home');
           }}>
