@@ -48,17 +48,6 @@ export default function AtriumLanding() {
               See how it works
             </a>
           </div>
-          <ul className="hero__signals" aria-label="Product highlights">
-            <li>
-              <span className="dot dot--moss" /> No feed, no recommendations
-            </li>
-            <li>
-              <span className="dot dot--clay" /> Voice-first by design
-            </li>
-            <li>
-              <span className="dot dot--sun" /> Eight characters, more soon
-            </li>
-          </ul>
         </div>
 
         <div className="hero__viewfinder">
@@ -119,39 +108,6 @@ export default function AtriumLanding() {
         </ol>
       </section>
 
-      {/* DIFFERENT */}
-      <section className="manifesto" aria-labelledby="manifesto-title">
-        <h2 id="manifesto-title">
-          The opposite of <em>passive.</em>
-        </h2>
-        <div className="manifesto__grid">
-          <article>
-
-            <p className="strike">Not a feed</p>
-            <p>
-              Nothing autoplays. Nothing scrolls. You don't open the app to
-              be served — you open it to be answered.
-            </p>
-          </article>
-          <article>
-
-            <p className="strike">Not a script</p>
-            <p>
-              Every conversation runs once. The character is reacting to
-              <em> you,</em> not playing back a tape.
-            </p>
-          </article>
-          <article>
-
-            <p className="strike">Not a chatbot</p>
-            <p>
-              There's a face. A scene. Eyes that meet yours. You're not
-              talking to a textbox — you're inside the conversation.
-            </p>
-          </article>
-        </div>
-      </section>
-
       {/* CHARACTER PREVIEW */}
       <section className="preview" aria-labelledby="preview-title">
         <header>
@@ -183,16 +139,6 @@ export default function AtriumLanding() {
             See all eight →
           </Link>
         </div>
-      </section>
-
-      {/* QUOTE / MANIFESTO */}
-      <section className="quote">
-        <blockquote>
-          <p>
-            The story changes when <em>you</em> speak.
-          </p>
-          <footer>— Interact Studio</footer>
-        </blockquote>
       </section>
 
       <AtriumFooter />

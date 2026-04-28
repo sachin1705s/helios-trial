@@ -53,6 +53,15 @@ export default function AtriumAbout() {
         </a>
       </div>
 
+      <section className="quote">
+        <blockquote>
+          <p>
+            The story changes when <em>you</em> speak.
+          </p>
+          <footer>— Interact Studio</footer>
+        </blockquote>
+      </section>
+
       <AtriumFooter />
     </div>
   );
