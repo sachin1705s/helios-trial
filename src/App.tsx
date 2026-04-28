@@ -122,7 +122,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   const streamRequestIdRef = useRef(0); // set to requestId just before startStream — onStreamStarted checks for staleness
   const isVoiceAgentSlideRef = useRef(false);
   const greetedCharactersRef = useRef<Set<string>>(new Set()); // tracks which characters have greeted this session
-  const ttsSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const ttsSourceNodesRef = useRef<AudioBufferSourceNode[]>([]);
   const ttsAbortRef = useRef<AbortController | null>(null);
   const ttsHtmlAudioRef = useRef<HTMLAudioElement | null>(null);
   const handleInteractRef = useRef<(promptOverride?: string) => void>(() => undefined);
@@ -831,12 +831,12 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
     // Stop any in-flight TTS fetch and all scheduled audio playback
     ttsAbortRef.current?.abort();
     ttsAbortRef.current = null;
-    try { ttsSourceRef.current?.stop(); } catch { /* already stopped */ }
-    ttsSourceRef.current = null;
+    for (const node of ttsSourceNodesRef.current) { try { node.stop(); } catch { /* already stopped */ } }
+    ttsSourceNodesRef.current = [];
     ttsHtmlAudioRef.current?.pause();
     ttsHtmlAudioRef.current = null;
     // Close the AudioContext to immediately silence any already-scheduled chunks
-    // (abort() stops new chunks from being fetched but scheduled nodes keep playing)
+    // (abort() stops new chunks from being fetched but tracked nodes keep playing until stopped above)
     ttsAudioCtxRef.current?.close().catch(() => undefined);
     ttsAudioCtxRef.current = null;
     // Reset stream ready state immediately — onStreamEnded fires async so without this,
@@ -1571,6 +1571,10 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
             const source = ctx.createBufferSource();
             source.buffer = audioBuffer;
             source.connect(ctx.destination);
+            ttsSourceNodesRef.current.push(source);
+            source.onended = () => {
+              ttsSourceNodesRef.current = ttsSourceNodesRef.current.filter(n => n !== source);
+            };
             source.start(playbackTime);
             playbackTime += audioBuffer.duration;
           }
@@ -1595,8 +1599,10 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
           const source = ctx.createBufferSource();
           source.buffer = decoded;
           source.connect(ctx.destination);
-          ttsSourceRef.current = source;
-          source.onended = () => { ttsSourceRef.current = null; };
+          ttsSourceNodesRef.current.push(source);
+          source.onended = () => {
+            ttsSourceNodesRef.current = ttsSourceNodesRef.current.filter(n => n !== source);
+          };
           source.start();
           debug('[tts] audio playback started');
         } catch (err) {
@@ -1722,12 +1728,12 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
     ++ttsGenerationRef.current;
     ttsAbortRef.current?.abort();
     ttsAbortRef.current = null;
-    try { ttsSourceRef.current?.stop(); } catch { /* already stopped */ }
-    ttsSourceRef.current = null;
+    for (const node of ttsSourceNodesRef.current) { try { node.stop(); } catch { /* already stopped */ } }
+    ttsSourceNodesRef.current = [];
     ttsHtmlAudioRef.current?.pause();
     ttsHtmlAudioRef.current = null;
-    ttsAudioCtxRef.current?.close().catch(() => undefined);
-    ttsAudioCtxRef.current = null;
+    // Keep the AudioContext alive — closing it leaves the replacement context suspended
+    // (new AudioContext starts paused and ctx.resume() requires a user-gesture stack)
     const newCharacter = characters.find((c) => c.id === id);
     logEvent('character_opened', {
       characterId: id,
