@@ -223,14 +223,14 @@ const stripActionTags = (text) => {
       .replace(/<[^>]+>/g, '')
       // [SCENE_ACTION: spawn_object("ball")] — official format
       .replace(/\[SCENE_ACTION:[^\]]*\]/gi, '')
-      // [bracketed annotation] — [sighs], [holds up stone] (≤80 chars guards against false positives)
-      .replace(/\[[^\]]{1,80}\]/g, '')
+      // [bracketed annotation] — [sighs], [holds up a long description…]
+      .replace(/\[[^\]\n]+\]/g, '')
       // `backtick spans` — `hold up honeycomb`
       .replace(/`[^`\n]+`/g, '')
       // *stage direction* / **action** — strip the entire match, content included
-      .replace(/\*{1,3}[^*\n]{1,120}\*{1,3}/g, '')
+      .replace(/\*{1,3}[^*\n]+\*{1,3}/g, '')
       // (parenthetical stage directions) — (Holds up honeycomb), (sighs deeply)
-      .replace(/\([^)\n]{1,120}\)/g, '');
+      .replace(/\([^)\n]+\)/g, '');
   } while (current !== prev && --safety > 0);
 
   return current

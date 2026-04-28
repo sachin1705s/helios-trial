@@ -11,10 +11,10 @@ const stripActionTags = (text) => {
     current = current
       .replace(/<[^>]+>/g, '')
       .replace(/\[SCENE_ACTION:[^\]]*\]/gi, '')
-      .replace(/\[[^\]]{1,80}\]/g, '')
+      .replace(/\[[^\]\n]+\]/g, '')
       .replace(/`[^`\n]+`/g, '')
-      .replace(/\*{1,3}[^*\n]{1,120}\*{1,3}/g, '')
-      .replace(/\([^)\n]{1,120}\)/g, '');
+      .replace(/\*{1,3}[^*\n]+\*{1,3}/g, '')
+      .replace(/\([^)\n]+\)/g, '');
   } while (current !== prev && --safety > 0);
 
   return current
@@ -28,9 +28,9 @@ const stripActionTags = (text) => {
     .trim();
 };
 
-// Each case: { input, expectClean: substring that MUST NOT survive }
+// Each case: { input, mustNotContain[], mustEqual? }
 const cases = [
-  // Production failures we've seen
+  // ── Production failures ────────────────────────────────────────────────────
   { name: 'angle-tag (stone_appears)',
     input: 'Look at this stone — isn\'t it nice to hold? <stone_appears>',
     mustNotContain: ['stone_appears', '<', '>'] },
@@ -44,34 +44,103 @@ const cases = [
     input: 'Smells sweet, doesn\'t it? `[holds up a fat, dripping honeycomb]`',
     mustNotContain: ['holds up', '[', ']', '`'] },
 
-  // Other plausible model outputs
-  { name: 'asterisk action',
+  // ── Single-format cases ────────────────────────────────────────────────────
+  { name: 'asterisk single',
     input: 'Hello there! *waves paw warmly*',
     mustNotContain: ['waves paw', '*'] },
-  { name: 'double asterisk',
+  { name: 'asterisk double',
     input: 'Hello! **lifts honeycomb proudly**',
     mustNotContain: ['lifts honeycomb', '*'] },
+  { name: 'asterisk triple',
+    input: 'Watch! ***roars dramatically***',
+    mustNotContain: ['roars', '*'] },
   { name: 'SCENE_ACTION official',
     input: 'Catch! [SCENE_ACTION: spawn_object("ball")]',
     mustNotContain: ['SCENE_ACTION', 'spawn_object', '[', ']'] },
   { name: 'plain bracket annotation',
     input: 'Mmm, that was good [licks lips].',
     mustNotContain: ['licks lips', '[', ']'] },
-  { name: 'mixed: asterisks around brackets',
+
+  // ── Nested / mixed formats ─────────────────────────────────────────────────
+  { name: 'asterisks around brackets',
     input: 'Watch this *[juggles three balls]*',
     mustNotContain: ['juggles', '[', ']', '*'] },
-  { name: 'mixed: parens around backticks',
+  { name: 'parens around backticks',
     input: 'Here you go (`offers stone gently`)',
     mustNotContain: ['offers stone', '(', ')', '`'] },
-  { name: 'mixed: backticks around angle tag',
+  { name: 'backticks around angle tag',
     input: 'Watch — `<stone_appears>` look!',
     mustNotContain: ['stone_appears', '`', '<', '>'] },
+  { name: 'triple nested: backtick > paren > asterisk',
+    input: 'Here! `(*waves slowly*)`',
+    mustNotContain: ['waves', '`', '(', ')', '*'] },
+  { name: 'asterisks around SCENE_ACTION',
+    input: 'Ta-da! *[SCENE_ACTION: animate("roar")]*',
+    mustNotContain: ['SCENE_ACTION', 'animate', '*', '[', ']'] },
 
-  // Make sure normal speech isn't damaged
-  { name: 'normal speech (control)',
+  // ── Long descriptions (exceed earlier 80-char bracket limit) ──────────────
+  { name: 'long bracket (> 80 chars)',
+    input: 'Look here! [holds up a large, beautifully crafted golden honeycomb dripping with rich amber honey from the hive]',
+    mustNotContain: ['holds up', 'honeycomb', 'amber', '[', ']'] },
+  { name: 'long paren (> 80 chars)',
+    input: 'Come on! (reaches into the hollow log and carefully pulls out an enormous dripping honeycomb and holds it up to the light)',
+    mustNotContain: ['reaches', 'honeycomb', '(', ')'] },
+  { name: 'long asterisk (> 120 chars)',
+    input: 'Watch! *slowly and deliberately reaches into the hollow of the old oak tree and pulls out a magnificent golden honeycomb that drips with amber honey*',
+    mustNotContain: ['reaches', 'honeycomb', '*'] },
+
+  // ── Action at the start of a sentence ─────────────────────────────────────
+  { name: 'action at start',
+    input: '*waves paw* Hello there, little friend!',
+    mustNotContain: ['waves', '*'] },
+  { name: 'tag at start',
+    input: '<bear_smiles> Welcome to my forest!',
+    mustNotContain: ['bear_smiles', '<', '>'] },
+
+  // ── Multiple actions in one string ────────────────────────────────────────
+  { name: 'multiple bracket actions',
+    input: 'First [sniffs the air] then [picks up stone] — see?',
+    mustNotContain: ['sniffs', 'picks', '[', ']'] },
+  { name: 'multiple asterisk actions',
+    input: '*sniffs* Mmm! *holds out paw* Try it!',
+    mustNotContain: ['sniffs', 'holds out', '*'] },
+  { name: 'action mid-sentence',
+    input: 'Here, *leans forward gently* take a look at this.',
+    mustNotContain: ['leans', '*'] },
+
+  // ── Loose spacing inside markers ──────────────────────────────────────────
+  { name: 'bracket with inner spaces',
+    input: 'Yes! [ sighs deeply ]',
+    mustNotContain: ['sighs', '[', ']'] },
+  { name: 'asterisk with inner spaces',
+    input: 'Okay! * nods slowly *',
+    mustNotContain: ['nods', '*'] },
+
+  // ── UPPERCASE format variations ────────────────────────────────────────────
+  { name: 'uppercase angle tag',
+    input: 'See this? <STONE_APPEARS>',
+    mustNotContain: ['STONE_APPEARS', '<', '>'] },
+  { name: 'uppercase bracket',
+    input: 'Ready! [HOLDS UP HONEYCOMB]',
+    mustNotContain: ['HOLDS', 'HONEYCOMB', '[', ']'] },
+
+  // ── Controls — normal speech must not be damaged ───────────────────────────
+  { name: 'control: plain speech',
     input: 'I love the forest and the smell of pine in the morning.',
     mustNotContain: [],
     mustEqual: 'I love the forest and the smell of pine in the morning.' },
+  { name: 'control: speech with numbers',
+    input: 'I have found 3 honeycombs today, maybe 4.',
+    mustNotContain: [],
+    mustEqual: 'I have found 3 honeycombs today, maybe 4.' },
+  { name: 'control: speech with question',
+    input: 'Isn\'t it nice to sit here by the river?',
+    mustNotContain: [],
+    mustEqual: 'Isn\'t it nice to sit here by the river?' },
+  { name: 'control: speech with em-dash',
+    input: 'Slow down — the forest will wait for you.',
+    mustNotContain: [],
+    mustEqual: 'Slow down — the forest will wait for you.' },
 ];
 
 let passed = 0;
