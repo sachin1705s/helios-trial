@@ -21,7 +21,7 @@ const tags: Record<string, Filter[]> = {
 };
 
 const filterLabel: Record<Filter, string> = {
-  all: 'All eight',
+  all: 'All',
   storytellers: 'Storytellers',
   historical: 'Historical',
   visionaries: 'Visionaries',
@@ -42,7 +42,7 @@ export default function AtriumHome() {
       <section className="home-hero" aria-labelledby="cast-title">
         <div className="home-hero__copy">
           <span className="eyebrow">
-            <span className="eyebrow__dot" /> Eight conversations available
+            <span className="eyebrow__dot" /> Choose who you'd like to meet
           </span>
           <h1 id="cast-title">
             Choose your <em>conversation.</em>
@@ -55,10 +55,6 @@ export default function AtriumHome() {
         <div className="home-hero__filters" role="tablist" aria-label="Filter the cast">
           {(Object.keys(filterLabel) as Filter[]).map((f) => {
             const active = filter === f;
-            const count =
-              f === 'all'
-                ? characters.length
-                : characters.filter((c) => (tags[c.id] ?? ['all']).includes(f)).length;
             return (
               <button
                 key={f}
@@ -68,7 +64,6 @@ export default function AtriumHome() {
                 onClick={() => setFilter(f)}
               >
                 {filterLabel[f]}
-                <span className="pill__count">{count}</span>
               </button>
             );
           })}
@@ -87,13 +82,13 @@ export default function AtriumHome() {
                 <h3>{c.title}</h3>
                 <p>{c.body}</p>
               </div>
-              <span className="cast__cta">Talk to {c.title.split(' ')[0]} →</span>
+              <span className="cast__cta">Talk to {c.title} →</span>
             </Link>
           ))}
         </div>
         {castCharacters.length === 0 && (
           <p className="cast__empty">
-            No one in this group right now. <button onClick={() => setFilter('all')}>See all eight →</button>
+            No one in this group right now. <button onClick={() => setFilter('all')}>See everyone →</button>
           </p>
         )}
       </section>

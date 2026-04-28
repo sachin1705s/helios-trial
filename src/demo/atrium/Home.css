@@ -47,6 +47,9 @@
   border-color: rgba(20,40,38,0.36);
   color: var(--ink);
 }
+.atrium-home .pill--on:hover {
+  color: var(--paper);
+}
 .atrium-home .pill--on {
   background: var(--ink);
   border-color: var(--ink);
