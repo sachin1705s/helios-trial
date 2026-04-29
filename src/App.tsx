@@ -3,10 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { Analytics } from '@vercel/analytics/react';
 import { SpeedInsights } from '@vercel/speed-insights/react';
 import type { ConnectionStatus } from '@odysseyml/odyssey';
+import type { User } from '@supabase/supabase-js';
 import charactersData from './data/characters.json';
 import { trackEvent } from './lib/analytics';
 import { OdysseyService, credentialsFromDict, loadImageFile, type ClientCredentials, type StreamState } from './lib/odyssey';
 import { SEO_PAGES, applySeo } from './lib/seo';
+import { supabase } from './lib/supabase';
+import { AuthModal } from './components/AuthModal';
 import './App.css';
 
 // Debug logger — silent by default in production.
@@ -72,6 +75,8 @@ function pcmToWav(pcm: ArrayBuffer, sampleRate: number, channels: number, bitDep
 
 function App({ initialCharacterId }: { initialCharacterId?: string }) {
   const navigate = useNavigate();
+  const [user, setUser] = useState<User | null>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const [credentials, setCredentials] = useState<ClientCredentials | undefined>(undefined);
   const [showLanding, setShowLanding] = useState(!initialCharacterId);
   const [showAbout, setShowAbout] = useState(false);
@@ -269,6 +274,18 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
     </button>
   );
 
+
+  // Auth state — subscribe to Supabase session changes
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setUser(data.session?.user ?? null);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      if (session) setShowAuthModal(false);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
 
   useEffect(() => {
     const syncFromLocation = () => {
@@ -1954,12 +1971,28 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
               >
                 About us
               </a>
-              <a
-                className="btn primary"
-                href="mailto:hello.interactstudio@gmail.com"
-              >
-                Get in touch
-              </a>
+              {user ? (
+                <button
+                  type="button"
+                  className="btn ghost user-avatar-btn"
+                  onClick={() => supabase.auth.signOut()}
+                  title={`Signed in as ${user.email ?? user.id} — click to sign out`}
+                >
+                  {user.user_metadata?.avatar_url ? (
+                    <img className="user-avatar" src={user.user_metadata.avatar_url as string} alt="" referrerPolicy="no-referrer" />
+                  ) : (
+                    <span className="user-avatar-initial">{(user.email ?? 'U')[0].toUpperCase()}</span>
+                  )}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={() => setShowAuthModal(true)}
+                >
+                  Sign in
+                </button>
+              )}
             </div>
           </header>
 
@@ -2011,6 +2044,36 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
               ))}
             </div>
           </section>
+          <section className="landing-section lab-section">
+            <div className="landing-section-header">
+              <div>
+                <h2>Lab</h2>
+                <p className="section-subtitle">Experiments — one new experience every few days.</p>
+              </div>
+            </div>
+            <div className="card-grid">
+              {[
+                { id: 'drawing',  label: 'Drawing to Live',    desc: 'Draw anything — watch it come alive.',     route: '/lab/drawing',  emoji: '🎨' },
+                { id: 'gesture',  label: 'Gesture Detection',  desc: 'Wave, point, react — character responds.', route: '/lab/gesture',  emoji: '✋' },
+                { id: 'objects',  label: 'Object Detection',   desc: 'Hold something up — character reacts.',    route: '/lab/objects',  emoji: '🔍' },
+                { id: 'custom',   label: 'Custom Characters',  desc: 'Your face, your voice, your character.',   route: '/lab/custom',   emoji: '🧬' },
+                { id: 'broadcast',label: 'Broadcast',          desc: 'One stream, many people, live.',           route: '/lab/broadcast',emoji: '📡' },
+              ].map((exp) => (
+                <button
+                  key={exp.id}
+                  className="experiment-card"
+                  onClick={() => navigate(exp.route)}
+                >
+                  <div className="experiment-card-emoji">{exp.emoji}</div>
+                  <div className="experiment-card-body">
+                    <h3>{exp.label}</h3>
+                    <p>{exp.desc}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </section>
+
           <footer className="landing-footer">
             <div className="landing-footer-title">Interact Studio</div>
             <div className="landing-footer-links">
@@ -2024,6 +2087,8 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
             <div className="landing-footer-line" />
           </footer>
         </main>
+
+        {showAuthModal && <AuthModal onClose={() => setShowAuthModal(false)} />}
 
         {showVideoModal && (
           <div className="video-modal-overlay" onClick={handleCloseVideoModal}>

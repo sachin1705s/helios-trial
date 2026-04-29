@@ -6,6 +6,11 @@ import App from './App.tsx';
 import AtriumLanding from './demo/atrium/Landing';
 import AtriumHome from './demo/atrium/Home';
 import AtriumAbout from './demo/atrium/About';
+import DrawingExperiment from './components/experiments/DrawingExperiment';
+import GestureExperiment from './components/experiments/GestureExperiment';
+import ObjectDetectionExperiment from './components/experiments/ObjectDetectionExperiment';
+import CustomCharacterExperiment from './components/experiments/CustomCharacterExperiment';
+import BroadcastExperiment from './components/experiments/BroadcastExperiment';
 
 function ScrollToTop() {
   const { pathname } = useLocation();
@@ -27,6 +32,11 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/home" element={<AtriumHome />} />
         <Route path="/about-us" element={<AtriumAbout />} />
         <Route path="/character/:id" element={<CharacterRoute />} />
+        <Route path="/lab/drawing"   element={<DrawingExperiment />} />
+        <Route path="/lab/gesture"   element={<GestureExperiment />} />
+        <Route path="/lab/objects"   element={<ObjectDetectionExperiment />} />
+        <Route path="/lab/custom"    element={<CustomCharacterExperiment />} />
+        <Route path="/lab/broadcast" element={<BroadcastExperiment />} />
         <Route path="*" element={<App />} />
       </Routes>
     </BrowserRouter>

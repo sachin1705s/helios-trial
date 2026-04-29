@@ -1983,3 +1983,401 @@
     max-width: 100%;
   }
 }
+
+/* ── Auth ──────────────────────────────────────────────────────────────────── */
+.auth-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 8, 13, 0.72);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fade-in 0.2s ease;
+}
+
+.auth-modal {
+  position: relative;
+  background: rgba(14, 18, 30, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  padding: 36px;
+  width: 100%;
+  max-width: 400px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+  animation: slide-up 0.25s ease;
+}
+
+.auth-modal-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  background: none;
+  border: none;
+  color: rgba(231, 237, 246, 0.4);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: color 0.15s;
+}
+.auth-modal-close:hover { color: rgba(231, 237, 246, 0.9); }
+
+.auth-modal-header {
+  margin-bottom: 24px;
+}
+.auth-modal-header h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #e7edf6;
+  margin: 0 0 6px;
+}
+.auth-modal-header p {
+  font-size: 0.85rem;
+  color: rgba(231, 237, 246, 0.55);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.user-avatar-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px !important;
+}
+.user-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.user-avatar-initial {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(121, 150, 255, 0.25);
+  border: 1px solid rgba(121, 150, 255, 0.4);
+  color: #7996ff;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── Lab / Experiments ─────────────────────────────────────────────────────── */
+.lab-section {
+  margin-top: 12px;
+}
+
+.section-subtitle {
+  font-size: 0.85rem;
+  color: rgba(231, 237, 246, 0.45);
+  margin: 4px 0 0;
+}
+
+.experiment-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 20px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.2s, border-color 0.2s, transform 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.experiment-card:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(121, 150, 255, 0.3);
+  transform: translateY(-2px);
+}
+.experiment-card-emoji {
+  font-size: 1.6rem;
+  line-height: 1;
+}
+.experiment-card-body h3 {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #e7edf6;
+}
+.experiment-card-body p {
+  margin: 0;
+  font-size: 0.8rem;
+  color: rgba(231, 237, 246, 0.5);
+  line-height: 1.4;
+}
+
+/* ── Experiment shells (shared across experiment routes) ───────────────────── */
+.experiment-shell {
+  min-height: 100vh;
+  background: #06080d;
+  color: #e7edf6;
+  display: flex;
+  flex-direction: column;
+}
+
+.experiment-topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+.experiment-topbar h1 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+}
+.experiment-topbar .exp-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: rgba(121, 150, 255, 0.85);
+  background: rgba(121, 150, 255, 0.12);
+  border: 1px solid rgba(121, 150, 255, 0.2);
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+
+.experiment-body {
+  flex: 1;
+  display: flex;
+  gap: 0;
+  overflow: hidden;
+}
+
+.experiment-video-panel {
+  flex: 1;
+  position: relative;
+  background: #0a0c14;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.experiment-video-panel video,
+.experiment-video-panel canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.experiment-side-panel {
+  width: 320px;
+  border-left: 1px solid rgba(255, 255, 255, 0.07);
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+.experiment-status {
+  font-size: 0.8rem;
+  color: rgba(231, 237, 246, 0.5);
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.exp-btn {
+  width: 100%;
+  padding: 12px 16px;
+  border-radius: 10px;
+  border: none;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+}
+.exp-btn:active { transform: scale(0.98); }
+.exp-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.exp-btn.primary  { background: #7996ff; color: #fff; }
+.exp-btn.danger   { background: rgba(255, 80, 80, 0.2); color: #ff6b6b; border: 1px solid rgba(255, 80, 80, 0.3); }
+.exp-btn.ghost    { background: rgba(255,255,255,0.06); color: #e7edf6; border: 1px solid rgba(255,255,255,0.1); }
+
+.exp-reply {
+  background: rgba(121, 150, 255, 0.08);
+  border: 1px solid rgba(121, 150, 255, 0.15);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: rgba(231, 237, 246, 0.85);
+  min-height: 60px;
+}
+
+@keyframes fade-in   { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slide-up  { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ── Shared experiment inputs ───────────────────────────────────────────────── */
+.exp-text-input {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 10px 14px;
+  color: #e7edf6;
+  font-size: 0.875rem;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+.exp-text-input:focus { border-color: rgba(121, 150, 255, 0.5); }
+.exp-text-input::placeholder { color: rgba(231, 237, 246, 0.3); }
+textarea.exp-text-input { font-family: inherit; }
+
+.exp-prompt-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.exp-prompt-row .exp-text-input { flex: 1; }
+.exp-prompt-row .exp-btn { flex-shrink: 0; width: auto; padding: 10px 18px; }
+
+/* ── Drawing experiment ─────────────────────────────────────────────────────── */
+.drawing-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+}
+.tool-row {
+  display: flex;
+  gap: 8px;
+}
+.tool-label {
+  font-size: 0.8rem;
+  color: rgba(231, 237, 246, 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ── Gesture / webcam experiments ───────────────────────────────────────────── */
+.webcam-preview-box {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: #111;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.webcam-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(231, 237, 246, 0.25);
+  font-size: 0.8rem;
+}
+
+/* ── Custom character setup ─────────────────────────────────────────────────── */
+.setup-field {
+  margin-bottom: 20px;
+}
+.setup-label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: rgba(231, 237, 246, 0.6);
+  margin-bottom: 6px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.image-drop-zone {
+  width: 100%;
+  aspect-ratio: 1;
+  max-height: 200px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 2px dashed rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: rgba(231, 237, 246, 0.35);
+  font-size: 0.85rem;
+  background-size: cover;
+  background-position: center;
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+.image-drop-zone:hover { border-color: rgba(121, 150, 255, 0.4); }
+
+/* ── Broadcast experiment ───────────────────────────────────────────────────── */
+.broadcast-role-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 28px 20px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  cursor: pointer;
+  color: #e7edf6;
+  transition: border-color 0.15s, background 0.15s;
+  text-align: center;
+}
+.broadcast-role-card:hover {
+  background: rgba(121, 150, 255, 0.08);
+  border-color: rgba(121, 150, 255, 0.35);
+}
+.broadcast-role-card strong { font-size: 1rem; }
+.broadcast-role-card span { font-size: 0.8rem; color: rgba(231, 237, 246, 0.5); }
+
+.broadcast-room-code {
+  text-align: center;
+  padding: 12px;
+  background: rgba(121, 150, 255, 0.08);
+  border: 1px solid rgba(121, 150, 255, 0.2);
+  border-radius: 10px;
+}
+.room-code-display {
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: 0.25em;
+  color: #7996ff;
+}
+
+.broadcast-prompts-panel {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.broadcast-prompt-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.broadcast-prompt-item:hover {
+  background: rgba(121, 150, 255, 0.1);
+  border-color: rgba(121, 150, 255, 0.25);
+}
+.broadcast-prompt-user {
+  font-size: 0.7rem;
+  color: rgba(121, 150, 255, 0.7);
+  font-weight: 600;
+}
+.broadcast-prompt-text {
+  font-size: 0.85rem;
+  color: rgba(231, 237, 246, 0.85);
+}
