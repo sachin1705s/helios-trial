@@ -102,7 +102,7 @@ export default function DrawingExperiment() {
 
   const handleBack = useCallback(async () => {
     await disconnect();
-    navigate('/home');
+    navigate('/characters');
   }, [disconnect, navigate]);
 
   const [promptText, setPromptText] = useState('');

@@ -102,7 +102,7 @@ function HostView({ onBack }: { onBack: () => void }) {
     return (
       <div className="experiment-shell">
         <header className="experiment-topbar">
-          <button className="btn ghost" onClick={() => navigate('/home')}>← Back</button>
+          <button className="btn ghost" onClick={() => navigate('/characters')}>← Back</button>
           <h1>Broadcast — Host</h1>
           <span className="exp-badge">Experiment 5</span>
         </header>
@@ -279,7 +279,7 @@ function AudienceView({ onBack }: { onBack: () => void }) {
     return (
       <div className="experiment-shell">
         <header className="experiment-topbar">
-          <button className="btn ghost" onClick={() => navigate('/home')}>← Back</button>
+          <button className="btn ghost" onClick={() => navigate('/characters')}>← Back</button>
           <h1>Broadcast — Watch</h1>
           <span className="exp-badge">Experiment 5</span>
         </header>
@@ -391,7 +391,7 @@ export default function BroadcastExperiment() {
   return (
     <div className="experiment-shell">
       <header className="experiment-topbar">
-        <button className="btn ghost" onClick={() => navigate('/home')}>← Back</button>
+        <button className="btn ghost" onClick={() => navigate('/characters')}>← Back</button>
         <h1>Broadcast</h1>
         <span className="exp-badge">Experiment 5</span>
       </header>

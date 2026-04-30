@@ -2152,7 +2152,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
             ttsHtmlAudioRef.current?.pause();
             ttsHtmlAudioRef.current = null;
             closeActiveCharacter('landing_back');
-            navigate('/home');
+            navigate('/characters');
           }}>
             Back
           </button>

@@ -1,6 +1,6 @@
 import { StrictMode, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Routes, Route, useParams, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, useParams, useLocation, Navigate } from 'react-router-dom';
 import './index.css';
 import App from './App.tsx';
 import AtriumLanding from './demo/atrium/Landing';
@@ -29,7 +29,9 @@ createRoot(document.getElementById('root')!).render(
       <ScrollToTop />
       <Routes>
         <Route path="/" element={<AtriumLanding />} />
-        <Route path="/home" element={<AtriumHome />} />
+        <Route path="/characters" element={<AtriumHome />} />
+        {/* Legacy: the cast page used to live at /home — keep the URL working. */}
+        <Route path="/home" element={<Navigate to="/characters" replace />} />
         <Route path="/about-us" element={<AtriumAbout />} />
         <Route path="/character/:id" element={<CharacterRoute />} />
         <Route path="/lab/drawing"   element={<DrawingExperiment />} />

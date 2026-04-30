@@ -1,4 +1,4 @@
-import { AtriumNav, AtriumFooter } from './Landing';
+import { AtriumNav, AtriumFooter } from './Layout';
 import '../shared/tokens.css';
 import './Atrium.css';
 import './About.css';
