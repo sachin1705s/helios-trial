@@ -57,6 +57,28 @@ type SpeechRecognitionLike = {
 
 const characters = (charactersData as { characters: Character[] }).characters;
 
+// Concatenate Int16 PCM frames (e.g. captured from AudioWorklet) into a single
+// little-endian Int16Array buffer suitable for pcmToWav.
+function concatInt16Frames(frames: Int16Array[]): ArrayBuffer {
+  let total = 0;
+  for (const f of frames) total += f.length;
+  const out = new Int16Array(total);
+  let off = 0;
+  for (const f of frames) { out.set(f, off); off += f.length; }
+  return out.buffer;
+}
+
+// Concatenate raw byte frames (Gemini Live's 24kHz Int16-LE PCM payloads) into
+// one ArrayBuffer suitable for pcmToWav.
+function concatUint8Frames(frames: Uint8Array[]): ArrayBuffer {
+  let total = 0;
+  for (const f of frames) total += f.length;
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const f of frames) { out.set(f, off); off += f.length; }
+  return out.buffer;
+}
+
 function pcmToWav(pcm: ArrayBuffer, sampleRate: number, channels: number, bitDepth: number): ArrayBuffer {
   const dataLen = pcm.byteLength;
   const buf = new ArrayBuffer(44 + dataLen);
@@ -92,7 +114,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   const [isCharacterRecording, setIsCharacterRecording] = useState(false);
   const [isCharacterThinking, setIsCharacterThinking] = useState(false);
   const [isCharacterSpeaking, setIsCharacterSpeaking] = useState(false);
-  const [chatExpanded] = useState(false);
+  const [chatExpanded, setChatExpanded] = useState(false);
   const [characterReply, setCharacterReply] = useState<string | null>(null);
   const [characterSources, setCharacterSources] = useState<{ title: string; url: string }[]>([]);
   const [, setCharacterError] = useState<string | null>(null);
@@ -144,6 +166,22 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   const geminiLiveActiveRef = useRef(false);
   const geminiLivePlaybackTimeRef = useRef(0);
   const geminiLiveSourceNodesRef = useRef<AudioBufferSourceNode[]>([]);
+  // Per-turn PCM buffers used to reconstruct WAV files for chat-history replay.
+  // userPcmFramesRef collects 16kHz Int16 chunks the AudioWorklet/ScriptProcessor
+  // hands us before they go out on the wire to Gemini Live. assistantPcmFramesRef
+  // collects the 24kHz Uint8 chunks we receive from Gemini Live and play back.
+  // Both are flushed (encoded → blob URL → stored) on their respective turn-end
+  // events (inputTranscription for user, turnComplete for assistant).
+  const userPcmFramesRef = useRef<Int16Array[]>([]);
+  const assistantPcmFramesRef = useRef<Uint8Array[]>([]);
+  const [audioRecordings, setAudioRecordings] = useState<Record<string, string>>({});
+  const replayAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [replayingKey, setReplayingKey] = useState<string | null>(null);
+  // Mirrors characterHistory so WS event handlers (defined at session-start
+  // and frozen with stale closures) can read the *current* per-character
+  // length when computing the next message's index — without doing the
+  // antipattern of calling setState inside another setState's updater.
+  const characterHistoryRef = useRef<Record<string, Array<{ role: 'user' | 'assistant'; content: string }>>>({});
   // Two-phase Odyssey transcript buffers — reset each turn
   const glCurrentUserTextRef = useRef('');
   const glOutputTranscriptBufferRef = useRef('');
@@ -489,6 +527,10 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   useEffect(() => {
     isStreamingReadyRef.current = isStreamingReady;
   }, [isStreamingReady]);
+
+  useEffect(() => {
+    characterHistoryRef.current = characterHistory;
+  }, [characterHistory]);
 
   useEffect(() => {
     showLandingRef.current = showLanding;
@@ -1009,6 +1051,37 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
     return bytes;
   };
 
+  // Plays back a buffered chat-history recording. Cancels any in-flight replay
+   // first so rapid clicks across messages don't overlap.
+  const playRecording = (key: string) => {
+    const url = audioRecordings[key];
+    if (!url) return;
+    if (replayAudioRef.current) {
+      try { replayAudioRef.current.pause(); } catch { /* already stopped */ }
+      replayAudioRef.current = null;
+    }
+    if (replayingKey === key) {
+      // Toggle off if user clicks the same one again
+      setReplayingKey(null);
+      return;
+    }
+    const audio = new Audio(url);
+    replayAudioRef.current = audio;
+    setReplayingKey(key);
+    audio.onended = () => {
+      if (replayAudioRef.current === audio) replayAudioRef.current = null;
+      setReplayingKey((current) => (current === key ? null : current));
+    };
+    audio.onerror = () => {
+      if (replayAudioRef.current === audio) replayAudioRef.current = null;
+      setReplayingKey((current) => (current === key ? null : current));
+    };
+    audio.play().catch(() => {
+      if (replayAudioRef.current === audio) replayAudioRef.current = null;
+      setReplayingKey((current) => (current === key ? null : current));
+    });
+  };
+
   // Schedules a 16-bit PCM chunk for gapless playback via the dedicated Gemini Live play context.
   // Safe to call from WebSocket message handlers — uses refs, never stale state.
   const enqueuePCMChunk = (data: Uint8Array, sampleRate: number) => {
@@ -1017,6 +1090,8 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
     if (ctx.state === 'suspended') { ctx.resume().catch(() => undefined); }
     const usable = data.length - (data.length % 2);
     if (usable === 0) return;
+    // Buffer assistant audio for replay (kept separate from the playback path).
+    assistantPcmFramesRef.current.push(new Uint8Array(data.subarray(0, usable)));
     const int16 = new Int16Array(data.buffer, data.byteOffset, usable / 2);
     const float32 = new Float32Array(int16.length);
     for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
@@ -1284,6 +1359,21 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
       glCurrentUserTextRef.current = inputTranscription;
       glOutputTranscriptBufferRef.current = '';
       glPhase2FiredRef.current = false;
+      // Snapshot the user's PCM buffer NOW (before reset). Compute the new
+      // message's index from the live ref (mirrors current state). Then
+      // dispatch BOTH state updates as separate calls — no nesting.
+      const userFrames = userPcmFramesRef.current;
+      userPcmFramesRef.current = [];
+      const userMessageIndex = (characterHistoryRef.current[slide.id]?.length) ?? 0;
+      if (userFrames.length) {
+        try {
+          const wav = pcmToWav(concatInt16Frames(userFrames), 16000, 1, 16);
+          const url = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
+          setAudioRecordings((prevAudio) => ({ ...prevAudio, [`${slide.id}::${userMessageIndex}`]: url }));
+        } catch (err) {
+          console.warn('[chat-replay] failed to encode user audio', err);
+        }
+      }
       setCharacterHistory((prev) => ({
         ...prev,
         [slide.id]: [...(prev[slide.id] ?? []), { role: 'user' as const, content: inputTranscription }],
@@ -1311,6 +1401,19 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
         // already dispatched mid-turn and causes visible scene corrections.
         const displayResponse = geminiResponse.replace(/\*[^*]+\*/g, '').replace(/\s{2,}/g, ' ').trim();
         setCharacterReply(displayResponse);
+        // Same dispatch pattern as the user path — no setState-in-setState.
+        const assistantFrames = assistantPcmFramesRef.current;
+        assistantPcmFramesRef.current = [];
+        const assistantMessageIndex = (characterHistoryRef.current[slide.id]?.length) ?? 0;
+        if (assistantFrames.length) {
+          try {
+            const wav = pcmToWav(concatUint8Frames(assistantFrames), 24000, 1, 16);
+            const url = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
+            setAudioRecordings((prevAudio) => ({ ...prevAudio, [`${slide.id}::${assistantMessageIndex}`]: url }));
+          } catch (err) {
+            console.warn('[chat-replay] failed to encode assistant audio', err);
+          }
+        }
         setCharacterHistory((prev) => ({
           ...prev,
           [slide.id]: [...(prev[slide.id] ?? []), { role: 'assistant' as const, content: displayResponse }],
@@ -1469,6 +1572,8 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
             const workletNode = new AudioWorkletNode(captureCtx, 'pcm-processor');
             workletNode.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
               if (geminiLiveGenerationRef.current !== myGeneration || ws.readyState !== WebSocket.OPEN) return;
+              // Buffer a copy for replay before the data is shipped off to Gemini.
+              userPcmFramesRef.current.push(new Int16Array(e.data.slice(0)));
               ws.send(JSON.stringify({
                 realtimeInput: { audio: { data: arrayBufferToBase64(e.data), mimeType: 'audio/pcm;rate=16000' } },
               }));
@@ -1485,6 +1590,8 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
                 const s = Math.max(-1, Math.min(1, f32[i]));
                 int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
               }
+              // Buffer a copy for replay before shipping off to Gemini.
+              userPcmFramesRef.current.push(new Int16Array(int16));
               ws.send(JSON.stringify({
                 realtimeInput: { audio: { data: arrayBufferToBase64(int16.buffer), mimeType: 'audio/pcm;rate=16000' } },
               }));
@@ -1531,6 +1638,24 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
       }
       const buf = await res.arrayBuffer();
       if (ttsGenerationRef.current !== generation) return;
+      // Capture the WAV for chat-history replay before decode (decode neuters
+      // ArrayBuffers in some browsers, so slice a copy first).
+      try {
+        const list = characterHistoryRef.current[slideId] ?? [];
+        // Greeting was just appended at index list.length - 1. Find the
+        // matching message by content to be robust against ordering edges.
+        const greetingIdx = (() => {
+          for (let i = list.length - 1; i >= 0; i--) {
+            if (list[i].role === 'assistant' && list[i].content === text) return i;
+          }
+          return list.length > 0 ? list.length - 1 : 0;
+        })();
+        const wavCopy = buf.slice(0);
+        const url = URL.createObjectURL(new Blob([wavCopy], { type: 'audio/wav' }));
+        setAudioRecordings((prev) => ({ ...prev, [`${slideId}::${greetingIdx}`]: url }));
+      } catch (err) {
+        console.warn('[chat-replay] failed to capture greeting audio', err);
+      }
       const decoded = await ctx.decodeAudioData(buf);
       if (ttsGenerationRef.current !== generation) return;
       const source = ctx.createBufferSource();
@@ -1600,6 +1725,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
         const reader = ttsRes.body.getReader();
         let playbackTime = ctx.currentTime + 0.05; // 50ms initial buffer
         let leftover = new Uint8Array(0);
+        const replayChunks: Uint8Array[] = []; // mirrored copy for chat-history replay
         debug('[tts] streaming PCM playback started, sampleRate:', sampleRate);
         try {
           while (true) {
@@ -1619,6 +1745,10 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
             const usable = data.length - (data.length % 2);
             leftover = data.slice(usable);
             if (usable === 0) continue;
+            // Mirror a copy of the usable bytes for replay BEFORE we view-cast
+            // them — copyToChannel doesn't modify the source, but the slice
+            // here owns its own bytes regardless.
+            replayChunks.push(new Uint8Array(data.buffer.slice(data.byteOffset, data.byteOffset + usable)));
             const int16 = new Int16Array(data.buffer, data.byteOffset, usable / 2);
             const float32 = new Float32Array(int16.length);
             for (let i = 0; i < int16.length; i++) {
@@ -1637,6 +1767,24 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
             playbackTime += audioBuffer.duration;
           }
           debug('[tts] streaming playback scheduled, total duration:', (playbackTime - ctx.currentTime).toFixed(2), 's');
+          // Stitch the mirrored chunks into a WAV and pin to the latest
+          // matching assistant message for chat-history replay.
+          if (replayChunks.length) {
+            try {
+              const wav = pcmToWav(concatUint8Frames(replayChunks), sampleRate, 1, 16);
+              const url = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
+              const list = slideId ? (characterHistoryRef.current[slideId] ?? []) : [];
+              const idx = (() => {
+                for (let i = list.length - 1; i >= 0; i--) {
+                  if (list[i].role === 'assistant' && list[i].content === text) return i;
+                }
+                return list.length > 0 ? list.length - 1 : 0;
+              })();
+              if (slideId) setAudioRecordings((prev) => ({ ...prev, [`${slideId}::${idx}`]: url }));
+            } catch (err) {
+              console.warn('[chat-replay] failed to encode streaming TTS audio', err);
+            }
+          }
         } catch (err) {
           console.error('[tts] streaming playback error:', err);
         }
@@ -1651,6 +1799,23 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
         const audioData = contentType.includes('audio/pcm')
           ? pcmToWav(arrayBuffer, sampleRate, channels, bitDepth)
           : arrayBuffer;
+        // Capture a copy of audioData (already WAV-wrapped if it started raw)
+        // for chat-history replay — must happen BEFORE decodeAudioData since
+        // decode neuters its input ArrayBuffer in some browsers.
+        try {
+          const replayCopy = audioData.slice(0);
+          const url = URL.createObjectURL(new Blob([replayCopy], { type: 'audio/wav' }));
+          const list = slideId ? (characterHistoryRef.current[slideId] ?? []) : [];
+          const idx = (() => {
+            for (let i = list.length - 1; i >= 0; i--) {
+              if (list[i].role === 'assistant' && list[i].content === text) return i;
+            }
+            return list.length > 0 ? list.length - 1 : 0;
+          })();
+          if (slideId) setAudioRecordings((prev) => ({ ...prev, [`${slideId}::${idx}`]: url }));
+        } catch (err) {
+          console.warn('[chat-replay] failed to capture buffered TTS audio', err);
+        }
         try {
           const decoded = await ctx.decodeAudioData(audioData);
           debug('[tts] decoded audio duration:', decoded.duration.toFixed(2), 's');
@@ -2153,7 +2318,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
             ttsHtmlAudioRef.current?.pause();
             ttsHtmlAudioRef.current = null;
             closeActiveCharacter('landing_back');
-            navigate('/home');
+            navigate('/characters');
           }}>
             Back
           </button>
@@ -2162,74 +2327,155 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
         <main className="slide-shell" />
 
         <div className="story-bar-wrap">
+          {/* Drawer shell: positioning context so the chevron can dock onto
+              the drawer's bottom edge (half-in/half-out, speech-bubble tail) */}
+          <div className="chat-drawer-shell">
           {/* Slide-up transcript drawer */}
-          <div className={`chat-drawer ${chatExpanded ? 'chat-drawer--open' : ''}`}>
+          <div className={`chat-drawer ${chatExpanded ? 'chat-drawer--open' : ''}`} aria-hidden={!chatExpanded}>
             <div className="chat-drawer__body">
-              {activeCharacterHistory.slice(-8).map((msg, idx) => (
-                <div key={`${msg.role}-${idx}`} className={`einstein-chat-line ${msg.role === 'user' ? 'user' : 'assistant'}`}>
-                  <span className="einstein-chat-role">{msg.role === 'user' ? 'You' : activeCharacterName}:</span>
-                  <span className="einstein-chat-text">{msg.content}</span>
-                </div>
-              ))}
-              {characterReply && !activeCharacterHistory.some((m) => m.content === characterReply) && (
-                <div className="einstein-chat-line assistant">
-                  <span className="einstein-chat-role">{activeCharacterName}:</span>
-                  <span className="einstein-chat-text">{characterReply}</span>
-                  {characterSources.length > 0 && (
-                    <div className="chat-sources">
-                      {characterSources.map((s, i) => (
-                        <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" className="chat-source-link">{s.title}</a>
-                      ))}
+              {activeCharacterHistory.slice(-20).map((msg, _idx) => {
+                // The slice(-20) means the index in this array isn't the same as
+                // the absolute index in characterHistory (which is what audio is
+                // keyed by). Recompute the absolute index for this message.
+                const sliceStart = Math.max(0, activeCharacterHistory.length - 20);
+                const absoluteIdx = sliceStart + _idx;
+                const prev = activeCharacterHistory[absoluteIdx - 1];
+                const showWho = !prev || prev.role !== msg.role;
+                const audioKey = `${slide.id}::${absoluteIdx}`;
+                const hasAudio = Boolean(audioRecordings[audioKey]);
+                const isPlaying = replayingKey === audioKey;
+                return (
+                  <div key={`${msg.role}-${absoluteIdx}`} className={`chat-msg chat-msg--${msg.role}`}>
+                    {showWho && (
+                      <span className="chat-msg__who">
+                        {msg.role === 'user' ? 'You' : activeCharacterName}
+                      </span>
+                    )}
+                    <div className="chat-msg__bubble">
+                      <p className="chat-msg__text">{msg.content}</p>
+                      {hasAudio && (
+                        <button
+                          type="button"
+                          className={`chat-msg__play ${isPlaying ? 'chat-msg__play--playing' : ''}`}
+                          aria-label={isPlaying ? 'Stop playback' : `Replay ${msg.role === 'user' ? 'your message' : activeCharacterName}`}
+                          title={isPlaying ? 'Stop' : 'Replay'}
+                          onClick={(e) => { e.stopPropagation(); playRecording(audioKey); }}
+                        >
+                          {isPlaying ? (
+                            <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+                          ) : (
+                            <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
+                          )}
+                        </button>
+                      )}
                     </div>
+                  </div>
+                );
+              })}
+              {characterReply && !activeCharacterHistory.some((m) => m.content === characterReply) && (
+                <div className="chat-msg chat-msg--assistant">
+                  {(activeCharacterHistory[activeCharacterHistory.length - 1]?.role !== 'assistant') && (
+                    <span className="chat-msg__who">{activeCharacterName}</span>
                   )}
+                  <div className="chat-msg__bubble">
+                    <p className="chat-msg__text">{characterReply}</p>
+                    {characterSources.length > 0 && (
+                      <div className="chat-sources">
+                        {characterSources.map((s, i) => (
+                          <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" className="chat-source-link">{s.title}</a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
+              )}
+              {activeCharacterHistory.length === 0 && !characterReply && (
+                <p className="chat-drawer__empty">No messages yet — say something below.</p>
               )}
             </div>
           </div>
 
-          {!isStreamingReady && streamState !== 'error' && (
-            <div className="stream-loading-badge" aria-live="polite">
-              <span className="stream-loading-dot" aria-hidden />
-              Waking up {activeCharacterName}…
-            </div>
+          {/* History toggle — sits at the seam between drawer and pill */}
+          {(activeCharacterHistory.length > 0 || characterReply) && (
+            <button
+              type="button"
+              className={`chat-history-toggle ${chatExpanded ? 'chat-history-toggle--open' : ''}`}
+              onClick={() => setChatExpanded((v) => !v)}
+              aria-expanded={chatExpanded}
+              aria-controls="chat-drawer-body"
+              aria-label={chatExpanded ? 'Hide conversation' : 'Show conversation'}
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="6 15 12 9 18 15" />
+              </svg>
+              <span className="chat-history-toggle__label">
+                {chatExpanded ? 'Hide' : `${activeCharacterHistory.length || 1} message${(activeCharacterHistory.length || 1) === 1 ? '' : 's'}`}
+              </span>
+            </button>
           )}
+          </div>{/* /.chat-drawer-shell */}
+
         <footer className="story-bar story-bar--compact">
-          <div className="story-actions">
-            <div className="prompt-input">
-              <input
-                type="text"
-                value={textPrompt}
-                onChange={(event) => setTextPrompt(event.target.value)}
-                onKeyDown={handleTextPromptKeyDown}
-                placeholder="Type a wish..."
-                disabled={!isStreamingReady}
-              />
-              <button className="btn ghost" onClick={handleTextPromptSubmit} disabled={!isStreamingReady}>
-                Send
-              </button>
-            </div>
+          <div className={`chat-pill ${!isStreamingReady && streamState !== 'error' ? 'chat-pill--waking' : ''}`}>
+            <input
+              className="chat-pill__input"
+              type="text"
+              value={textPrompt}
+              onChange={(event) => setTextPrompt(event.target.value)}
+              onKeyDown={handleTextPromptKeyDown}
+              placeholder={
+                streamState === 'error'
+                  ? 'Reconnecting…'
+                  : !isStreamingReady
+                    ? `Waking up ${activeCharacterName}…`
+                    : 'Type a wish…'
+              }
+              disabled={!isStreamingReady}
+              aria-label="Type a message"
+              aria-busy={!isStreamingReady}
+            />
+            {/* WhatsApp-style toggle: send if there's text, mic otherwise.
+                Recording states still take precedence over both. */}
             {isCharacterRecording ? (
               <button
+                type="button"
                 className={[
-                  'voice-orb',
-                  isCharacterThinking ? 'voice-orb--thinking' : '',
-                  isCharacterSpeaking ? 'voice-orb--speaking' : 'voice-orb--listening',
+                  'chat-pill__action',
+                  'chat-pill__mic',
+                  'chat-pill__mic--recording',
+                  isCharacterThinking ? 'chat-pill__mic--thinking' : '',
+                  isCharacterSpeaking ? 'chat-pill__mic--speaking' : 'chat-pill__mic--listening',
                 ].filter(Boolean).join(' ')}
                 onClick={stopGeminiLiveSession}
                 aria-label={isCharacterSpeaking ? `${activeCharacterName} is speaking — click to end` : 'Listening — click to end'}
-              />
+              >
+                <span className="chat-pill__mic-pulse" aria-hidden />
+              </button>
+            ) : textPrompt.trim().length > 0 ? (
+              <button
+                type="button"
+                className="chat-pill__action chat-pill__send"
+                onClick={handleTextPromptSubmit}
+                disabled={!isStreamingReady}
+                aria-label="Send message"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M22 2L11 13" />
+                  <path d="M22 2l-7 20-4-9-9-4 20-7z" />
+                </svg>
+              </button>
             ) : (
               <button
-                className="btn accent ptt-btn"
+                type="button"
+                className="chat-pill__action chat-pill__mic"
                 onClick={startGeminiLiveSession}
+                disabled={!isStreamingReady}
                 aria-label={`Talk to ${activeCharacterName}`}
               >
-                <img
-                  className="recording-icon"
-                  src="/images/recording_icon_v3.png"
-                  alt=""
-                  aria-hidden="true"
-                />
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="9" y="3" width="6" height="12" rx="3" />
+                  <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" />
+                </svg>
               </button>
             )}
           </div>

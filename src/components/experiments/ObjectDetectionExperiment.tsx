@@ -132,7 +132,7 @@ export default function ObjectDetectionExperiment() {
   const handleBack = useCallback(async () => {
     stopDetecting(); stopWebcam();
     await disconnect();
-    navigate('/home');
+    navigate('/characters');
   }, [disconnect, navigate, stopDetecting, stopWebcam]);
 
   return (

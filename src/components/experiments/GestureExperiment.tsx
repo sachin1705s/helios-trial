@@ -104,7 +104,7 @@ export default function GestureExperiment() {
   const handleBack = useCallback(async () => {
     stopPolling(); stopWebcam();
     await disconnect();
-    navigate('/home');
+    navigate('/characters');
   }, [disconnect, navigate, stopPolling, stopWebcam]);
 
   return (

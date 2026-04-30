@@ -103,14 +103,14 @@ export default function CustomCharacterExperiment() {
 
   const handleBack = useCallback(async () => {
     await disconnect();
-    navigate('/home');
+    navigate('/characters');
   }, [disconnect, navigate]);
 
   if (step === 'setup') {
     return (
       <div className="experiment-shell">
         <header className="experiment-topbar">
-          <button className="btn ghost" onClick={() => navigate('/home')}>← Back</button>
+          <button className="btn ghost" onClick={() => navigate('/characters')}>← Back</button>
           <h1>Custom Characters</h1>
           <span className="exp-badge">Experiment 4</span>
         </header>
