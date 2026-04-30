@@ -278,6 +278,12 @@ const memPool = {
 // ZCOUNT key now +inf  → active leases (O(log n), no SCAN)
 // ZADD key score member → add lease
 // ZREM key member       → remove lease
+//
+// Every ZADD must be paired with EXPIRE on the *set key itself*. Without
+// that, the slot set persists with TTL=-1 (the bug we hit in production):
+// once leases were no longer being allocated, stale members lingered
+// forever because zremrangebyscore only runs on the next allocate, and
+// Redis can't auto-collect ZSET members without a key-level TTL.
 const slotSetKey = (keyIndex) => `odyssey:slots:${keyIndex}`;
 
 const resetOdysseyPool = async (keys) => {
@@ -307,13 +313,20 @@ const allocateOdysseyLease = async () => {
     const expiry = now + ODYSSEY_LEASE_TTL_MS;
     for (let keyIndex = 0; keyIndex < keys.length; keyIndex++) {
       const setKey = slotSetKey(keyIndex);
-      // Remove expired entries then count active — 2 commands, no SCAN
-      await redis.zremrangebyscore(setKey, '-inf', now - 1);
+      // Sweep members whose expiry has passed. Exclusive upper bound `(now`
+      // removes scores strictly less than now so the boundary is unambiguous
+      // (matches the zcount lower bound on the very next line).
+      await redis.zremrangebyscore(setKey, '-inf', `(${now}`);
       const count = await redis.zcount(setKey, now, '+inf');
       if (count >= ODYSSEY_KEY_LIMIT) continue;
       const leaseId = randomUUID();
+      // ZADD first (this creates the key if it doesn't exist), then EXPIRE
+      // on the set itself — without the EXPIRE, Redis would store the key
+      // with TTL=-1 and stale members would never get collected once the
+      // server stopped issuing new leases.
+      await redis.zadd(setKey, { score: expiry, member: leaseId });
       await Promise.all([
-        redis.zadd(setKey, { score: expiry, member: leaseId }),
+        redis.expire(setKey, ODYSSEY_LEASE_TTL_S),
         redis.set(`odyssey:lease:${leaseId}`, keyIndex, { ex: ODYSSEY_LEASE_TTL_S }),
       ]);
       return { leaseId, apiKey: keys[keyIndex], keyIndex };
@@ -360,8 +373,14 @@ const touchOdysseyLease = async (leaseId) => {
     const keyIndex = await redis.get(`odyssey:lease:${leaseId}`);
     if (keyIndex === null) return false;
     const expiry = Date.now() + ODYSSEY_LEASE_TTL_MS;
+    const setKey = slotSetKey(Number(keyIndex));
+    // Same ordering rule as in allocateOdysseyLease: ZADD first so the key
+    // is guaranteed to exist, then refresh both TTLs together. Refreshing
+    // the slot set's TTL is what keeps it from drifting back to -1 while
+    // a long-running session is heartbeating.
+    await redis.zadd(setKey, { score: expiry, member: leaseId });
     await Promise.all([
-      redis.zadd(slotSetKey(Number(keyIndex)), { score: expiry, member: leaseId }),
+      redis.expire(setKey, ODYSSEY_LEASE_TTL_S),
       redis.expire(`odyssey:lease:${leaseId}`, ODYSSEY_LEASE_TTL_S),
     ]);
     return true;
