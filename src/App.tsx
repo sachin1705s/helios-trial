@@ -92,7 +92,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   const [isCharacterRecording, setIsCharacterRecording] = useState(false);
   const [isCharacterThinking, setIsCharacterThinking] = useState(false);
   const [isCharacterSpeaking, setIsCharacterSpeaking] = useState(false);
-  const [chatExpanded] = useState(false);
+  const [chatExpanded, setChatExpanded] = useState(false);
   const [characterReply, setCharacterReply] = useState<string | null>(null);
   const [characterSources, setCharacterSources] = useState<{ title: string; url: string }[]>([]);
   const [, setCharacterError] = useState<string | null>(null);
@@ -2162,18 +2162,33 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
 
         <div className="story-bar-wrap">
           {/* Slide-up transcript drawer */}
-          <div className={`chat-drawer ${chatExpanded ? 'chat-drawer--open' : ''}`}>
+          <div className={`chat-drawer ${chatExpanded ? 'chat-drawer--open' : ''}`} aria-hidden={!chatExpanded}>
             <div className="chat-drawer__body">
-              {activeCharacterHistory.slice(-8).map((msg, idx) => (
-                <div key={`${msg.role}-${idx}`} className={`einstein-chat-line ${msg.role === 'user' ? 'user' : 'assistant'}`}>
-                  <span className="einstein-chat-role">{msg.role === 'user' ? 'You' : activeCharacterName}:</span>
-                  <span className="einstein-chat-text">{msg.content}</span>
+              {activeCharacterHistory.slice(-20).map((msg, idx) => (
+                <div key={`${msg.role}-${idx}`} className={`chat-msg chat-msg--${msg.role}`}>
+                  <div className="chat-msg__head">
+                    <span className="chat-msg__who">{msg.role === 'user' ? 'You' : activeCharacterName}</span>
+                    {msg.role === 'user' && (
+                      <button
+                        type="button"
+                        className="chat-msg__play"
+                        aria-label="Replay your recording (coming soon)"
+                        title="Replay coming soon"
+                        disabled
+                      >
+                        <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
+                      </button>
+                    )}
+                  </div>
+                  <p className="chat-msg__text">{msg.content}</p>
                 </div>
               ))}
               {characterReply && !activeCharacterHistory.some((m) => m.content === characterReply) && (
-                <div className="einstein-chat-line assistant">
-                  <span className="einstein-chat-role">{activeCharacterName}:</span>
-                  <span className="einstein-chat-text">{characterReply}</span>
+                <div className="chat-msg chat-msg--assistant">
+                  <div className="chat-msg__head">
+                    <span className="chat-msg__who">{activeCharacterName}</span>
+                  </div>
+                  <p className="chat-msg__text">{characterReply}</p>
                   {characterSources.length > 0 && (
                     <div className="chat-sources">
                       {characterSources.map((s, i) => (
@@ -2183,52 +2198,92 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
                   )}
                 </div>
               )}
+              {activeCharacterHistory.length === 0 && !characterReply && (
+                <p className="chat-drawer__empty">No messages yet — say something below.</p>
+              )}
             </div>
           </div>
 
-          {!isStreamingReady && streamState !== 'error' && (
-            <div className="stream-loading-badge" aria-live="polite">
-              <span className="stream-loading-dot" aria-hidden />
-              Waking up {activeCharacterName}…
-            </div>
+          {/* History toggle — sits at the seam between drawer and pill */}
+          {(activeCharacterHistory.length > 0 || characterReply) && (
+            <button
+              type="button"
+              className={`chat-history-toggle ${chatExpanded ? 'chat-history-toggle--open' : ''}`}
+              onClick={() => setChatExpanded((v) => !v)}
+              aria-expanded={chatExpanded}
+              aria-controls="chat-drawer-body"
+              aria-label={chatExpanded ? 'Hide conversation' : 'Show conversation'}
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="6 15 12 9 18 15" />
+              </svg>
+              <span className="chat-history-toggle__label">
+                {chatExpanded ? 'Hide' : `${activeCharacterHistory.length || 1} message${(activeCharacterHistory.length || 1) === 1 ? '' : 's'}`}
+              </span>
+            </button>
           )}
+
         <footer className="story-bar story-bar--compact">
-          <div className="story-actions">
-            <div className="prompt-input">
-              <input
-                type="text"
-                value={textPrompt}
-                onChange={(event) => setTextPrompt(event.target.value)}
-                onKeyDown={handleTextPromptKeyDown}
-                placeholder="Type a wish..."
-                disabled={!isStreamingReady}
-              />
-              <button className="btn ghost" onClick={handleTextPromptSubmit} disabled={!isStreamingReady}>
-                Send
-              </button>
-            </div>
+          <div className={`chat-pill ${!isStreamingReady && streamState !== 'error' ? 'chat-pill--waking' : ''}`}>
+            <input
+              className="chat-pill__input"
+              type="text"
+              value={textPrompt}
+              onChange={(event) => setTextPrompt(event.target.value)}
+              onKeyDown={handleTextPromptKeyDown}
+              placeholder={
+                streamState === 'error'
+                  ? 'Reconnecting…'
+                  : !isStreamingReady
+                    ? `Waking up ${activeCharacterName}…`
+                    : 'Type a wish…'
+              }
+              disabled={!isStreamingReady}
+              aria-label="Type a message"
+              aria-busy={!isStreamingReady}
+            />
+            {/* WhatsApp-style toggle: send if there's text, mic otherwise.
+                Recording states still take precedence over both. */}
             {isCharacterRecording ? (
               <button
+                type="button"
                 className={[
-                  'voice-orb',
-                  isCharacterThinking ? 'voice-orb--thinking' : '',
-                  isCharacterSpeaking ? 'voice-orb--speaking' : 'voice-orb--listening',
+                  'chat-pill__action',
+                  'chat-pill__mic',
+                  'chat-pill__mic--recording',
+                  isCharacterThinking ? 'chat-pill__mic--thinking' : '',
+                  isCharacterSpeaking ? 'chat-pill__mic--speaking' : 'chat-pill__mic--listening',
                 ].filter(Boolean).join(' ')}
                 onClick={stopGeminiLiveSession}
                 aria-label={isCharacterSpeaking ? `${activeCharacterName} is speaking — click to end` : 'Listening — click to end'}
-              />
+              >
+                <span className="chat-pill__mic-pulse" aria-hidden />
+              </button>
+            ) : textPrompt.trim().length > 0 ? (
+              <button
+                type="button"
+                className="chat-pill__action chat-pill__send"
+                onClick={handleTextPromptSubmit}
+                disabled={!isStreamingReady}
+                aria-label="Send message"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M22 2L11 13" />
+                  <path d="M22 2l-7 20-4-9-9-4 20-7z" />
+                </svg>
+              </button>
             ) : (
               <button
-                className="btn accent ptt-btn"
+                type="button"
+                className="chat-pill__action chat-pill__mic"
                 onClick={startGeminiLiveSession}
+                disabled={!isStreamingReady}
                 aria-label={`Talk to ${activeCharacterName}`}
               >
-                <img
-                  className="recording-icon"
-                  src="/images/recording_icon_v3.png"
-                  alt=""
-                  aria-hidden="true"
-                />
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="9" y="3" width="6" height="12" rx="3" />
+                  <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" />
+                </svg>
               </button>
             )}
           </div>

@@ -2381,3 +2381,442 @@ textarea.exp-text-input { font-family: inherit; }
   font-size: 0.85rem;
   color: rgba(231, 237, 246, 0.85);
 }
+
+/* ========================================================================
+   CHAT PILL + HISTORY DRAWER + CHEVRON TOGGLE
+   Replaces the chunky stack of input + Send + giant red mic with one
+   compact horizontal pill. Mic stays inline, send becomes an icon, the
+   transcript drawer opens upward via a floating chevron above the pill.
+   Loaded last in App.css so it overrides the older .prompt-input /
+   .story-actions / .voice-orb rules.
+   ======================================================================== */
+
+/* Container — keep the pill centered and narrow on desktop */
+.story-bar-wrap .story-bar--compact {
+  background: transparent;
+  border: 0;
+  backdrop-filter: none;
+  padding: 0;
+  max-width: 480px;
+  width: 100%;
+  align-self: center;
+}
+
+/* The chat pill itself */
+.chat-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 44px;
+  padding: 4px 4px 4px 14px;
+  border-radius: 999px;
+  background: rgba(12, 16, 24, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 8px 24px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+.chat-pill:focus-within {
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 12px 32px rgba(0, 0, 0, 0.36);
+}
+
+.chat-pill__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: rgba(231, 237, 246, 0.95);
+  font: inherit;
+  font-size: 14px;
+  letter-spacing: 0.01em;
+  padding: 0;
+}
+.chat-pill__input::placeholder {
+  color: rgba(231, 237, 246, 0.42);
+  font-style: italic;
+}
+.chat-pill__input:disabled {
+  cursor: not-allowed;
+}
+
+/* Send button — icon, accent terracotta */
+.chat-pill__send,
+.chat-pill__mic {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.25s ease, border-color 0.25s ease, transform 0.2s ease, color 0.25s ease, opacity 0.25s ease;
+  font-family: inherit;
+}
+
+.chat-pill__send {
+  background: rgba(244, 75, 58, 0.18);
+  color: rgba(255, 220, 210, 0.92);
+}
+.chat-pill__send svg { transform: translate(-1px, 0); }
+.chat-pill__send:hover:not(:disabled) {
+  background: rgba(244, 75, 58, 0.32);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+.chat-pill__send:active:not(:disabled) { transform: translateY(0); }
+.chat-pill__send:disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+}
+
+/* Mic — neutral by default, becomes a recording orb when active */
+.chat-pill__mic {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(231, 237, 246, 0.78);
+  border-color: rgba(255, 255, 255, 0.12);
+  position: relative;
+}
+.chat-pill__mic:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(231, 237, 246, 0.95);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+.chat-pill__mic:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.chat-pill__mic--recording {
+  background: rgba(244, 75, 58, 0.22);
+  border-color: rgba(244, 75, 58, 0.55);
+  color: rgba(255, 220, 210, 0.95);
+}
+.chat-pill__mic-pulse {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgb(244, 75, 58);
+  box-shadow: 0 0 0 0 rgba(244, 75, 58, 0.55);
+}
+.chat-pill__mic--listening .chat-pill__mic-pulse {
+  animation: chat-mic-listen 1.4s ease-in-out infinite;
+}
+.chat-pill__mic--thinking .chat-pill__mic-pulse {
+  background: rgba(244, 75, 58, 0.55);
+  animation: chat-mic-think 2.2s ease-in-out infinite;
+}
+.chat-pill__mic--speaking {
+  background: rgba(100, 160, 255, 0.18);
+  border-color: rgba(100, 160, 255, 0.55);
+}
+.chat-pill__mic--speaking .chat-pill__mic-pulse {
+  background: rgb(100, 160, 255);
+  animation: chat-mic-speak 0.8s ease-in-out infinite;
+}
+@keyframes chat-mic-listen {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(244, 75, 58, 0.55); transform: scale(1); }
+  50%      { box-shadow: 0 0 0 10px rgba(244, 75, 58, 0); transform: scale(1.12); }
+}
+@keyframes chat-mic-think {
+  0%, 100% { transform: scale(0.85); opacity: 0.7; }
+  50%      { transform: scale(1.05); opacity: 1; }
+}
+@keyframes chat-mic-speak {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(0.78); }
+}
+
+/* Floating chevron — sits centered above the pill, gentle bob */
+.chat-history-toggle {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 6px 10px;
+  border-radius: 999px;
+  background: rgba(12, 16, 24, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(231, 237, 246, 0.82);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.24);
+  animation: chat-toggle-float 3.2s ease-in-out infinite;
+  transition: background 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+}
+.chat-history-toggle:hover {
+  background: rgba(12, 16, 24, 0.82);
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
+}
+.chat-history-toggle svg {
+  transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+  color: rgba(231, 237, 246, 0.82);
+}
+.chat-history-toggle:hover svg { color: #ffffff; }
+.chat-history-toggle--open {
+  animation-play-state: paused;
+  background: rgba(12, 16, 24, 0.82);
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
+}
+.chat-history-toggle--open svg { transform: rotate(180deg); }
+.chat-history-toggle__label { line-height: 1; }
+@keyframes chat-toggle-float {
+  0%, 100% { transform: translate(-50%, 0); }
+  50%      { transform: translate(-50%, -3px); }
+}
+
+/* Position context for the floating chevron */
+.story-bar-wrap { position: relative; }
+
+/* ---------- Drawer redesign (overrides earlier .chat-drawer rules) ---------- */
+.story-bar-wrap .chat-drawer {
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.45s cubic-bezier(0.22, 1, 0.36, 1), margin-bottom 0.45s ease;
+}
+.story-bar-wrap .chat-drawer--open {
+  max-height: 340px;
+  margin-bottom: 36px; /* clears the floating chevron */
+}
+
+.story-bar-wrap .chat-drawer__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 18px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(12, 16, 24, 0.62);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 14px 40px rgba(0, 0, 0, 0.4);
+  overflow-y: auto;
+  max-height: 320px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.18) transparent;
+}
+.story-bar-wrap .chat-drawer__body::-webkit-scrollbar { width: 6px; }
+.story-bar-wrap .chat-drawer__body::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.16);
+  border-radius: 4px;
+}
+
+/* Individual message rows */
+.chat-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+}
+.chat-msg__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.chat-msg__who {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(231, 237, 246, 0.5);
+}
+.chat-msg--user .chat-msg__who   { color: rgba(121, 150, 255, 0.78); }
+.chat-msg--assistant .chat-msg__who { color: rgba(99, 215, 165, 0.85); }
+
+.chat-msg__text {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: rgba(231, 237, 246, 0.92);
+}
+.chat-msg--user .chat-msg__text {
+  color: rgba(231, 237, 246, 0.78);
+}
+
+/* Stubbed play button — disabled affordance, signposts future work */
+.chat-msg__play {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(121, 150, 255, 0.32);
+  background: rgba(121, 150, 255, 0.10);
+  color: rgba(121, 150, 255, 0.7);
+  cursor: not-allowed;
+  opacity: 0.62;
+  transition: opacity 0.2s ease;
+}
+.chat-msg__play svg { transform: translate(0.5px, 0); }
+
+.chat-drawer__empty {
+  margin: 0;
+  font-size: 13px;
+  color: rgba(231, 237, 246, 0.45);
+  font-style: italic;
+  text-align: center;
+  padding: 8px 4px;
+}
+
+/* ---------- Mobile overrides ---------- */
+@media (max-width: 640px) {
+  /* Defeat the older rule that stacked .story-actions vertically */
+  .story-bar-wrap .story-bar--compact { padding: 0; max-width: 100%; }
+  .chat-pill {
+    height: 42px;
+    padding: 4px 4px 4px 12px;
+    gap: 4px;
+  }
+  .chat-pill__send,
+  .chat-pill__mic { width: 34px; height: 34px; }
+  .chat-pill__input { font-size: 13.5px; }
+  .chat-history-toggle {
+    font-size: 10px;
+    padding: 5px 10px 5px 8px;
+    bottom: calc(100% + 6px);
+  }
+  .story-bar-wrap .chat-drawer--open { max-height: 50vh; }
+  .story-bar-wrap .chat-drawer__body { max-height: calc(50vh - 24px); padding: 14px 14px 12px; }
+  .chat-msg__text { font-size: 13px; }
+}
+
+/* Hide any leftover vertical stacking from older .story-actions rule */
+.story-bar-wrap .story-bar--compact .story-actions { display: none; }
+
+/* ---------- Polish: keep loading badge out of the chevron+drawer stack ---------- */
+.story-bar-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+}
+.story-bar-wrap .stream-loading-badge {
+  position: absolute;
+  bottom: calc(100% + 18px);
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  white-space: nowrap;
+  z-index: 4;
+}
+.story-bar-wrap:has(.chat-drawer--open) .stream-loading-badge { display: none; }
+
+/* ============================================================
+   v2 polish — tighten drawer/pill seam, in-pill waking state,
+   right-pointing send icon, WhatsApp-style send/mic toggle
+   ============================================================ */
+
+/* Drawer + toggle sit tight to the pill. Chevron is now in flow,
+   not absolute, so the gap is collapsible. */
+.story-bar-wrap .chat-history-toggle {
+  position: static;
+  transform: none;
+  margin: 0 auto 6px;
+  align-self: center;
+}
+.story-bar-wrap .chat-history-toggle:hover { transform: none; }
+@keyframes chat-toggle-float-flow {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-3px); }
+}
+.story-bar-wrap .chat-history-toggle:not(.chat-history-toggle--open) {
+  animation: chat-toggle-float-flow 3.2s ease-in-out infinite;
+}
+.story-bar-wrap .chat-history-toggle--open {
+  animation: none;
+  transform: none;
+}
+
+/* Drawer hugs the chevron — no big gap below it */
+.story-bar-wrap .chat-drawer--open {
+  margin-bottom: 0;
+}
+.story-bar-wrap .chat-drawer__body {
+  margin-bottom: 0;
+}
+
+/* Loading badge: gone. Old absolute positioning + hide-when-open
+   rules supplanted by an in-pill placeholder + border shimmer. */
+.story-bar-wrap .stream-loading-badge { display: none !important; }
+
+/* Pill while character is waking up: subtle moving sheen on the border,
+   placeholder italics, input is disabled. */
+.chat-pill--waking {
+  border-color: rgba(255, 255, 255, 0.18);
+}
+.chat-pill--waking::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 999px;
+  padding: 1px;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    rgba(121, 150, 255, 0.55) 50%,
+    transparent 70%
+  );
+  background-size: 220% 100%;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  animation: chat-pill-shimmer 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+.chat-pill { position: relative; }
+@keyframes chat-pill-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -100% 0; }
+}
+.chat-pill--waking .chat-pill__input::placeholder {
+  font-style: italic;
+  color: rgba(231, 237, 246, 0.62);
+}
+
+/* Unified action button slot — only one button rendered at a time now */
+.chat-pill__action { /* class shared by send + mic so spacing stays even */ }
+
+/* Action animates in/out smoothly when state flips between mic/send */
+.chat-pill__action {
+  animation: chat-action-in 0.2s ease both;
+}
+@keyframes chat-action-in {
+  from { opacity: 0; transform: scale(0.85); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* Mobile: same tight seam */
+@media (max-width: 640px) {
+  .story-bar-wrap .chat-history-toggle { margin-bottom: 4px; }
+}
