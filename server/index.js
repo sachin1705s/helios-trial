@@ -253,7 +253,8 @@ const sanitizeModelReply = (text) => {
 };
 
 const ODYSSEY_KEY_LIMIT = Math.max(1, Number(process.env.ODYSSEY_KEY_LIMIT || 5));
-const ODYSSEY_LEASE_TTL_MS = Math.max(60_000, Number(process.env.ODYSSEY_LEASE_TTL_MS || 2 * 60 * 60 * 1000));
+// const ODYSSEY_LEASE_TTL_MS = Math.max(60_000, Number(process.env.ODYSSEY_LEASE_TTL_MS || 2 * 60 * 60 * 1000));
+const ODYSSEY_LEASE_TTL_MS = Math.max(7*60*1000);
 const ODYSSEY_LEASE_TTL_S = Math.ceil(ODYSSEY_LEASE_TTL_MS / 1000);
 
 // ─── Upstash Redis pool (shared across all serverless instances) ───────────────
