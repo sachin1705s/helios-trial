@@ -2820,3 +2820,428 @@ textarea.exp-text-input { font-family: inherit; }
 @media (max-width: 640px) {
   .story-bar-wrap .chat-history-toggle { margin-bottom: 4px; }
 }
+
+/* ============================================================
+   v3 polish — chat-drawer bubble layout for the expanded view
+   Replaces the flat label+paragraph rows with proper alternating
+   chat bubbles, a soft top fade for scroll content, and a
+   chevron toggle that docks onto the drawer's bottom edge so
+   the open state reads as one connected surface.
+   ============================================================ */
+
+/* Soft top + bottom fade so scrolled content blends into the chrome */
+.story-bar-wrap .chat-drawer__body {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 22px, #000 calc(100% - 6px), transparent 100%);
+          mask-image: linear-gradient(to bottom, transparent 0, #000 22px, #000 calc(100% - 6px), transparent 100%);
+  padding-top: 26px;
+  padding-bottom: 18px;
+  gap: 10px;
+}
+
+/* Bubble row — overrides the older block-style chat-msg rules */
+.story-bar-wrap .chat-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 78%;
+  padding: 0;
+}
+.story-bar-wrap .chat-msg--user      { align-self: flex-end;   align-items: flex-end; }
+.story-bar-wrap .chat-msg--assistant { align-self: flex-start; align-items: flex-start; }
+
+/* Role caption — only shown on first message of a series. Tiny and quiet. */
+.story-bar-wrap .chat-msg__who {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  padding: 0 6px;
+  margin-bottom: 1px;
+}
+.story-bar-wrap .chat-msg--user      .chat-msg__who { color: rgba(244, 75, 58, 0.62); }
+.story-bar-wrap .chat-msg--assistant .chat-msg__who { color: rgba(99, 215, 165, 0.62); }
+
+/* The bubble itself */
+.story-bar-wrap .chat-msg__bubble {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 9px 13px 10px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: rgba(231, 237, 246, 0.95);
+  max-width: 100%;
+}
+.story-bar-wrap .chat-msg--user .chat-msg__bubble {
+  background: rgba(244, 75, 58, 0.13);
+  border-color: rgba(244, 75, 58, 0.26);
+  border-bottom-right-radius: 5px;
+  color: rgba(255, 230, 224, 0.96);
+}
+.story-bar-wrap .chat-msg--assistant .chat-msg__bubble {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.10);
+  border-bottom-left-radius: 5px;
+}
+
+.story-bar-wrap .chat-msg__text {
+  margin: 0;
+  flex: 1 1 auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+/* Tiny play icon nestled in the bottom-right corner of user bubbles */
+.story-bar-wrap .chat-msg__play {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin-bottom: 1px;
+  border-radius: 50%;
+  border: 1px solid rgba(244, 75, 58, 0.42);
+  background: rgba(244, 75, 58, 0.18);
+  color: rgba(255, 220, 210, 0.88);
+  cursor: not-allowed;
+  opacity: 0.78;
+  transition: opacity 0.2s ease;
+}
+.story-bar-wrap .chat-msg__play svg { transform: translate(0.5px, 0); }
+
+/* Sources (assistant only) sit *below* the text inside the same bubble */
+.story-bar-wrap .chat-msg__bubble .chat-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+  width: 100%;
+  flex-basis: 100%;
+}
+
+/* Empty state inherits the bubble feel without being a bubble */
+.story-bar-wrap .chat-drawer__empty {
+  align-self: center;
+  text-align: center;
+  font-style: italic;
+  color: rgba(231, 237, 246, 0.4);
+  font-size: 13px;
+  margin: 8px 0 0;
+}
+
+/* Stagger the entrance so the drawer feels like it's "opening" */
+.story-bar-wrap .chat-drawer--open .chat-msg {
+  animation: chat-bubble-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes chat-bubble-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.story-bar-wrap .chat-drawer--open .chat-msg:nth-of-type(1) { animation-delay: 0.04s; }
+.story-bar-wrap .chat-drawer--open .chat-msg:nth-of-type(2) { animation-delay: 0.09s; }
+.story-bar-wrap .chat-drawer--open .chat-msg:nth-of-type(3) { animation-delay: 0.14s; }
+.story-bar-wrap .chat-drawer--open .chat-msg:nth-of-type(4) { animation-delay: 0.18s; }
+.story-bar-wrap .chat-drawer--open .chat-msg:nth-of-type(5) { animation-delay: 0.22s; }
+.story-bar-wrap .chat-drawer--open .chat-msg:nth-of-type(6) { animation-delay: 0.26s; }
+
+/* Dock the chevron onto the drawer's bottom edge — no gap when open */
+.story-bar-wrap .chat-drawer--open ~ .chat-history-toggle,
+.story-bar-wrap .chat-drawer ~ .chat-history-toggle.chat-history-toggle--open {
+  margin-top: -16px;          /* overlap into drawer */
+  background: rgba(20, 28, 26, 0.78);
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.32);
+  z-index: 6;
+  position: relative;
+}
+
+/* Mobile tightening */
+@media (max-width: 640px) {
+  .story-bar-wrap .chat-msg { max-width: 86%; }
+  .story-bar-wrap .chat-msg__bubble {
+    font-size: 13px;
+    padding: 8px 12px 9px;
+    border-radius: 14px;
+  }
+  .story-bar-wrap .chat-drawer__body { padding-top: 22px; padding-bottom: 14px; gap: 8px; }
+}
+
+/* ============================================================
+   v4 polish — chevron toggle always visible AND clickable
+   The v3 overlap (margin-top: -16px to "dock" the chevron onto
+   the drawer's bottom edge) hid the chevron behind the drawer
+   in some flex/overflow combinations, so users couldn't find
+   the collapse control. v4 keeps the chevron in clean flow
+   between drawer and pill, with stronger contrast in the open
+   state so it's unambiguously an action.
+   ============================================================ */
+
+/* Reset the v3 overlap rules — chevron stays in normal flow */
+.story-bar-wrap .chat-drawer--open ~ .chat-history-toggle,
+.story-bar-wrap .chat-drawer ~ .chat-history-toggle.chat-history-toggle--open {
+  margin-top: 0;
+}
+
+/* Visible spacing between drawer and chevron */
+.story-bar-wrap .chat-history-toggle {
+  margin: 8px auto;
+  position: relative;
+  z-index: 6;
+}
+
+/* Stronger contrast when open so "Hide" reads as obviously clickable */
+.story-bar-wrap .chat-history-toggle--open {
+  background: rgba(244, 75, 58, 0.18);
+  border-color: rgba(244, 75, 58, 0.5);
+  color: var(--paper);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 6px 18px rgba(0, 0, 0, 0.36);
+  padding: 7px 14px 7px 12px;
+}
+.story-bar-wrap .chat-history-toggle--open svg {
+  color: rgba(255, 220, 210, 0.95);
+}
+.story-bar-wrap .chat-history-toggle--open:hover {
+  background: rgba(244, 75, 58, 0.28);
+  border-color: rgba(244, 75, 58, 0.7);
+}
+
+/* Drawer doesn't need a bottom-edge fade now that the chevron is below it */
+.story-bar-wrap .chat-drawer__body {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 22px, #000 100%);
+          mask-image: linear-gradient(to bottom, transparent 0, #000 22px, #000 100%);
+}
+
+/* Drawer drops an explicit gap below itself when open so the chevron is
+   obviously separate, not melting into the surface. */
+.story-bar-wrap .chat-drawer--open {
+  margin-bottom: 0;
+}
+
+/* Mobile: keep the same clean separation */
+@media (max-width: 640px) {
+  .story-bar-wrap .chat-history-toggle { margin: 6px auto; }
+}
+
+/* ============================================================
+   v5 — speech-bubble-tail chevron, properly anchored
+
+   Wraps the drawer + chevron in .chat-drawer-shell so the
+   chevron is `position: absolute` against the SHELL, not the
+   page. That guarantees the chevron is always centered (defeats
+   the original `left: 50%` + `transform: none` collision that
+   was pushing it to the right edge of the screen) and lets it
+   half-overlap the drawer's bottom edge — half-inside, half-
+   outside — so it reads as a speech-bubble tail.
+
+   When closed, the shell collapses to 0 height and the chevron
+   stays anchored just above the chat pill. When open, the
+   drawer expands and the chevron sits at its bottom edge.
+   ============================================================ */
+
+.chat-drawer-shell {
+  position: relative;
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+/* Reserve space below the shell for: chevron stick-out (~14px) + visible
+   gap to the chat pill (~10px). Only when the chevron is rendered. */
+.chat-drawer-shell:has(.chat-history-toggle) {
+  margin-bottom: 24px;
+}
+/* Older browsers without :has(): degrade to no extra margin (chevron just
+   visually overlaps the gap above the pill — still works, less polished). */
+
+/* The drawer keeps its existing collapse-transition behavior; just override
+   any margin-bottom from earlier polish since the shell owns spacing now. */
+.chat-drawer-shell .chat-drawer { margin: 0 auto; max-width: 100%; }
+.chat-drawer-shell .chat-drawer--open { margin-bottom: 0; }
+
+/* Speech-bubble-tail chevron. Override every earlier .chat-history-toggle
+   rule (including the original `left: 50%` + `transform: ...` from line
+   2542 and v2/v3/v4 polish). */
+.chat-drawer-shell .chat-history-toggle {
+  position: absolute;
+  bottom: -14px;                         /* half outside the shell */
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  z-index: 10;
+
+  /* Reset stuff that can drift from earlier rules */
+  top: auto;
+  right: auto;
+  inset: auto;
+  align-self: auto;
+}
+
+/* Gentle bob applies only when closed — don't move once user has expanded */
+.chat-drawer-shell .chat-history-toggle:not(.chat-history-toggle--open) {
+  animation: chat-tail-float 3.2s ease-in-out infinite;
+}
+@keyframes chat-tail-float {
+  0%, 100% { transform: translate(-50%, 0); }
+  50%      { transform: translate(-50%, -3px); }
+}
+.chat-drawer-shell .chat-history-toggle--open {
+  animation: none;
+  transform: translateX(-50%);
+  /* Stronger contrast in open state — the user thought it had disappeared */
+  background: rgba(244, 75, 58, 0.22);
+  border-color: rgba(244, 75, 58, 0.55);
+  color: var(--paper);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 6px 18px rgba(0, 0, 0, 0.36);
+}
+.chat-drawer-shell .chat-history-toggle--open svg {
+  transform: rotate(180deg);
+  color: rgba(255, 220, 210, 0.95);
+}
+
+/* Drop the bottom-edge mask from earlier polish — now that the chevron
+   visually punctuates the drawer's bottom, no fade needed there. */
+.story-bar-wrap .chat-drawer__body {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 22px, #000 100%);
+          mask-image: linear-gradient(to bottom, transparent 0, #000 22px, #000 100%);
+}
+
+/* Mobile tightening */
+@media (max-width: 640px) {
+  .chat-drawer-shell:has(.chat-history-toggle) { margin-bottom: 22px; }
+  .chat-drawer-shell .chat-history-toggle { bottom: -13px; }
+}
+
+/* ============================================================
+   v5b — defeat the earlier specificity collision
+
+   The v3 selector `.story-bar-wrap .chat-drawer--open ~ .chat-history-toggle`
+   has specificity (0,0,3,0) and was forcing `position: relative` onto
+   the chevron, which made the v5 `position: absolute` impossible to
+   apply via the (0,0,2,0) `.chat-drawer-shell .chat-history-toggle`
+   selector. Result: chevron stretched to the shell's 480px width as a
+   flex child, then translateX(-50%) yanked it 240px to the left.
+
+   Fix: re-state the v5 rules with `.story-bar-wrap` prefix so they
+   match the v3 specificity and (because they come later in the file)
+   win the cascade.
+   ============================================================ */
+
+.story-bar-wrap .chat-drawer-shell .chat-history-toggle {
+  position: absolute;
+  bottom: -14px;
+  left: 50%;
+  top: auto;
+  right: auto;
+  transform: translateX(-50%);
+  margin: 0;
+  width: auto;
+  max-width: none;
+  z-index: 10;
+}
+
+.story-bar-wrap .chat-drawer-shell .chat-history-toggle:not(.chat-history-toggle--open) {
+  animation: chat-tail-float 3.2s ease-in-out infinite;
+}
+.story-bar-wrap .chat-drawer-shell .chat-history-toggle--open {
+  animation: none;
+  transform: translateX(-50%);
+  background: rgba(244, 75, 58, 0.22);
+  border-color: rgba(244, 75, 58, 0.55);
+  color: var(--paper);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 6px 18px rgba(0, 0, 0, 0.36);
+}
+
+/* Kill the v3 margin-top overlap — the new structure handles overlap
+   via the absolute bottom: -14px instead. */
+.story-bar-wrap .chat-drawer-shell .chat-drawer--open ~ .chat-history-toggle {
+  margin-top: 0;
+}
+
+/* ============================================================
+   v5c — out-specify the v3 compound selector once and for all
+
+   v3's `.story-bar-wrap .chat-drawer ~ .chat-history-toggle.chat-history-toggle--open`
+   has two classes on the same element (.chat-history-toggle +
+   .chat-history-toggle--open), so its specificity is actually
+   (0,0,4,0), not (0,0,3,0) as the comment in v5b assumed. The
+   v5b selector lost the cascade.
+
+   Fix: add the same trick to the v5b selector.
+   ============================================================ */
+
+.story-bar-wrap .chat-drawer-shell .chat-history-toggle.chat-history-toggle,
+.story-bar-wrap .chat-drawer-shell .chat-history-toggle.chat-history-toggle--open {
+  position: absolute;
+  bottom: -14px;
+  left: 50%;
+  top: auto;
+  right: auto;
+  transform: translateX(-50%);
+  margin: 0;
+  margin-top: 0;
+  width: auto;
+  max-width: none;
+  z-index: 10;
+}
+
+/* Open state: keep the centered transform during the static state,
+   override the v3 background/border with the clay tint. */
+.story-bar-wrap .chat-drawer-shell .chat-history-toggle.chat-history-toggle--open {
+  animation: none;
+  background: rgba(244, 75, 58, 0.22);
+  border-color: rgba(244, 75, 58, 0.55);
+  color: var(--paper);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 6px 18px rgba(0, 0, 0, 0.36);
+}
+
+/* ============================================================
+   Audio replay — enable the inline play button and color it
+   per role (clay for user, moss for assistant). Adds an
+   active "playing" state that switches to a pause icon.
+   ============================================================ */
+
+/* Override the v2/v3 disabled-stub treatment now that the button is real */
+.story-bar-wrap .chat-msg__play {
+  cursor: pointer;
+  opacity: 1;
+}
+.story-bar-wrap .chat-msg__play:hover { opacity: 0.85; }
+
+.story-bar-wrap .chat-msg--user .chat-msg__play {
+  border-color: rgba(244, 75, 58, 0.55);
+  background: rgba(244, 75, 58, 0.28);
+  color: rgba(255, 230, 224, 0.96);
+}
+.story-bar-wrap .chat-msg--assistant .chat-msg__play {
+  border-color: rgba(99, 215, 165, 0.5);
+  background: rgba(99, 215, 165, 0.18);
+  color: rgba(220, 245, 230, 0.95);
+}
+
+/* Active playback — soft pulsing ring */
+.story-bar-wrap .chat-msg__play--playing {
+  animation: chat-replay-pulse 1.4s ease-in-out infinite;
+}
+.story-bar-wrap .chat-msg--user .chat-msg__play--playing {
+  box-shadow: 0 0 0 0 rgba(244, 75, 58, 0.6);
+}
+.story-bar-wrap .chat-msg--assistant .chat-msg__play--playing {
+  box-shadow: 0 0 0 0 rgba(99, 215, 165, 0.5);
+}
+@keyframes chat-replay-pulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.14); }
+}
