@@ -52,8 +52,8 @@ export default function CustomCharacterExperiment() {
       fd.append('display_name', characterName || 'Custom Character');
       fd.append('provider', 'smallest');
 
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData.session?.access_token;
+      const sessionResult = await supabase?.auth.getSession();
+      const token = sessionResult?.data.session?.access_token;
       const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
 
       const res = await fetch('/api/voice-clone', { method: 'POST', headers, body: fd });

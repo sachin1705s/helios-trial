@@ -275,8 +275,9 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   );
 
 
-  // Auth state — subscribe to Supabase session changes
+  // Auth state — subscribe to Supabase session changes (no-op when not configured)
   useEffect(() => {
+    if (!supabase) return;
     supabase.auth.getSession().then(({ data }) => {
       setUser(data.session?.user ?? null);
     });
@@ -1975,7 +1976,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
                 <button
                   type="button"
                   className="btn ghost user-avatar-btn"
-                  onClick={() => supabase.auth.signOut()}
+                  onClick={() => supabase?.auth.signOut()}
                   title={`Signed in as ${user.email ?? user.id} — click to sign out`}
                 >
                   {user.user_metadata?.avatar_url ? (
