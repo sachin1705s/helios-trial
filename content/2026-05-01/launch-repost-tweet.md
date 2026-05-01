@@ -2,13 +2,13 @@
 
 ## Tweet
 
-8 months ago I asked a stupid question:
+5 months ago I asked a stupid question:
 
-"What if you could actually *talk* to Einstein? Or a velociraptor?"
+What if you could actually talk to Einstein? Or a velociraptor?
 
-Today that's a real product. Real-time AI characters with voice, face, and personality — powered by generative media.
+Today that's a real product. Real-time AI characters with voice, face, and personality. 
 
-Reintroducing Interact Studio ↓
+Reintroducing Interact Studio 
 
 [attach launch video]
 
