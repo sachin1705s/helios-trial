@@ -835,20 +835,28 @@ app.post('/api/character/chat', aiLimiter, async (req, res) => {
       generateParams.tools = [{ googleSearch: {} }];
     }
 
-    // Retry once on rate-limit (429 / resource exhausted) before giving up
+    // Retry with exponential backoff on rate-limit (429 / resource exhausted)
+    const MAX_RETRIES = 3;
+    const isRateLimitError = (msg) => /resource.?exhausted|429/i.test(msg);
     let response;
-    try {
-      response = await ai.models.generateContent(generateParams);
-    } catch (firstErr) {
-      const firstMsg = firstErr?.message || String(firstErr);
-      if (/quota|rate.?limit|resource.?exhausted|429/i.test(firstMsg)) {
-        console.warn('[character/chat] rate-limit on first attempt, retrying in 2s…', firstMsg);
-        await new Promise((r) => setTimeout(r, 2000));
-        response = await ai.models.generateContent(generateParams); // let outer catch handle second failure
-      } else {
-        throw firstErr;
+    let lastErr;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        response = await ai.models.generateContent(generateParams);
+        break; // success
+      } catch (err) {
+        lastErr = err;
+        const errMsg = err?.message || String(err);
+        if (isRateLimitError(errMsg) && attempt < MAX_RETRIES) {
+          const delayMs = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s
+          console.warn(`[character/chat] transient 429 (attempt ${attempt + 1}/${MAX_RETRIES + 1}), retrying in ${delayMs}ms…`, errMsg);
+          await new Promise((r) => setTimeout(r, delayMs));
+        } else {
+          throw err;
+        }
       }
     }
+    if (!response) throw lastErr;
 
     let raw = '';
     try {
@@ -922,12 +930,75 @@ app.post('/api/character/chat', aiLimiter, async (req, res) => {
     const message = err?.message || String(err);
     console.error('[character/chat] error:', message, err?.stack);
     // Surface Gemini quota/rate-limit errors as a soft reply so the UI stays functional
-    if (/quota|rate.?limit|resource.?exhausted|429/i.test(message)) {
-      console.warn('[character/chat] Gemini quota/rate-limit hit (retries exhausted). Full error:', message);
+    if (/resource.?exhausted|429/i.test(message)) {
+      console.warn('[character/chat] Gemini 429 persisted after all retries. Full error:', message);
       return res.json({ reply: "I'm a bit overloaded right now — try again in a moment!", action: '', objects: [], sources: [], searchUsed: false });
     }
     // All other unexpected errors: return a graceful reply + log details
     return res.status(500).json({ error: 'Chat failed.', detail: isProduction ? undefined : message });
+  }
+});
+
+// ─── Object extraction fallback (Gemini Live voice path) ──────────────────────
+// When client-side keyword matching produces no hits, the client calls this
+// endpoint with the character's full response text. A fast LLM call extracts
+// concrete objects constrained to the character's known prop vocabulary so
+// Odyssey always shows what the character is talking about.
+const OBJECT_VOCABULARY = {
+  einstein:         ['a heavy ball', 'a ticking clock', 'a beam of light', 'a trampoline', 'a rocket', 'a magnet', 'a falling apple', 'a telescope', 'an atom', 'a wave'],
+  bear:             ['a handful of berries', 'a honeycomb', 'a fresh fish', 'a pine cone', 'a mushroom', 'a log'],
+  alexander:        ['a gleaming sword', 'a battle shield', 'a battle map', 'a horse', 'a spear', 'a golden crown', 'a battle flag', 'a bow and arrow'],
+  'circus-lion':    ['a juggling ball', 'a circus hoop', 'juggling pins', 'a rubber chicken', 'a spinning plate'],
+  cleopatra:        ['a golden lotus', 'an Egyptian cat', 'an ankh', 'a sphinx', 'a pyramid', 'an ancient scroll', 'a precious gem'],
+  'da-vinci':       ['a brass gear', 'a feathered wing', 'a compass', 'a paintbrush', 'a technical sketch', 'a spring', 'a mirror'],
+  'grandpa-turtle': ['a smooth stone', 'a fallen leaf', 'a shell', 'a firefly', 'a pond', 'a piece of bark'],
+  'steve-jobs':     ['a sleek device', 'a circuit board', 'a single button', 'a calligraphy pen'],
+};
+
+app.post('/api/extract-objects', aiLimiter, async (req, res) => {
+  try {
+    const ai = getAiClient();
+    if (!ai) return res.status(503).json({ error: 'AI service not configured.' });
+    const response = String(req.body?.response ?? '').trim();
+    const characterId = String(req.body?.characterId ?? '').trim();
+    if (!response) return res.status(400).json({ error: 'Missing response text.' });
+
+    const vocab = OBJECT_VOCABULARY[characterId];
+    if (!vocab || !vocab.length) return res.json({ objects: [] });
+
+    const extractionPrompt = [
+      `The following is what an animated character just said to a user:`,
+      `"${response}"`,
+      '',
+      `Which of these physical objects did the character reference, hold up, or talk about?`,
+      vocab.map((v, i) => `${i + 1}. ${v}`).join('\n'),
+      '',
+      'Rules:',
+      '- Only pick objects the character clearly referenced (directly or through a synonym/description).',
+      '- Return 0-3 objects maximum.',
+      '- Return ONLY a JSON array of strings from the list above. No commentary.',
+      '- If nothing matches, return [].',
+    ].join('\n');
+
+    const result = await ai.models.generateContent({
+      model: 'gemini-2.0-flash',
+      generationConfig: { maxOutputTokens: 80 },
+      contents: [{ role: 'user', parts: [{ text: extractionPrompt }] }],
+    });
+
+    let raw = '';
+    try { raw = result.text?.trim() || ''; } catch { /* safety filter */ }
+    const jsonMatch = raw.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return res.json({ objects: [] });
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    const objects = Array.isArray(parsed)
+      ? parsed.filter(o => typeof o === 'string' && vocab.includes(o)).slice(0, 3)
+      : [];
+    return res.json({ objects });
+  } catch (err) {
+    console.warn('[extract-objects] failed:', err?.message);
+    return res.json({ objects: [] });
   }
 });
 
