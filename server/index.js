@@ -642,10 +642,33 @@ app.post('/api/smallest/webcall', aiLimiter, async (req, res) => {
   }
 });
 
-app.post('/api/gemini-live-token', (req, res) => {
+app.post('/api/gemini-live-token', async (req, res) => {
   const apiKey = runtimeConfig.geminiApiKey;
   if (!apiKey) return res.status(503).json({ error: 'Gemini API key not configured.' });
-  return res.json({ token: apiKey });
+  try {
+    const expireTime = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+    const newSessionExpireTime = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    const tokenRes = await fetch(
+      `https://generativelanguage.googleapis.com/v1alpha/auth_tokens?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uses: 1, expireTime, newSessionExpireTime }),
+        signal: AbortSignal.timeout(8000),
+      }
+    );
+    if (!tokenRes.ok) {
+      const msg = await tokenRes.text().catch(() => '');
+      console.error('[gemini-token] ephemeral token request failed', tokenRes.status, msg);
+      // Fall back to raw key so the app still works if the endpoint is unavailable
+      return res.json({ token: apiKey });
+    }
+    const tokenData = await tokenRes.json();
+    return res.json({ token: tokenData.name });
+  } catch (err) {
+    console.error('[gemini-token] error fetching ephemeral token, falling back to raw key:', err.message);
+    return res.json({ token: apiKey });
+  }
 });
 
 app.post('/api/character/stt', upload.single('audio'), async (req, res) => {

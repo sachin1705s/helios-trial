@@ -109,6 +109,8 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   const [streamState, setStreamState] = useState<StreamState>('idle');
   const [_error, setError] = useState<string | null>(null);
   const [isStreamingReady, setIsStreamingReady] = useState(false);
+  const [sessionSecondsLeft, setSessionSecondsLeft] = useState(300);
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [, setSpeechError] = useState<string | null>(null);
   const [textPrompt, setTextPrompt] = useState('');
   const [isCharacterRecording, setIsCharacterRecording] = useState(false);
@@ -155,6 +157,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   const ttsAudioCtxRef = useRef<AudioContext | null>(null);
   const ttsGenerationRef = useRef(0); // incremented on navigation — cancels any in-flight TTS across all await boundaries
   const characterOpenedAtRef = useRef<number | null>(null);
+  const sessionTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const hasLoggedFirstPromptRef = useRef(false);
   const currentPageRef = useRef<string | null>(null);
   const showLandingRef = useRef(showLanding); // kept in sync below — safe to read in SDK callbacks
@@ -569,7 +572,43 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
     }
   }, [isStreamingReady, voiceStatus]);
 
+  useEffect(() => {
+    if (streamState !== 'streaming') {
+      if (sessionTimerRef.current) {
+        clearInterval(sessionTimerRef.current);
+        sessionTimerRef.current = null;
+      }
+      return;
+    }
+    setSessionSecondsLeft(300);
+    setSessionExpired(false);
 
+    sessionTimerRef.current = setInterval(() => {
+      setSessionSecondsLeft((prev) => {
+        if (prev <= 1) {
+          clearInterval(sessionTimerRef.current!);
+          sessionTimerRef.current = null;
+          stopGeminiLiveSession();
+          ++ttsGenerationRef.current;
+          ttsAbortRef.current?.abort();
+          ttsAbortRef.current = null;
+          for (const node of ttsSourceNodesRef.current) { try { node.stop(); } catch { /* already stopped */ } }
+          ttsSourceNodesRef.current = [];
+          setIsStreamingReady(false);
+          setSessionExpired(true);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => {
+      if (sessionTimerRef.current) {
+        clearInterval(sessionTimerRef.current);
+        sessionTimerRef.current = null;
+      }
+    };
+  }, [streamState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (voiceStatus === 'connected' && isVoiceAgentSlide) {
@@ -1568,7 +1607,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
     // Open raw WebSocket — model + URL confirmed in isolation test
     const slideId = slide.id;
     const ws = new WebSocket(
-      `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`
+      `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?access_token=${apiKey}`
     );
     geminiLiveWsRef.current = ws;
 
@@ -1984,6 +2023,12 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
 
   const handleSelectCharacter = (id: string) => {
     stopGeminiLiveSession();  // B3: clean up any active session before switching characters
+    if (sessionTimerRef.current) {
+      clearInterval(sessionTimerRef.current);
+      sessionTimerRef.current = null;
+    }
+    setSessionSecondsLeft(300);
+    setSessionExpired(false);
     closeActiveCharacter('switch');
     // Cancel any in-flight TTS from the previous character
     ++ttsGenerationRef.current;
@@ -2342,6 +2387,22 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
           muted
         />
         <div className="video-overlay" />
+        {!sessionExpired && sessionSecondsLeft <= 60 && streamState === 'streaming' && (
+          <div className="session-countdown-pill">
+            {Math.floor(sessionSecondsLeft / 60)}:{String(sessionSecondsLeft % 60).padStart(2, '0')}
+          </div>
+        )}
+        {sessionExpired && (
+          <div className="session-expired-overlay">
+            <p className="session-expired-title">Your 5 minutes with {activeCharacterName} have ended.</p>
+            <button
+              className="session-expired-btn"
+              onClick={() => { if (selectedCharacterId) handleSelectCharacter(selectedCharacterId); }}
+            >
+              Start fresh
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="ui">
@@ -2454,7 +2515,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
           </div>{/* /.chat-drawer-shell */}
 
         <footer className="story-bar story-bar--compact">
-          <div className={`chat-pill ${!isStreamingReady && streamState !== 'error' ? 'chat-pill--waking' : ''}`}>
+          <div className={`chat-pill ${!isStreamingReady && streamState !== 'error' && !sessionExpired ? 'chat-pill--waking' : ''}`}>
             <input
               className="chat-pill__input"
               type="text"
