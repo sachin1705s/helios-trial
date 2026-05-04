@@ -1,0 +1,189 @@
+/* ========================================================================
+   ATRIUM — Labs page
+   ======================================================================== */
+
+/* ---------- Hero ---------- */
+.atrium-labs .labs-hero {
+  padding: clamp(72px, 10vw, 144px) clamp(20px, 5vw, 64px) clamp(48px, 6vw, 80px);
+  text-align: center;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.atrium-labs .labs-hero h1 {
+  font-size: clamp(48px, 7vw, 96px);
+  line-height: 0.96;
+  margin: 18px 0 24px;
+}
+
+/* ---------- Experiments grid ---------- */
+.atrium-labs .labs-experiments {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+  padding: 0 clamp(20px, 5vw, 64px) clamp(80px, 10vw, 144px);
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+@media (max-width: 880px) {
+  .atrium-labs .labs-experiments {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 560px) {
+  .atrium-labs .labs-experiments {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------- Card link wrapper ---------- */
+.atrium-labs .lab-card-link {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  border-radius: var(--radius-lg);
+}
+
+.atrium-labs .lab-card-link--inert {
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ---------- Card ---------- */
+.atrium-labs .lab-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  border: 1px solid rgba(20, 40, 38, 0.08);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  transition: transform 0.5s var(--ease), box-shadow 0.5s, border-color 0.5s;
+  height: 100%;
+}
+
+.atrium-labs .lab-card-link:not(.lab-card-link--inert):hover .lab-card {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-md);
+}
+
+/* Live: moss ring highlight */
+.atrium-labs .lab-card--live {
+  border-color: var(--moss);
+  box-shadow: 0 0 0 1px var(--moss), var(--shadow-sm);
+}
+
+.atrium-labs .lab-card-link:not(.lab-card-link--inert):hover .lab-card--live {
+  box-shadow: 0 0 0 1px var(--moss), var(--shadow-md);
+}
+
+/* Ended: grayed out */
+.atrium-labs .lab-card--ended {
+  opacity: 0.58;
+}
+
+.atrium-labs .lab-card-link:hover .lab-card--ended {
+  opacity: 0.78;
+}
+
+/* ---------- Status badge ---------- */
+.atrium-labs .lab-card__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.atrium-labs .lab-badge--live {
+  background: rgba(20, 90, 55, 0.10);
+  color: var(--moss-deep);
+  border: 1px solid rgba(47, 94, 72, 0.22);
+}
+
+.atrium-labs .lab-badge__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--moss);
+  box-shadow: 0 0 0 3px rgba(47, 94, 72, 0.18);
+  animation: atrium-pulse 2.4s var(--ease) infinite;
+}
+
+.atrium-labs .lab-badge--ended {
+  background: rgba(20, 40, 38, 0.06);
+  color: var(--ink-mute);
+}
+
+.atrium-labs .lab-badge--upcoming {
+  background: transparent;
+  color: var(--ink-mute);
+}
+
+.atrium-labs .lab-badge--archive {
+  background: rgba(20, 90, 55, 0.10);
+  color: var(--moss-deep);
+  border: 1px solid rgba(47, 94, 72, 0.22);
+}
+
+/* ---------- Card body ---------- */
+.atrium-labs .lab-card__body {
+  padding: 22px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.atrium-labs .lab-card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 2px;
+}
+
+.atrium-labs .lab-card__dates {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--moss);
+  margin: 0;
+}
+
+.atrium-labs .lab-card__body h3 {
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  margin: 4px 0 6px;
+}
+
+.atrium-labs .lab-card__body p {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+  flex: 1;
+}
+
+.atrium-labs .lab-card__cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--clay);
+  transition: gap 0.3s var(--ease);
+}
+
+.atrium-labs .lab-card-link:hover .lab-card__cta {
+  gap: 8px;
+}

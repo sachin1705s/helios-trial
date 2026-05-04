@@ -661,13 +661,13 @@ app.post('/api/gemini-live-token', async (req, res) => {
       const msg = await tokenRes.text().catch(() => '');
       console.error('[gemini-token] ephemeral token request failed', tokenRes.status, msg);
       // Fall back to raw key so the app still works if the endpoint is unavailable
-      return res.json({ token: apiKey });
+      return res.json({ token: apiKey, isRawKey: true });
     }
     const tokenData = await tokenRes.json();
-    return res.json({ token: tokenData.name });
+    return res.json({ token: tokenData.name, isRawKey: false });
   } catch (err) {
     console.error('[gemini-token] error fetching ephemeral token, falling back to raw key:', err.message);
-    return res.json({ token: apiKey });
+    return res.json({ token: apiKey, isRawKey: true });
   }
 });
 

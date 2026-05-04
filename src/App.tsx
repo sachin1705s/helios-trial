@@ -1583,15 +1583,17 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
 
     // Fetch API key from server
     let apiKey: string;
+    let isRawKey = true;
     try {
       const res = await fetch('/api/gemini-live-token', {
         method: 'POST',
         signal: AbortSignal.timeout(10000),
       });
       if (!res.ok) throw new Error(`Token endpoint returned ${res.status}`);
-      const data = await res.json() as { token?: string };
+      const data = await res.json() as { token?: string, isRawKey?: boolean };
       if (!data.token) throw new Error('Empty token from server');
       apiKey = data.token;
+      isRawKey = !!data.isRawKey;
     } catch (err) {
       console.error('[gemini-live] token fetch error', err);
       setCharacterError('Could not connect to Gemini Live. Try again.');
@@ -1606,9 +1608,10 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
 
     // Open raw WebSocket — model + URL confirmed in isolation test
     const slideId = slide.id;
-    const ws = new WebSocket(
-      `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?access_token=${apiKey}`
-    );
+    const wsUrl = isRawKey
+      ? `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`
+      : `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${apiKey}`;
+    const ws = new WebSocket(wsUrl);
     geminiLiveWsRef.current = ws;
 
     ws.onopen = () => {

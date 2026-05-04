@@ -141,15 +141,15 @@ const TOOL_DECLARATIONS = {
 
 // ─── Session runner ───────────────────────────────────────────────────────────
 
-async function fetchApiKey(): Promise<string> {
+async function fetchApiKey(): Promise<{token: string, isRawKey: boolean}> {
   const res = await fetch('/api/gemini-live-token', {
     method: 'POST',
     signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) throw new Error(`Token endpoint returned ${res.status}`);
-  const data = await res.json() as { token?: string };
+  const data = await res.json() as { token?: string, isRawKey?: boolean };
   if (!data.token) throw new Error('Empty token');
-  return data.token;
+  return { token: data.token, isRawKey: !!data.isRawKey };
 }
 
 
@@ -292,8 +292,11 @@ async function runModel(
   };
 
   let apiKey: string;
+  let isRawKey = true;
   try {
-    apiKey = await fetchApiKey();
+    const keyData = await fetchApiKey();
+    apiKey = keyData.token;
+    isRawKey = keyData.isRawKey;
     onLog('✓ API key fetched');
   } catch (err) {
     onLog(`✗ Failed to fetch API key: ${(err as Error).message}`);
@@ -302,9 +305,10 @@ async function runModel(
   }
 
   const ws = await new Promise<WebSocket>((resolve, reject) => {
-    const socket = new WebSocket(
-      `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`
-    );
+    const wsUrl = isRawKey
+      ? `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`
+      : `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${apiKey}`;
+    const socket = new WebSocket(wsUrl);
     socket.onopen = () => resolve(socket);
     socket.onerror = () => reject(new Error('WebSocket failed to open'));
     setTimeout(() => reject(new Error('WebSocket open timeout')), 10000);

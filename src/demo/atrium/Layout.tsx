@@ -16,6 +16,9 @@ export function AtriumNav() {
         Interact Studio
       </Link>
       <div className="nav__actions">
+        <Link to="/labs" className="btn btn--ghost btn--sm">
+          Lab
+        </Link>
         <Link to="/about-us" className="btn btn--ghost btn--sm">
           About
         </Link>
@@ -39,6 +42,7 @@ export function AtriumFooter() {
           <div>
             <h4>Product</h4>
             <Link to="/characters">Characters</Link>
+            <Link to="/labs">Lab</Link>
             <a href="/#how">How it works</a>
           </div>
           <div>
