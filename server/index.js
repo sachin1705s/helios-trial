@@ -394,6 +394,25 @@ const allocateOdysseyLease = async () => {
   return { leaseId, apiKey: keys[keyIndex], keyIndex };
 };
 
+const getOdysseyCapacity = async () => {
+  const keys = runtimeConfig.odysseyApiKeys;
+  const total = keys.length * ODYSSEY_KEY_LIMIT;
+  if (!keys.length) return { used: 0, total: 0 };
+
+  if (useRedis) {
+    const now = Date.now();
+    let used = 0;
+    for (let i = 0; i < keys.length; i++) {
+      const count = await redis.zcount(slotSetKey(i), now, '+inf');
+      used += count;
+    }
+    return { used, total };
+  }
+
+  const used = memPool.inUse.reduce((sum, n) => sum + n, 0);
+  return { used, total };
+};
+
 const releaseOdysseyLease = async (leaseId) => {
   if (useRedis) {
     const keyIndex = await redis.get(`odyssey:lease:${leaseId}`);
@@ -444,13 +463,25 @@ app.get('/api/health', (_req, res) => {
 });
 
 // Odyssey token endpoint — mints short-lived client credentials server-side (API key never leaves the server)
+app.get('/api/odyssey/status', async (_req, res) => {
+  const capacity = await getOdysseyCapacity();
+  return res.json(capacity);
+});
+
 app.get('/api/odyssey/token', async (_req, res) => {
   if (!runtimeConfig.odysseyApiKeys.length) {
     return res.status(503).json({ error: 'Odyssey not configured.' });
   }
   const lease = await allocateOdysseyLease();
   if (!lease) {
-    return res.status(503).json({ error: 'Odyssey is at capacity. Please try again shortly.' });
+    const capacity = await getOdysseyCapacity();
+    return res.status(202).json({
+      queued: true,
+      used: capacity.used,
+      total: capacity.total,
+      retryAfter: 10,
+      message: 'All avatar slots are in use. You are in the queue — please wait.',
+    });
   }
   try {
     const serverClient = new Odyssey({ apiKey: lease.apiKey });
