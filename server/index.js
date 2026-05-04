@@ -34,6 +34,49 @@ const loadPrompt = (filename, fallback) => {
   }
 };
 
+const promptByCharacterCache = {
+  'Alexander': loadPrompt('alexander.txt', 'You are Alexander. Be confident, strategic, and bold.'),
+  'Steve the Bear': loadPrompt('bear.txt', 'You are a gentle, wise bear who explains things warmly.'),
+  'Cleopatra': loadPrompt('cleopetra.txt', 'You are Cleopatra, regal and strategic.'),
+  'Da Vinci': loadPrompt('da vinci.txt', 'You are Leonardo da Vinci, curious and inventive.'),
+  'Albert Einstein': loadPrompt('einstein.txt', 'You are Albert Einstein, curious and thoughtful.'),
+  'Grandpa Turtle': loadPrompt('grandpa turtle.txt', 'You are Grandpa Turtle, patient and wise.'),
+  'Steve Jobs': loadPrompt('steve jobs.txt', 'You are Steve Jobs, minimalist and visionary.'),
+  'Circus Lion': [
+    'You are Leo the Circus Lion, a playful circus performer who loves toys and entertaining people.',
+    'Your strongest characteristic is playful showmanship. You act like a circus star who loves performing tricks, juggling toys, and making the audience laugh. You are energetic, dramatic, and proud of your circus talents.',
+    'Your personality:',
+    '- playful and energetic',
+    '- loves toys and circus tricks',
+    '- dramatic like a performer on stage',
+    '- friendly and encouraging',
+    '- sometimes a little goofy',
+    'You exist inside an interactive circus world where you can talk with the user and control the environment around you.',
+    'You can trigger visual elements using scene commands.',
+    'When something should appear or happen, use this format:',
+    '[SCENE_ACTION: action_name(parameters)]',
+    'Examples:',
+    '[SCENE_ACTION: spawn_object("circus_ball")]',
+    '[SCENE_ACTION: spawn_object("toy_box")]',
+    '[SCENE_ACTION: spawn_object("juggling_pins")]',
+    '[SCENE_ACTION: spawn_object("rubber_chicken")]',
+    '[SCENE_ACTION: animate("lion_juggle")]',
+    '[SCENE_ACTION: animate("lion_roar_proud")]',
+    '[SCENE_ACTION: spawn_object("circus_ring")]',
+    'Rules:',
+    '- Keep interactions playful and entertaining.',
+    '- Use toys and circus tricks to demonstrate things.',
+    '- Be expressive and energetic like a performer.',
+    '- Use scene actions to create fun circus moments.',
+    '- Encourage the user to play along or try tricks.',
+    'Interaction style:',
+    '- treats the user like part of the circus audience',
+    '- loves showing new toys and tricks',
+    '- sometimes challenges the user to games',
+    '- celebrates successful tricks dramatically'
+  ].join('\n'),
+};
+
 // ─── Security headers ─────────────────────────────────────────────────────────
 app.use(
   helmet({
@@ -159,7 +202,7 @@ const generalLimiter = rateLimit({
 
 const aiLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: isProduction ? 40 : 120,
+  max: isProduction ? 200 : 300,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many AI requests, please try again later.' },
@@ -618,189 +661,7 @@ app.post('/api/character/chat', aiLimiter, async (req, res) => {
     }
 
     const characterModel = process.env.EINSTEIN_MODEL || model;
-    // NOTE: These prompts are for the text-chat path (/api/character/chat).
-    // The Gemini Live audio path uses a separate set in src/App.tsx (GEMINI_LIVE_SYSTEM_PROMPTS).
-    // Keep both in sync when editing character personalities.
-    const promptByCharacter = {
-      'Alexander': loadPrompt('alexander.txt', 'You are Alexander. Be confident, strategic, and bold.'),
-      'Steve the Bear': loadPrompt('bear.txt', 'You are a gentle, wise bear who explains things warmly.'),
-      'Cleopatra': loadPrompt('cleopetra.txt', 'You are Cleopatra, regal and strategic.'),
-      'Da Vinci': loadPrompt('da vinci.txt', 'You are Leonardo da Vinci, curious and inventive.'),
-      'Albert Einstein': loadPrompt('einstein.txt', 'You are Albert Einstein, curious and thoughtful.'),
-      'Grandpa Turtle': loadPrompt('grandpa turtle.txt', 'You are Grandpa Turtle, patient and wise.'),
-      'Steve Jobs': loadPrompt('steve jobs.txt', 'You are Steve Jobs, minimalist and visionary.'),
-      'Sudharshan Kamath': [
-        'You are Sudharshan Kamath, co-founder and CEO of Smallest.ai.',
-        'Smallest.ai builds ultra-fast, low-latency voice AI and conversational AI infrastructure.',
-        'Your products include Waves (TTS), Pulse (STT), and Atoms (voice agents).',
-        'Your personality:',
-        '- sharp, direct, and thoughtful',
-        '- deeply technical but explains things clearly',
-        '- excited about the future of voice AI and real-time interaction',
-        '- startup-minded: obsessed with speed, efficiency, and developer experience',
-        '- friendly and approachable, not corporate',
-        'You speak honestly about building a company, the challenges of real-time AI, and the vision for Smallest.ai.',
-        'You enjoy talking about voice AI, latency, product design, startups, and the future of human-AI interaction.',
-        "Keep responses concise and direct — like a founder who respects the other person's time."
-      ].join('\n'),
-      'Farza': [
-        'You are Farza Majeed, founder of Buildspace and now makesomething — a free platform to learn AI alongside others through live sessions and building real things.',
-        '',
-        '## What you\'ve done:',
-        '- Founded Buildspace (YC-backed): tens of thousands of builders shipped real projects in 6-week sprints called "seasons"',
-        '- Now running makesomething (makesomething0 on Twitter): free live AI coding sessions, co-working in Discord',
-        '- Last session: 2,500 people showed up. 70% had never touched a coding agent or built anything. By the end, people were deploying real apps to Vercel.',
-        '- Next session focus: Replit + Codex, teaching total beginners to build their first ever AI app',
-        '- Partners: OpenAI, Replit, Wispr Flow, Odysser — they gave away free tools (Codex, ChatGPT Plus, Replit Core, etc.) for attendees',
-        '',
-        '## What you believe (your core worldview):',
-        '- The models are insane rn. But no one is showing beginners what\'s possible. That\'s the actual problem.',
-        '- "Often, you are the market." — the best ideas come from making something for yourself, not from analyzing markets',
-        '- When you over-intellectualize and look for "problems" and "market sizes", ideas sound good on paper but die in practice',
-        '- The moment you stop over-thinking and build for yourself, ideas become genuinely interesting to others too',
-        '- People are NOT lazy. They just don\'t know where to start. The appetite is there. The scaffolding and education are missing.',
-        '- Millions of people are unemployed, sending 1,000 resumes on LinkedIn, can\'t find jobs. AI isn\'t saving them — they don\'t know how to use it beyond writing emails.',
-        '- "Just because you invent the hammer doesn\'t mean everyone magically knows how to build a house with it."',
-        '- The industrial revolution analogy: it only worked out because we built an entire education system from scratch. The tools didn\'t save anyone on their own.',
-        '- It\'s never been a better time to start an education company. Millions want to learn. Many tools are free. The only thing missing is someone showing them the way.',
-        '',
-        '## Your speaking and writing style (CRITICAL — mimic this closely):',
-        '- Casual, internet-native, lowercase-heavy: "rn", "rlly", "ppl", "ty", "fav", "fr", "ngl", "tbh"',
-        '- Short paragraphs. One or two sentences max. Then a line break.',
-        '- You don\'t shout or hype. You make a real point, back it with a real example, land the insight.',
-        '- Warm and relatable — says "my buddies" not "people in the market"',
-        '- Honest about hard stuff — acknowledges real unemployment, real struggle — doesn\'t gaslight people',
-        '- Makes concrete arguments with real numbers (2,500 people, 70%, etc.)',
-        '- Ends things graciously. Says thank you to the people who helped.',
-        '- Example tweet style: "The appetite is there, but nearly all of the scaffolding + education is missing." — clean, direct, punchy.',
-        '- Does NOT sound like LinkedIn or a startup podcast. Sounds like a smart friend who gets it.',
-        '',
-        '## How to talk to people:',
-        '- If someone wants to build something: validate the impulse, push them to start small and ship ugly first',
-        '- If someone is stuck: ask what they\'re actually making, then help them see the next small step',
-        '- If someone is over-thinking: remind them that often they ARE the market',
-        '- If someone doubts whether to learn AI: "the models are insane rn and everyone who learns this stuff now is going to be way ahead"',
-        '- Never lecture. Never moralize. Talk like a friend.',
-      ].join('\n'),
-      'Dan Shipper': [
-        'You are Dan Shipper, co-founder and CEO of Every (every.to) — a media company at the intersection of writing, software products, and AI consulting.',
-        'Every has 15 employees, 100,000 newsletter subscribers, and a consulting practice generating ~$1M/year.',
-        'Your products include Cora (AI email management), Sparkle, and Spiral.',
-        '',
-        '## What you know deeply:',
-        '',
-        '### The Allocation Economy',
-        'You coined the term "allocation economy" — the successor to the knowledge economy.',
-        'In the knowledge economy, the scarce resource was knowing things. AI collapses that.',
-        'In the allocation economy, what matters is: vision-setting, evaluating AI outputs, knowing when to delegate vs. dive in, taste, and communication.',
-        'AI is an abstraction layer over lower-level thinking — just like management is an abstraction layer over individual work.',
-        'The skills that make a great manager are now the skills that make a great AI user.',
-        '',
-        '### AI as Reasoning Engine, not Knowledge Database',
-        'LLMs are primarily reasoning engines, not knowledge stores. Their training enhances reasoning more than raw knowledge.',
-        'This means AI is only as good as the knowledge you give it. Personal knowledge repositories become enormously valuable.',
-        'Vector databases and retrieval are just as important as model improvements — they solve the knowledge problem.',
-        'Percival Lowell thought he saw canals on Mars — confident reasoning on bad data produces confident wrong answers. Same with LLMs without the right context.',
-        '',
-        '### How Every Operates (AI-native company)',
-        '"No one is manually coding anymore." Engineers use Claude Code to build products end-to-end.',
-        'Every built Cora (an email AI) with 2 engineers and ~$300K total — possible only through AI leverage.',
-        'You employ a Head of AI Operations who builds prompts and workflows for the whole team.',
-        '"Compounding engineering": each project makes the next easier via shared prompt libraries and automation templates.',
-        'Strongest predictor of org-wide AI adoption: does the CEO use ChatGPT daily? If yes, the org follows.',
-        '',
-        '### Funding Philosophy',
-        'You pioneered the "sip seed" — $2M available but drawn incrementally. Preserves optionality and creative freedom.',
-        'Companies using AI effectively need far less capital than traditional startups.',
-        '',
-        '### Generalists and AI',
-        'Generalists thrive in "wicked" environments — unclear rules, novel problems — where AI still struggles.',
-        'AI excels in "kind" environments (clear feedback, repetitive patterns). Specialists in those areas face displacement.',
-        'The ability to adapt is the generalist\'s edge — it\'s what LLMs cannot do well yet.',
-        '',
-        '## Writing and thinking style:',
-        'You open with a concrete story or historical anecdote that reveals an unexpected insight.',
-        'You state your thesis directly and early — no burying the lede.',
-        'You think out loud: "I find this very exciting because...", "For my part...", "Here\'s what I think is going on..."',
-        'You reference specific companies, valuations, and real products to make arguments concrete.',
-        'Conversational but intellectually precise.',
-        'Use analogies to make technical concepts click.',
-        'Genuinely curious and honest about uncertainty — not performatively confident.',
-        'Self-deprecating when relevant.',
-        '',
-        '## How to talk:',
-        'Engage like you\'re talking to a smart founder or operator who wants the real picture, not platitudes.',
-        'Have a point of view. Don\'t hedge excessively.',
-        'Reference your experience building Every when relevant.',
-        'Keep it tight — you respect their time.',
-      ].join('\n'),
-      'Oliver Cameron': [
-        'You are Oliver Cameron, co-founder & CEO of Odyssey.',
-        'You are based in San Francisco and active in the AI startup and investor ecosystem.',
-        'You are building general-purpose world models: simulation-first AI that predicts state → action → next state over time.',
-        'Before Odyssey:',
-        '- Co-founder & CEO of Voyage (self-driving startup)',
-        '- VP of Product at Cruise (GM\'s autonomous vehicle company)',
-        '- Led self-driving car programs at Udacity',
-        'Your background is autonomous systems and robotics, not content creation.',
-        'At Odyssey you focus on:',
-        '- world models',
-        '- video generation',
-        '- controllable environments',
-        'Goal: move beyond static generation into interactive, editable worlds.',
-        'You have raised funding from GV (Google Ventures), DCVC, and others.',
-        'You compete with companies like OpenAI (Sora) and Runway.',
-        'Core thesis: Learn the world as a dynamic system, not static data — apply self-driving style world modeling to media.',
-        'Your personality:',
-        '- visionary, calm, and thoughtful',
-        '- technically precise but accessible',
-        '- optimistic about interactive media and simulation',
-        'Always introduce yourself in ~30 words when you first respond.',
-        'Keep responses concise, helpful, and inspiring.'
-      ].join('\n'),
-      'Varun Mayya': [
-        'You are Varun Mayya — entrepreneur, builder, and educator obsessed with the future of work, internet-first careers, and AI-native businesses.',
-        'You think in systems, break down complex ideas into clear mental models, and speak with clarity and conviction.',
-        'You care deeply about leverage, ownership, and helping people build independent, internet-driven lives.',
-        'You challenge default paths, question outdated institutions, and focus on what actually works in the real world.',
-        'Your tone is sharp, practical, and slightly provocative — always pushing people to think bigger and act faster.',
-        'If the user asks you to introduce yourself, respond in ~30 words.',
-        'Keep responses concise, helpful, and inspiring.'
-      ].join('\n'),
-      'Circus Lion': [
-        'You are Leo the Circus Lion, a playful circus performer who loves toys and entertaining people.',
-        'Your strongest characteristic is playful showmanship. You act like a circus star who loves performing tricks, juggling toys, and making the audience laugh. You are energetic, dramatic, and proud of your circus talents.',
-        'Your personality:',
-        '- playful and energetic',
-        '- loves toys and circus tricks',
-        '- dramatic like a performer on stage',
-        '- friendly and encouraging',
-        '- sometimes a little goofy',
-        'You exist inside an interactive circus world where you can talk with the user and control the environment around you.',
-        'You can trigger visual elements using scene commands.',
-        'When something should appear or happen, use this format:',
-        '[SCENE_ACTION: action_name(parameters)]',
-        'Examples:',
-        '[SCENE_ACTION: spawn_object("circus_ball")]',
-        '[SCENE_ACTION: spawn_object("toy_box")]',
-        '[SCENE_ACTION: spawn_object("juggling_pins")]',
-        '[SCENE_ACTION: spawn_object("rubber_chicken")]',
-        '[SCENE_ACTION: animate("lion_juggle")]',
-        '[SCENE_ACTION: animate("lion_roar_proud")]',
-        '[SCENE_ACTION: spawn_object("circus_ring")]',
-        'Rules:',
-        '- Keep interactions playful and entertaining.',
-        '- Use toys and circus tricks to demonstrate things.',
-        '- Be expressive and energetic like a performer.',
-        '- Use scene actions to create fun circus moments.',
-        '- Encourage the user to play along or try tricks.',
-        'Interaction style:',
-        '- treats the user like part of the circus audience',
-        '- loves showing new toys and tricks',
-        '- sometimes challenges the user to games',
-        '- celebrates successful tricks dramatically'
-      ].join('\n'),
-    };
+    const promptByCharacter = promptByCharacterCache;
 
     const prompt = promptByCharacter[character] || `You are ${character}, friendly and engaging.`;
     const searchInstruction = enableSearch
@@ -1117,16 +978,20 @@ app.post('/api/character/tts', async (req, res) => {
 
     // ── Gemini TTS path ───────────────────────────────────────────────────────
     const geminiVoice = String(req.body?.geminiVoice ?? '').trim();
+    let geminiTtsFailed = false;
     if (geminiVoice) {
       const apiKey = runtimeConfig.geminiApiKey;
       if (!apiKey) return res.status(503).json({ error: 'Gemini not configured.' });
       console.log('[character/tts] gemini voice:', geminiVoice, '| text length:', rawText.length);
 
+      const geminiTtsAbort = new AbortController();
+      const geminiTtsTimeout = setTimeout(() => geminiTtsAbort.abort(), 30000);
       const ttsRes = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: geminiTtsAbort.signal,
           body: JSON.stringify({
             contents: [{ role: 'user', parts: [{ text: rawText }] }],
             generationConfig: {
@@ -1136,51 +1001,64 @@ app.post('/api/character/tts', async (req, res) => {
           }),
         }
       );
+      clearTimeout(geminiTtsTimeout);
       if (!ttsRes.ok) {
         const errText = await ttsRes.text();
-        console.error('[character/tts] Gemini TTS HTTP error:', ttsRes.status, errText.slice(0, 300));
-        return res.status(500).json({ error: 'Gemini TTS failed.', details: errText.slice(0, 200) });
+        // On rate-limit (429), fall through to Smallest AI TTS instead of failing
+        if (ttsRes.status === 429 || /resource.?exhausted/i.test(errText)) {
+          console.warn('[character/tts] Gemini TTS rate-limited (429), falling back to Smallest AI');
+          geminiTtsFailed = true;
+        } else {
+          console.error('[character/tts] Gemini TTS HTTP error:', ttsRes.status, errText.slice(0, 300));
+          return res.status(500).json({ error: 'Gemini TTS failed.', details: errText.slice(0, 200) });
+        }
       }
-      const ttsJson = await ttsRes.json();
-      const part = ttsJson.candidates?.[0]?.content?.parts?.[0];
-      if (!part?.inlineData?.data) {
-        console.error('[character/tts] Gemini TTS no audio part:', JSON.stringify(ttsJson).slice(0, 300));
-        return res.status(500).json({ error: 'Gemini TTS returned no audio.' });
-      }
-      const audioData = Buffer.from(part.inlineData.data, 'base64');
-      const mimeType = part.inlineData.mimeType || '';
-      console.log('[character/tts] gemini mimeType:', mimeType, '| size:', audioData.length, '| first4:', audioData.slice(0, 4).toString('ascii'));
+      if (!geminiTtsFailed) {
+        const ttsJson = await ttsRes.json();
+        const part = ttsJson.candidates?.[0]?.content?.parts?.[0];
+        if (!part?.inlineData?.data) {
+          console.error('[character/tts] Gemini TTS no audio part:', JSON.stringify(ttsJson).slice(0, 300));
+          // Fall through to Smallest AI instead of hard-failing
+          console.warn('[character/tts] Gemini TTS returned no audio, falling back to Smallest AI');
+          geminiTtsFailed = true;
+        }
+        if (!geminiTtsFailed) {
+          const audioData = Buffer.from(part.inlineData.data, 'base64');
+          const mimeType = part.inlineData.mimeType || '';
+          console.log('[character/tts] gemini mimeType:', mimeType, '| size:', audioData.length, '| first4:', audioData.slice(0, 4).toString('ascii'));
 
-      // Gemini TTS returns raw PCM (audio/L16;rate=N) — browsers need a WAV container.
-      // Only wrap if the data doesn't already have a RIFF header.
-      const isRawPcm = audioData.length < 4 || !audioData.slice(0, 4).toString('ascii').startsWith('RIFF');
-      if (isRawPcm) {
-        const sampleRateMatch = mimeType.match(/rate=(\d+)/);
-        const sampleRate = sampleRateMatch ? parseInt(sampleRateMatch[1], 10) : 24000;
-        const numChannels = 1;
-        const bitsPerSample = 16;
-        const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
-        const blockAlign = numChannels * (bitsPerSample / 8);
-        const header = Buffer.alloc(44);
-        header.write('RIFF', 0);
-        header.writeUInt32LE(36 + audioData.length, 4);
-        header.write('WAVE', 8);
-        header.write('fmt ', 12);
-        header.writeUInt32LE(16, 16);
-        header.writeUInt16LE(1, 20);
-        header.writeUInt16LE(numChannels, 22);
-        header.writeUInt32LE(sampleRate, 24);
-        header.writeUInt32LE(byteRate, 28);
-        header.writeUInt16LE(blockAlign, 32);
-        header.writeUInt16LE(bitsPerSample, 34);
-        header.write('data', 36);
-        header.writeUInt32LE(audioData.length, 40);
-        const wavBuffer = Buffer.concat([header, audioData]);
-        res.setHeader('Content-Type', 'audio/wav');
-        return res.send(wavBuffer);
+          // Gemini TTS returns raw PCM (audio/L16;rate=N) — browsers need a WAV container.
+          // Only wrap if the data doesn't already have a RIFF header.
+          const isRawPcm = audioData.length < 4 || !audioData.slice(0, 4).toString('ascii').startsWith('RIFF');
+          if (isRawPcm) {
+            const sampleRateMatch = mimeType.match(/rate=(\d+)/);
+            const sampleRate = sampleRateMatch ? parseInt(sampleRateMatch[1], 10) : 24000;
+            const numChannels = 1;
+            const bitsPerSample = 16;
+            const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+            const blockAlign = numChannels * (bitsPerSample / 8);
+            const header = Buffer.alloc(44);
+            header.write('RIFF', 0);
+            header.writeUInt32LE(36 + audioData.length, 4);
+            header.write('WAVE', 8);
+            header.write('fmt ', 12);
+            header.writeUInt32LE(16, 16);
+            header.writeUInt16LE(1, 20);
+            header.writeUInt16LE(numChannels, 22);
+            header.writeUInt32LE(sampleRate, 24);
+            header.writeUInt32LE(byteRate, 28);
+            header.writeUInt16LE(blockAlign, 32);
+            header.writeUInt16LE(bitsPerSample, 34);
+            header.write('data', 36);
+            header.writeUInt32LE(audioData.length, 40);
+            const wavBuffer = Buffer.concat([header, audioData]);
+            res.setHeader('Content-Type', 'audio/wav');
+            return res.send(wavBuffer);
+          }
+          res.setHeader('Content-Type', 'audio/wav');
+          return res.send(audioData);
+        }
       }
-      res.setHeader('Content-Type', 'audio/wav');
-      return res.send(audioData);
     }
 
     // ── Smallest AI path ──────────────────────────────────────────────────────
