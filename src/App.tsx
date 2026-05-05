@@ -580,15 +580,14 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
       }
       return;
     }
-    setSessionSecondsLeft(300);
-    setSessionExpired(false);
-
     sessionTimerRef.current = setInterval(() => {
       setSessionSecondsLeft((prev) => {
         if (prev <= 1) {
           clearInterval(sessionTimerRef.current!);
           sessionTimerRef.current = null;
+          retryStreamRef.current = null;
           stopGeminiLiveSession();
+          serviceRef.current?.endStream().catch(() => undefined);
           ++ttsGenerationRef.current;
           ttsAbortRef.current?.abort();
           ttsAbortRef.current = null;
