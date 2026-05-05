@@ -268,80 +268,61 @@ export default function DrawingExperiment() {
   // ── Streaming view ────────────────────────────────────────────────────────
   if (phase === 'streaming') {
     return (
-      <div className="app">
-        <div className="video-layer">
-          <div className="video-overlay" />
-          <video
-            ref={videoRef}
-            className={`video-element ${streamState === 'streaming' ? '' : 'is-hidden'}`}
-            autoPlay
-            playsInline
-            muted
-          />
-        </div>
+      <div className="atrium dtl-stream">
+        <video
+          ref={videoRef}
+          className={`dtl-stream__video ${streamState === 'streaming' ? '' : 'is-hidden'}`}
+          autoPlay
+          playsInline
+          muted
+        />
 
-        <div className="ui">
-          <header className="top-bar">
-            <button className="btn ghost back-to-landing" onClick={handleBack}>
-              Back
-            </button>
-            <button className="btn ghost" onClick={handleTryAnother} style={{ marginLeft: 'auto' }}>
-              Try another
-            </button>
-          </header>
+        <header className="dtl-stream__header">
+          <button className="dtl-stream__btn" onClick={handleBack}>
+            ← Back
+          </button>
+          <button className="dtl-stream__btn" onClick={handleTryAnother}>
+            Try another
+          </button>
+        </header>
 
-          <main className="slide-shell" />
-
-          <footer className="story-bar">
-            <div className="story-text">
-              <p>Your photo is alive — say something</p>
-            </div>
-            <div className="story-actions">
-              {getSpeechRecognition() && (
-                isListening ? (
-                  <button
-                    className="voice-orb voice-orb--listening"
-                    onClick={toggleListening}
-                    aria-label="Stop listening"
-                  >
-                    <img
-                      className="recording-icon"
-                      src="/images/recording_icon_v3.png"
-                      alt=""
-                      aria-hidden="true"
-                    />
-                  </button>
-                ) : (
-                  <button
-                    className="btn accent ptt-btn"
-                    onClick={toggleListening}
-                    aria-label="Speak your prompt"
-                  >
-                    <img
-                      className="recording-icon"
-                      src="/images/recording_icon_v3.png"
-                      alt=""
-                      aria-hidden="true"
-                    />
-                  </button>
-                )
-              )}
-              <div className="prompt-input">
-                <input
-                  type="text"
-                  value={textPrompt}
-                  onChange={(e) => setTextPrompt(e.target.value)}
-                  onKeyDown={handleTextKeyDown}
-                  placeholder="say something…"
-                  disabled={!isStreamingReady}
+        <footer className="dtl-stream__footer">
+          <p className="dtl-stream__hint">Your photo is alive — say something</p>
+          <div className="dtl-stream__actions">
+            {getSpeechRecognition() && (
+              <button
+                className={`dtl-stream__mic${isListening ? ' dtl-stream__mic--active' : ''}`}
+                onClick={toggleListening}
+                aria-label={isListening ? 'Stop listening' : 'Speak your prompt'}
+              >
+                <img
+                  className="recording-icon"
+                  src="/images/recording_icon_v3.png"
+                  alt=""
+                  aria-hidden="true"
                 />
-                <button className="btn ghost" onClick={handleSendPrompt} disabled={!isStreamingReady}>
-                  Send
-                </button>
-              </div>
+              </button>
+            )}
+            <div className="dtl-stream__input-wrap">
+              <input
+                type="text"
+                className="dtl-stream__input"
+                value={textPrompt}
+                onChange={(e) => setTextPrompt(e.target.value)}
+                onKeyDown={handleTextKeyDown}
+                placeholder="say something…"
+                disabled={!isStreamingReady}
+              />
+              <button
+                className="dtl-stream__send"
+                onClick={handleSendPrompt}
+                disabled={!isStreamingReady}
+              >
+                Send
+              </button>
             </div>
-          </footer>
-        </div>
+          </div>
+        </footer>
       </div>
     );
   }

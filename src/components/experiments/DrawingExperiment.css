@@ -167,3 +167,181 @@
   font-size: 1rem;
   color: var(--ink-soft);
 }
+
+/* ── Streaming view ────────────────────────────────────────────────────────── */
+
+.dtl-stream {
+  position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+  background: var(--night, #0E1614);
+}
+
+.dtl-stream__video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center top;
+  transition: opacity 0.35s ease;
+}
+
+.dtl-stream__video.is-hidden {
+  opacity: 0;
+}
+
+/* Header — top bar with Back / Try another */
+.dtl-stream__header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px clamp(16px, 4vw, 32px);
+}
+
+.dtl-stream__btn {
+  font-family: var(--body);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--paper);
+  background: rgba(14, 22, 20, 0.65);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(245, 241, 232, 0.18);
+  border-radius: var(--radius-pill);
+  padding: 8px 18px;
+  cursor: pointer;
+  transition: background 0.2s var(--ease), border-color 0.2s var(--ease);
+}
+
+.dtl-stream__btn:hover {
+  background: rgba(14, 22, 20, 0.82);
+  border-color: rgba(245, 241, 232, 0.32);
+}
+
+/* Footer — pinned to bottom */
+.dtl-stream__footer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 16px clamp(16px, 4vw, 32px) max(16px, env(safe-area-inset-bottom, 16px));
+  background: linear-gradient(to top, rgba(14, 22, 20, 0.75) 0%, rgba(14, 22, 20, 0.40) 60%, transparent 100%);
+}
+
+.dtl-stream__hint {
+  font-family: var(--body);
+  font-size: 0.85rem;
+  color: rgba(245, 241, 232, 0.72);
+  margin: 0;
+}
+
+.dtl-stream__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 520px;
+}
+
+/* Mic button */
+.dtl-stream__mic {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1.5px solid var(--moss);
+  background: rgba(47, 94, 72, 0.25);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s var(--ease), box-shadow 0.2s var(--ease);
+}
+
+.dtl-stream__mic:hover {
+  background: rgba(47, 94, 72, 0.40);
+}
+
+.dtl-stream__mic--active {
+  border-color: var(--clay);
+  background: rgba(217, 73, 43, 0.25);
+  animation: dtl-mic-pulse 2s ease-in-out infinite;
+}
+
+@keyframes dtl-mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(217, 73, 43, 0.4); }
+  50%      { box-shadow: 0 0 0 8px rgba(217, 73, 43, 0); }
+}
+
+.dtl-stream__mic .recording-icon {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+
+/* Text input row */
+.dtl-stream__input-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  background: rgba(14, 22, 20, 0.55);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(245, 241, 232, 0.15);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  transition: border-color 0.2s var(--ease);
+}
+
+.dtl-stream__input-wrap:focus-within {
+  border-color: var(--moss);
+}
+
+.dtl-stream__input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--paper);
+  font-family: var(--body);
+  font-size: 0.9rem;
+  padding: 10px 16px;
+  outline: none;
+}
+
+.dtl-stream__input::placeholder {
+  color: rgba(245, 241, 232, 0.38);
+}
+
+.dtl-stream__send {
+  font-family: var(--body);
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--paper);
+  background: var(--moss);
+  border: none;
+  border-radius: var(--radius-pill);
+  padding: 8px 16px;
+  margin: 4px 4px 4px 0;
+  cursor: pointer;
+  transition: background 0.2s var(--ease);
+}
+
+.dtl-stream__send:hover {
+  background: var(--moss-deep);
+}
+
+.dtl-stream__send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
