@@ -1,208 +1,419 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useOdysseyStream } from '../../hooks/useOdysseyStream';
+import { OdysseyService, credentialsFromDict, type StreamState } from '../../lib/odyssey';
+import { AtriumNav } from '../../demo/atrium/Layout';
+import '../../demo/shared/tokens.css';
+import '../../demo/atrium/Atrium.css';
+import './DrawingExperiment.css';
 
-type Tool = 'pen' | 'eraser';
+type Phase = 'upload' | 'processing' | 'streaming';
+type Style = 'manga' | 'comic' | 'realism' | 'ghibli-inspired';
 
-const CANVAS_W = 512;
-const CANVAS_H = 512;
+const STYLES: { value: Style; label: string; description: string }[] = [
+  { value: 'manga',           label: 'Manga',     description: 'Bold, high contrast' },
+  { value: 'comic',           label: 'Comic',     description: 'Colorful, action-ready' },
+  { value: 'ghibli-inspired', label: 'Ghibli',    description: 'Soft, painterly warmth' },
+  { value: 'realism',         label: 'Realistic', description: 'Photo-like rendering' },
+];
+
+type SpeechRecognitionLike = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  onresult: ((event: { results: { [index: number]: { isFinal: boolean; 0: { transcript: string } }; length: number } }) => void) | null;
+  onerror: ((event: Event) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
+  const win = window as typeof window & {
+    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+    SpeechRecognition?: new () => SpeechRecognitionLike;
+  };
+  return win.SpeechRecognition ?? win.webkitSpeechRecognition ?? null;
+}
 
 export default function DrawingExperiment() {
   const navigate = useNavigate();
-  const { status, error, videoRef, startStream, interact, disconnect } = useOdysseyStream();
+  const [phase, setPhase] = useState<Phase>('upload');
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [selectedStyle, setSelectedStyle] = useState<Style>('manga');
+  const [error, setError] = useState<string | null>(null);
+  const [processingStep, setProcessingStep] = useState('');
+  const [streamState, setStreamState] = useState<StreamState>('idle');
+  const [isStreamingReady, setIsStreamingReady] = useState(false);
+  const [textPrompt, setTextPrompt] = useState('');
+  const [isListening, setIsListening] = useState(false);
 
-  const canvasRef    = useRef<HTMLCanvasElement | null>(null);
-  const drawingRef   = useRef(false);
-  const [tool, setTool] = useState<Tool>('pen');
-  const [color, setColor] = useState('#ffffff');
-  const [strokeWidth, setStrokeWidth] = useState(6);
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [phase, setPhase] = useState<'draw' | 'live'>('draw');
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const serviceRef = useRef<OdysseyService | null>(null);
+  const leaseIdRef = useRef<string | null>(null);
+  const heartbeatRef = useRef<number | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
 
-  // Canvas setup
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.fillStyle = '#111827';
-    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-  }, []);
-
-  const getPos = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current!;
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = CANVAS_W / rect.width;
-    const scaleY = CANVAS_H / rect.height;
-    if ('touches' in e) {
-      const t = e.touches[0];
-      return { x: (t.clientX - rect.left) * scaleX, y: (t.clientY - rect.top) * scaleY };
+  const stopHeartbeat = () => {
+    if (heartbeatRef.current !== null) {
+      window.clearInterval(heartbeatRef.current);
+      heartbeatRef.current = null;
     }
-    return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
   };
 
-  const startDraw = useCallback((e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    const ctx = canvasRef.current?.getContext('2d');
-    if (!ctx) return;
-    drawingRef.current = true;
-    const { x, y } = getPos(e);
-    ctx.beginPath();
-    ctx.moveTo(x, y);
+  const releaseLease = () => {
+    const leaseId = leaseIdRef.current;
+    if (!leaseId) return;
+    stopHeartbeat();
+    const payload = JSON.stringify({ leaseId });
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon('/api/odyssey/release', new Blob([payload], { type: 'application/json' }));
+    } else {
+      fetch('/api/odyssey/release', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+        keepalive: true,
+      }).catch(() => undefined);
+    }
+    leaseIdRef.current = null;
+  };
+
+  useEffect(() => {
+    const onUnload = () => releaseLease();
+    window.addEventListener('beforeunload', onUnload);
+    return () => {
+      window.removeEventListener('beforeunload', onUnload);
+      releaseLease();
+      serviceRef.current?.disconnect().catch(() => undefined);
+    };
   }, []);
 
-  const draw = useCallback((e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    if (!drawingRef.current) return;
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext('2d');
-    if (!ctx) return;
-    const { x, y } = getPos(e);
-    ctx.globalCompositeOperation = tool === 'eraser' ? 'destination-out' : 'source-over';
-    ctx.strokeStyle = tool === 'eraser' ? 'rgba(0,0,0,1)' : color;
-    ctx.lineWidth   = tool === 'eraser' ? strokeWidth * 3 : strokeWidth;
-    ctx.lineCap     = 'round';
-    ctx.lineJoin    = 'round';
-    ctx.lineTo(x, y);
-    ctx.stroke();
-  }, [tool, color, strokeWidth]);
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 18 * 1024 * 1024) {
+      setError('Photo is too large. Please choose an image under 18 MB.');
+      return;
+    }
+    setUploadedFile(file);
+    const url = URL.createObjectURL(file);
+    setPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return url;
+    });
+    setError(null);
+  };
 
-  const endDraw = useCallback(() => { drawingRef.current = false; }, []);
+  const handleBringToLife = async () => {
+    if (!uploadedFile) return;
+    setPhase('processing');
+    setError(null);
 
-  const clearCanvas = useCallback(() => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext('2d');
-    if (!ctx) return;
-    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-    ctx.fillStyle = '#111827';
-    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-  }, []);
+    try {
+      setProcessingStep('Stylizing your photo…');
+      const formData = new FormData();
+      formData.append('image', uploadedFile);
+      formData.append('style', selectedStyle);
 
-  const bringToLife = useCallback(async () => {
-    if (status !== 'ready' || isStreaming) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+      const stylizeRes = await fetch('/api/animate-drawings/stylize', { method: 'POST', body: formData });
+      if (!stylizeRes.ok) {
+        const errData = await stylizeRes.json().catch(() => ({ error: 'Stylization failed' }));
+        throw new Error(errData.error || 'Stylization failed');
+      }
+      const { imageBase64, mimeType: stylizedMime } = await stylizeRes.json();
 
-    setIsStreaming(true);
-    setPhase('live');
+      const binary = atob(imageBase64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const stylizedFile = new File([bytes], 'photo.png', { type: stylizedMime || 'image/png' });
 
-    canvas.toBlob(async (blob) => {
-      if (!blob) return;
-      const imageFile = new File([blob], 'drawing.png', { type: 'image/png' });
-      await startStream({
-        image:   imageFile,
-        prompt:  'You are a living character that just came to life from a drawing. React to being alive, look around curiously, and animate naturally.',
-        portrait: false,
+      setProcessingStep('Preparing animation…');
+      const credRes = await fetch('/api/odyssey/token');
+      if (!credRes.ok) {
+        const errData = await credRes.json().catch(() => ({ error: 'Service unavailable' }));
+        throw new Error(errData.error || 'Failed to get session');
+      }
+      const credData = await credRes.json();
+
+      leaseIdRef.current = credData.leaseId ?? null;
+      if (credData.leaseId) {
+        heartbeatRef.current = window.setInterval(() => {
+          fetch('/api/odyssey/heartbeat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ leaseId: credData.leaseId }),
+          }).catch(() => undefined);
+        }, 60_000);
+      }
+
+      const credentials = credentialsFromDict(credData.credentials);
+
+      setProcessingStep('Bringing it to life…');
+      const service = new OdysseyService(credentials);
+      serviceRef.current = service;
+
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+
+        service.connect({
+          onConnected: (stream) => {
+            const attach = () => {
+              if (videoRef.current) {
+                videoRef.current.srcObject = stream;
+                videoRef.current.play().catch((e: unknown) => {
+                  if ((e as { name?: string })?.name === 'AbortError') {
+                    setTimeout(() => videoRef.current?.play().catch(() => undefined), 150);
+                  }
+                });
+              } else {
+                setTimeout(attach, 100);
+              }
+            };
+            attach();
+            service.startStream({ image: stylizedFile }).catch((err: unknown) => {
+              if (!settled) { settled = true; reject(err); }
+            });
+          },
+          onStreamStarted: () => {
+            if (!settled) {
+              settled = true;
+              setStreamState('streaming');
+              setIsStreamingReady(true);
+              setPhase('streaming');
+              resolve();
+            }
+          },
+          onStreamError: (_reason, message) => {
+            if (!settled) {
+              settled = true;
+              reject(new Error(String(message || 'Stream failed')));
+            }
+          },
+          onStreamEnded: () => {
+            setStreamState('ended');
+            setIsStreamingReady(false);
+          },
+          onStatusChange: () => {},
+        });
       });
-    }, 'image/png');
-  }, [status, isStreaming, startStream]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Something went wrong. Please try again.';
+      setError(message);
+      setPhase('upload');
+      stopHeartbeat();
+      releaseLease();
+    }
+  };
 
-  const sendPrompt = useCallback(async (prompt: string) => {
-    if (!prompt.trim()) return;
-    await interact(prompt);
-  }, [interact]);
+  const handleTryAnother = () => {
+    recognitionRef.current?.stop();
+    releaseLease();
+    serviceRef.current?.disconnect().catch(() => undefined);
+    serviceRef.current = null;
+    setPhase('upload');
+    setUploadedFile(null);
+    setPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setStreamState('idle');
+    setIsStreamingReady(false);
+    setTextPrompt('');
+    setError(null);
+  };
 
-  const handleBack = useCallback(async () => {
-    await disconnect();
-    navigate('/characters');
-  }, [disconnect, navigate]);
+  const handleSendPrompt = () => {
+    const prompt = textPrompt.trim();
+    if (!prompt || !isStreamingReady) return;
+    serviceRef.current?.interact(prompt).catch(() => undefined);
+    setTextPrompt('');
+  };
 
-  const [promptText, setPromptText] = useState('');
+  const handleTextKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') handleSendPrompt();
+  };
 
-  return (
-    <div className="experiment-shell">
-      <header className="experiment-topbar">
-        <button className="btn ghost" onClick={handleBack}>← Back</button>
-        <h1>Drawing to Live</h1>
-        <span className="exp-badge">Experiment 1</span>
-      </header>
+  const toggleListening = () => {
+    const SpeechRecognition = getSpeechRecognition();
+    if (!SpeechRecognition) return;
 
-      <div className="experiment-body">
-        {/* Left: canvas or live video */}
-        <div className="experiment-video-panel">
-          {phase === 'draw' && (
-            <canvas
-              ref={canvasRef}
-              width={CANVAS_W}
-              height={CANVAS_H}
-              style={{ cursor: tool === 'eraser' ? 'cell' : 'crosshair', touchAction: 'none' }}
-              onMouseDown={startDraw}
-              onMouseMove={draw}
-              onMouseUp={endDraw}
-              onMouseLeave={endDraw}
-              onTouchStart={startDraw}
-              onTouchMove={draw}
-              onTouchEnd={endDraw}
-            />
-          )}
+    if (isListening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognitionRef.current = recognition;
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+    recognition.continuous = false;
+    recognition.onresult = (e) => {
+      const transcript = e.results[0]?.[0]?.transcript || '';
+      if (transcript) setTextPrompt(transcript);
+    };
+    recognition.onend = () => setIsListening(false);
+    recognition.onerror = () => setIsListening(false);
+    recognition.start();
+    setIsListening(true);
+  };
+
+  const handleBack = () => {
+    recognitionRef.current?.stop();
+    releaseLease();
+    serviceRef.current?.disconnect().catch(() => undefined);
+    navigate('/labs');
+  };
+
+  // ── Streaming view ────────────────────────────────────────────────────────
+  if (phase === 'streaming') {
+    return (
+      <div className="app">
+        <div className="video-layer">
+          <div className="video-overlay" />
           <video
             ref={videoRef}
+            className={`video-element ${streamState === 'streaming' ? '' : 'is-hidden'}`}
             autoPlay
             playsInline
             muted
-            style={{ display: phase === 'live' ? 'block' : 'none', width: '100%', height: '100%', objectFit: 'cover' }}
           />
         </div>
 
-        {/* Right: controls */}
-        <aside className="experiment-side-panel">
-          <div className="experiment-status">
-            {status === 'idle' || status === 'connecting' ? 'Connecting to Odyssey…' :
-             status === 'ready'     ? 'Draw something, then bring it to life.' :
-             status === 'streaming' ? 'Your drawing is alive!' :
-             status === 'error'     ? `Error: ${error}` : status}
-          </div>
+        <div className="ui">
+          <header className="top-bar">
+            <button className="btn ghost back-to-landing" onClick={handleBack}>
+              Back
+            </button>
+            <button className="btn ghost" onClick={handleTryAnother} style={{ marginLeft: 'auto' }}>
+              Try another
+            </button>
+          </header>
 
-          {phase === 'draw' && (
-            <>
-              <div className="drawing-tools">
-                <div className="tool-row">
-                  <button className={`exp-btn ghost ${tool === 'pen' ? 'active' : ''}`} onClick={() => setTool('pen')} style={{ flex: 1 }}>Pen</button>
-                  <button className={`exp-btn ghost ${tool === 'eraser' ? 'active' : ''}`} onClick={() => setTool('eraser')} style={{ flex: 1 }}>Eraser</button>
-                </div>
-                <label className="tool-label">Colour
-                  <input type="color" value={color} onChange={(e) => setColor(e.target.value)} style={{ marginLeft: 8, verticalAlign: 'middle' }} />
-                </label>
-                <label className="tool-label">Size: {strokeWidth}px
-                  <input type="range" min={1} max={30} value={strokeWidth} onChange={(e) => setStrokeWidth(Number(e.target.value))} style={{ width: '100%' }} />
-                </label>
-              </div>
-              <button className="exp-btn ghost" onClick={clearCanvas}>Clear</button>
-              <button
-                className="exp-btn primary"
-                disabled={status !== 'ready'}
-                onClick={bringToLife}
-              >
-                Bring to Life ✨
-              </button>
-            </>
-          )}
+          <main className="slide-shell" />
 
-          {phase === 'live' && (
-            <>
-              <div className="exp-prompt-row">
+          <footer className="story-bar">
+            <div className="story-text">
+              <p>Your photo is alive — say something</p>
+            </div>
+            <div className="story-actions">
+              {getSpeechRecognition() && (
+                isListening ? (
+                  <button
+                    className="voice-orb voice-orb--listening"
+                    onClick={toggleListening}
+                    aria-label="Stop listening"
+                  >
+                    <img
+                      className="recording-icon"
+                      src="/images/recording_icon_v3.png"
+                      alt=""
+                      aria-hidden="true"
+                    />
+                  </button>
+                ) : (
+                  <button
+                    className="btn accent ptt-btn"
+                    onClick={toggleListening}
+                    aria-label="Speak your prompt"
+                  >
+                    <img
+                      className="recording-icon"
+                      src="/images/recording_icon_v3.png"
+                      alt=""
+                      aria-hidden="true"
+                    />
+                  </button>
+                )
+              )}
+              <div className="prompt-input">
                 <input
                   type="text"
-                  className="exp-text-input"
-                  placeholder="Talk to your drawing…"
-                  value={promptText}
-                  onChange={(e) => setPromptText(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') { void sendPrompt(promptText); setPromptText(''); }
-                  }}
+                  value={textPrompt}
+                  onChange={(e) => setTextPrompt(e.target.value)}
+                  onKeyDown={handleTextKeyDown}
+                  placeholder="say something…"
+                  disabled={!isStreamingReady}
                 />
-                <button
-                  className="exp-btn primary"
-                  onClick={() => { void sendPrompt(promptText); setPromptText(''); }}
-                >
+                <button className="btn ghost" onClick={handleSendPrompt} disabled={!isStreamingReady}>
                   Send
                 </button>
               </div>
-              <button className="exp-btn ghost" onClick={() => { clearCanvas(); setPhase('draw'); setIsStreaming(false); }}>
-                Draw again
-              </button>
-            </>
-          )}
-        </aside>
+            </div>
+          </footer>
+        </div>
       </div>
+    );
+  }
+
+  // ── Processing view ───────────────────────────────────────────────────────
+  if (phase === 'processing') {
+    return (
+      <div className="atrium drawn-to-life">
+        <AtriumNav />
+        <div className="dtl-processing">
+          <div className="dtl-spinner" />
+          <p className="dtl-processing-label">{processingStep}</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Upload view ───────────────────────────────────────────────────────────
+  return (
+    <div className="atrium drawn-to-life">
+      <AtriumNav />
+      <main className="dtl-main">
+        <div className="dtl-intro">
+          <span className="eyebrow">
+            <span className="eyebrow__dot" /> The Lab
+          </span>
+          <h1 className="dtl-heading">Drawn to Life</h1>
+          <p className="lede">A photo goes in. The character sees it, thinks about it, and has things to say.</p>
+        </div>
+
+        <label className={`dtl-upload${uploadedFile ? ' has-file' : ''}`}>
+          <input
+            type="file"
+            accept="image/*"
+            onChange={handleFileChange}
+            style={{ display: 'none' }}
+          />
+          {previewUrl ? (
+            <img src={previewUrl} alt="Your photo" className="dtl-upload-preview" />
+          ) : (
+            <div className="dtl-upload-placeholder">
+              <span className="dtl-upload-icon">✏️</span>
+              <span>Upload a photo</span>
+              <span className="dtl-upload-hint">tap to choose</span>
+            </div>
+          )}
+        </label>
+
+        <div className="dtl-styles">
+          {STYLES.map((s) => (
+            <button
+              key={s.value}
+              className={`dtl-style-btn${selectedStyle === s.value ? ' selected' : ''}`}
+              onClick={() => setSelectedStyle(s.value)}
+              type="button"
+            >
+              <span className="dtl-style-label">{s.label}</span>
+              <span className="dtl-style-desc">{s.description}</span>
+            </button>
+          ))}
+        </div>
+
+        {error && <p className="dtl-error">{error}</p>}
+
+        <button
+          className="btn btn--primary dtl-cta"
+          onClick={handleBringToLife}
+          disabled={!uploadedFile}
+        >
+          Bring to Life
+        </button>
+      </main>
     </div>
   );
 }

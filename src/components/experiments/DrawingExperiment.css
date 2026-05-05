@@ -1,0 +1,169 @@
+/* ── Drawn to Life experiment ────────────────────────────────────────────── */
+
+.drawn-to-life {
+  min-height: 100vh;
+  background: var(--paper);
+}
+
+.drawn-to-life .dtl-main {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: clamp(48px, 8vw, 72px) clamp(20px, 5vw, 40px) 80px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* Intro */
+.drawn-to-life .dtl-intro {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.drawn-to-life .dtl-heading {
+  font-family: var(--display);
+  font-size: clamp(2.8rem, 6vw, 4rem);
+  font-weight: 500;
+  line-height: 0.96;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin: 4px 0 0;
+}
+
+/* Upload zone */
+.drawn-to-life .dtl-upload {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 4/3;
+  border: 1.5px dashed rgba(20, 40, 38, 0.20);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-color 0.3s var(--ease), box-shadow 0.3s var(--ease);
+}
+
+.drawn-to-life .dtl-upload:hover {
+  border-color: var(--moss);
+  box-shadow: var(--shadow-sm);
+}
+
+.drawn-to-life .dtl-upload.has-file {
+  border-style: solid;
+  border-color: rgba(20, 40, 38, 0.15);
+}
+
+.drawn-to-life .dtl-upload-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-mute);
+  font-size: 0.95rem;
+}
+
+.drawn-to-life .dtl-upload-icon {
+  font-size: 2.5rem;
+  margin-bottom: 4px;
+}
+
+.drawn-to-life .dtl-upload-hint {
+  font-size: 0.78rem;
+  color: var(--ink-mute);
+}
+
+.drawn-to-life .dtl-upload-preview {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 8px;
+}
+
+/* Style picker */
+.drawn-to-life .dtl-styles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  width: 100%;
+}
+
+.drawn-to-life .dtl-style-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 16px 18px;
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(20, 40, 38, 0.08);
+  background: var(--paper);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.3s var(--ease), box-shadow 0.3s var(--ease);
+}
+
+.drawn-to-life .dtl-style-btn:hover {
+  border-color: rgba(20, 40, 38, 0.18);
+  box-shadow: var(--shadow-sm);
+}
+
+.drawn-to-life .dtl-style-btn.selected {
+  border-color: var(--moss);
+  box-shadow: 0 0 0 1px var(--moss);
+}
+
+.drawn-to-life .dtl-style-label {
+  font-family: var(--body);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.drawn-to-life .dtl-style-desc {
+  font-family: var(--body);
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+}
+
+/* CTA */
+.drawn-to-life .dtl-cta {
+  width: 100%;
+  justify-content: center;
+}
+
+/* Error */
+.drawn-to-life .dtl-error {
+  color: var(--clay);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+/* Processing */
+.drawn-to-life .dtl-processing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  min-height: calc(100vh - 80px);
+}
+
+.drawn-to-life .dtl-spinner {
+  width: 40px;
+  height: 40px;
+  border: 2.5px solid rgba(20, 40, 38, 0.10);
+  border-top-color: var(--moss);
+  border-radius: 50%;
+  animation: dtl-spin 0.8s linear infinite;
+}
+
+@keyframes dtl-spin {
+  to { transform: rotate(360deg); }
+}
+
+.drawn-to-life .dtl-processing-label {
+  font-family: var(--body);
+  font-size: 1rem;
+  color: var(--ink-soft);
+}

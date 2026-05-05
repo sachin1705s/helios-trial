@@ -208,6 +208,16 @@ const aiLimiter = rateLimit({
   message: { error: 'Too many AI requests, please try again later.' },
 });
 
+// 2 image generations per IP per day in production; unlimited in dev
+const imageGenLimiter = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000,
+  max: 2,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => !isProduction,
+  message: { error: "You've used your 2 free generations for today. Come back tomorrow!" },
+});
+
 app.use('/api/', generalLimiter);
 app.use(express.json({ limit: '10mb' }));
 
@@ -508,6 +518,54 @@ app.post('/api/odyssey/release', async (req, res) => {
   if (!leaseId) return res.status(400).json({ error: 'Missing leaseId.' });
   await releaseOdysseyLease(leaseId);
   return res.json({ ok: true });
+});
+
+// ─── Animate Drawings — Experiment 1 ─────────────────────────────────────────
+
+const ANIMATE_STYLE_MAP = { realism: 'realism', comic: 'comic', manga: 'manga', 'ghibli-inspired': 'ghibli-inspired' };
+const imageUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+
+app.post('/api/animate-drawings/stylize', imageGenLimiter, aiLimiter, imageUpload.single('image'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Missing image file.' });
+  const ai = getAiClient();
+  if (!ai) return res.status(503).json({ error: 'AI service unavailable.' });
+
+  const mimeType = req.file.mimetype || 'image/jpeg';
+  const base64 = req.file.buffer.toString('base64');
+  const rawStyle = String(req.body?.style || '').trim().toLowerCase();
+  const style = ANIMATE_STYLE_MAP[rawStyle] || 'manga';
+  const prompt = `Transform this photo into a finished illustration in ${style} style. Preserve the composition, shapes, and subject from the original. Keep it faithful to what was photographed.`;
+
+  const MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-2.5-flash-image';
+  const MAX_RETRIES = 2;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model: MODEL,
+        contents: [{ role: 'user', parts: [{ inlineData: { mimeType, data: base64 } }, { text: prompt }] }],
+      });
+
+      const parts = response?.candidates?.[0]?.content?.parts || [];
+      const imagePart = parts.find((p) => p.inlineData?.data);
+      if (!imagePart?.inlineData?.data) {
+        return res.status(500).json({ error: 'No image returned from AI.' });
+      }
+      return res.json({ imageBase64: imagePart.inlineData.data, mimeType: imagePart.inlineData.mimeType || 'image/png' });
+    } catch (err) {
+      const status = err?.status ?? err?.response?.status;
+      const isRetryable = status === 503 || status === 429;
+      if (isRetryable && attempt < MAX_RETRIES) {
+        await new Promise((r) => setTimeout(r, (attempt + 1) * 3000));
+        continue;
+      }
+      console.error('[animate-drawings] stylize error:', err?.message || err);
+      const message = isRetryable
+        ? 'The image service is busy right now. Please try again in a moment.'
+        : 'Image stylization failed. Please try again.';
+      return res.status(500).json({ error: message });
+    }
+  }
 });
 
 app.get('/api/config', (_req, res) => {
@@ -2106,6 +2164,28 @@ ${turnsText}`;
     console.warn('[keyword-expand] failed:', err?.message);
     return res.status(500).json({ error: 'Expansion failed.', detail: err?.message });
   }
+});
+
+// ─── Global error handler ─────────────────────────────────────────────────────
+app.use((err, req, res, _next) => {
+  if (err?.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ error: 'File too large. Maximum size is 20 MB.' });
+  }
+  if (err?.code?.startsWith('LIMIT_')) {
+    return res.status(400).json({ error: 'Upload rejected: ' + err.message });
+  }
+  console.error('[server] unhandled error:', err?.message || err);
+  if (!res.headersSent) {
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+});
+
+// ─── Process-level crash guards ───────────────────────────────────────────────
+process.on('uncaughtException', (err) => {
+  console.error('[process] uncaughtException:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[process] unhandledRejection:', reason);
 });
 
 // ─── Start (local dev only) ───────────────────────────────────────────────────
