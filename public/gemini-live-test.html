@@ -163,6 +163,7 @@
 
     // Get API key
     let apiKey;
+    let isRawKey = true;
     const keySource = document.getElementById('key-source').value;
     if (keySource === 'server') {
       try {
@@ -172,6 +173,7 @@
         const data = await res.json();
         if (!data.token) throw new Error('Empty token from server');
         apiKey = data.token;
+        isRawKey = !!data.isRawKey;
         log('ok', `Got API key from server (length: ${apiKey.length})`);
       } catch (err) {
         log('err', `Token fetch failed: ${err.message}`);
@@ -187,9 +189,11 @@
     // Build WebSocket URL
     // v1beta = standard Google AI endpoint for regular API keys
     const model = document.getElementById('model-sel').value;
-    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+    const wsUrl = isRawKey
+      ? `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`
+      : `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${apiKey}`;
     log('info', `Opening WebSocket…`);
-    log('info', `  URL: …BidiGenerateContent?key=***`);
+    log('info', `  URL: ${isRawKey ? '…BidiGenerateContent?key=***' : '…BidiGenerateContentConstrained?access_token=***'}`);
     log('info', `  Model: ${model}`);
     badge('connecting…', 'mid');
 

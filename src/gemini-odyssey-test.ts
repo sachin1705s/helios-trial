@@ -234,6 +234,7 @@ async function doConnect() {
 
   // Fetch both tokens in parallel
   let apiKey: string;
+  let isRawKey = true;
   let odyCredentials: ReturnType<typeof credentialsFromDict>;
   try {
     const [glRes, odyRes] = await Promise.all([
@@ -242,11 +243,12 @@ async function doConnect() {
     ]);
     if (!glRes.ok) throw new Error(`Gemini token ${glRes.status}`);
     if (!odyRes.ok) throw new Error(`Odyssey token ${odyRes.status}`);
-    const glData = await glRes.json() as { token?: string };
+    const glData = await glRes.json() as { token?: string, isRawKey?: boolean };
     const odyData = await odyRes.json() as { credentials?: unknown; leaseId?: string };
     if (!glData.token) throw new Error('Empty Gemini token');
     if (!odyData.credentials) throw new Error('Empty Odyssey credentials');
     apiKey = glData.token;
+    isRawKey = !!glData.isRawKey;
     odyCredentials = credentialsFromDict(odyData.credentials as Parameters<typeof credentialsFromDict>[0]);
     odysseyLeaseId = odyData.leaseId ?? null;
     log('gl','ok',`Gemini API key (len=${apiKey.length})`);
@@ -306,9 +308,10 @@ async function doConnect() {
   setBadge('gl-badge','connecting…','mid'); setBadge('gl-panel-badge','connecting…','mid');
   log('gl','info','Opening WebSocket to Gemini Live…');
 
-  ws = new WebSocket(
-    `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`
-  );
+  const wsUrl = isRawKey
+    ? `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`
+    : `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${apiKey}`;
+  ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
     log('gl','ok','WS open → sending setup');

@@ -9,7 +9,11 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': 'http://localhost:8787'
+      '/api': {
+        target: 'http://localhost:8787',
+        proxyTimeout: 120_000,
+        timeout: 120_000,
+      }
     }
   }
 })

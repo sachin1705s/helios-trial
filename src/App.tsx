@@ -109,6 +109,8 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   const [streamState, setStreamState] = useState<StreamState>('idle');
   const [_error, setError] = useState<string | null>(null);
   const [isStreamingReady, setIsStreamingReady] = useState(false);
+  const [sessionSecondsLeft, setSessionSecondsLeft] = useState(300);
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [, setSpeechError] = useState<string | null>(null);
   const [textPrompt, setTextPrompt] = useState('');
   const [isCharacterRecording, setIsCharacterRecording] = useState(false);
@@ -155,6 +157,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   const ttsAudioCtxRef = useRef<AudioContext | null>(null);
   const ttsGenerationRef = useRef(0); // incremented on navigation — cancels any in-flight TTS across all await boundaries
   const characterOpenedAtRef = useRef<number | null>(null);
+  const sessionTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const hasLoggedFirstPromptRef = useRef(false);
   const currentPageRef = useRef<string | null>(null);
   const showLandingRef = useRef(showLanding); // kept in sync below — safe to read in SDK callbacks
@@ -569,7 +572,50 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
     }
   }, [isStreamingReady, voiceStatus]);
 
+  useEffect(() => {
+    if (showLanding || !selectedCharacterId) {
+      if (sessionTimerRef.current) {
+        clearInterval(sessionTimerRef.current);
+        sessionTimerRef.current = null;
+      }
+      return;
+    }
 
+    // Start or resume the 5-minute timer as soon as a character is selected.
+    // This makes the session limit independent of stream flickers or reconnection delays.
+    if (!sessionTimerRef.current) {
+      sessionTimerRef.current = setInterval(() => {
+        setSessionSecondsLeft((prev) => {
+          if (prev <= 1) {
+            if (sessionTimerRef.current) {
+              clearInterval(sessionTimerRef.current);
+              sessionTimerRef.current = null;
+            }
+            retryStreamRef.current = null;
+            stopGeminiLiveSession();
+            serviceRef.current?.endStream().catch(() => undefined);
+            ++ttsGenerationRef.current;
+            ttsAbortRef.current?.abort();
+            ttsAbortRef.current = null;
+            for (const node of ttsSourceNodesRef.current) { try { node.stop(); } catch { /* already stopped */ } }
+            ttsSourceNodesRef.current = [];
+            setIsStreamingReady(false);
+            setSessionExpired(true);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+
+    return () => {
+      // We only clear the interval here if the effect is torn down (character switch or landing)
+      if (sessionTimerRef.current) {
+        clearInterval(sessionTimerRef.current);
+        sessionTimerRef.current = null;
+      }
+    };
+  }, [showLanding, selectedCharacterId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (voiceStatus === 'connected' && isVoiceAgentSlide) {
@@ -1209,10 +1255,13 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
     const fresh = objects.filter(o => !glDispatchedThisTurnRef.current.has(o));
     if (!fresh.length) return;
     fresh.forEach(o => glDispatchedThisTurnRef.current.add(o));
-    // Always send the FULL accumulated set so Odyssey keeps all objects in the scene.
     const all = [...glDispatchedThisTurnRef.current];
     console.log(`[gl-objects][${source}] dispatching (new: ${fresh.join(', ')}; total: ${all.join(', ')}) at +${Date.now() - glTurnStartRef.current}ms`);
-    handleInteractRef.current(`add ${all.join(', ')} to the scene`);
+    // Send each fresh object as its own simple command — Odyssey parses short prompts
+    // far more reliably than long multi-item sentences.
+    for (const obj of fresh) {
+      handleInteractRef.current(`show ${obj}`);
+    }
   };
 
   // Shared: extract objects from text via keyword matching, scoped to the active character.
@@ -1544,15 +1593,17 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
 
     // Fetch API key from server
     let apiKey: string;
+    let isRawKey = true;
     try {
       const res = await fetch('/api/gemini-live-token', {
         method: 'POST',
         signal: AbortSignal.timeout(10000),
       });
       if (!res.ok) throw new Error(`Token endpoint returned ${res.status}`);
-      const data = await res.json() as { token?: string };
+      const data = await res.json() as { token?: string, isRawKey?: boolean };
       if (!data.token) throw new Error('Empty token from server');
       apiKey = data.token;
+      isRawKey = !!data.isRawKey;
     } catch (err) {
       console.error('[gemini-live] token fetch error', err);
       setCharacterError('Could not connect to Gemini Live. Try again.');
@@ -1567,9 +1618,10 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
 
     // Open raw WebSocket — model + URL confirmed in isolation test
     const slideId = slide.id;
-    const ws = new WebSocket(
-      `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`
-    );
+    const wsUrl = isRawKey
+      ? `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`
+      : `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${apiKey}`;
+    const ws = new WebSocket(wsUrl);
     geminiLiveWsRef.current = ws;
 
     ws.onopen = () => {
@@ -1984,6 +2036,12 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
 
   const handleSelectCharacter = (id: string) => {
     stopGeminiLiveSession();  // B3: clean up any active session before switching characters
+    if (sessionTimerRef.current) {
+      clearInterval(sessionTimerRef.current);
+      sessionTimerRef.current = null;
+    }
+    setSessionSecondsLeft(300);
+    setSessionExpired(false);
     closeActiveCharacter('switch');
     // Cancel any in-flight TTS from the previous character
     ++ttsGenerationRef.current;
@@ -2342,6 +2400,22 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
           muted
         />
         <div className="video-overlay" />
+        {!sessionExpired && sessionSecondsLeft <= 60 && streamState === 'streaming' && (
+          <div className="session-countdown-pill">
+            {Math.floor(sessionSecondsLeft / 60)}:{String(sessionSecondsLeft % 60).padStart(2, '0')}
+          </div>
+        )}
+        {sessionExpired && (
+          <div className="session-expired-overlay">
+            <p className="session-expired-title">Your 5 minutes with {activeCharacterName} have ended.</p>
+            <button
+              className="session-expired-btn"
+              onClick={() => { if (selectedCharacterId) handleSelectCharacter(selectedCharacterId); }}
+            >
+              Start fresh
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="ui">
@@ -2454,7 +2528,7 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
           </div>{/* /.chat-drawer-shell */}
 
         <footer className="story-bar story-bar--compact">
-          <div className={`chat-pill ${!isStreamingReady && streamState !== 'error' ? 'chat-pill--waking' : ''}`}>
+          <div className={`chat-pill ${!isStreamingReady && streamState !== 'error' && !sessionExpired ? 'chat-pill--waking' : ''}`}>
             <input
               className="chat-pill__input"
               type="text"
