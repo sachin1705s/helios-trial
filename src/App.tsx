@@ -1250,27 +1250,18 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   // (LLM extraction) can detect if their turn has already ended.
   const glTurnIdRef = useRef(0);
 
-  const interactDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const glDispatchObjects = (objects: string[], myGeneration: number, source: string) => {
     if (geminiLiveGenerationRef.current !== myGeneration) return;
     const fresh = objects.filter(o => !glDispatchedThisTurnRef.current.has(o));
     if (!fresh.length) return;
     fresh.forEach(o => glDispatchedThisTurnRef.current.add(o));
-    // Always send the FULL accumulated set so Odyssey keeps all objects in the scene.
     const all = [...glDispatchedThisTurnRef.current];
     console.log(`[gl-objects][${source}] dispatching (new: ${fresh.join(', ')}; total: ${all.join(', ')}) at +${Date.now() - glTurnStartRef.current}ms`);
-    
-    if (interactDebounceRef.current) {
-      clearTimeout(interactDebounceRef.current);
+    // Send each fresh object as its own simple command — Odyssey parses short prompts
+    // far more reliably than long multi-item sentences.
+    for (const obj of fresh) {
+      handleInteractRef.current(`show ${obj}`);
     }
-    
-    // Debounce to prevent dropping commands when multiple objects are detected quickly
-    interactDebounceRef.current = setTimeout(() => {
-      // Create explicit separate sentences for the Odyssey LLM parser to understand multiple items
-      const prompt = all.map(obj => `Include ${obj} in the scene.`).join(' ');
-      handleInteractRef.current(prompt);
-    }, 400);
   };
 
   // Shared: extract objects from text via keyword matching, scoped to the active character.
