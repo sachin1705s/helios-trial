@@ -10,7 +10,7 @@ const EXPERIMENTS = [
     id: 'drawing',
     label: 'Drawn to Life',
     route: '/lab/drawing',
-    desc: 'A photo goes in. The character sees it, thinks about it, and has things to say.',
+    desc: 'Upload a photo — it comes back with a personality, a voice, and opinions about everything you say to it.',
     start: '2026-05-05',
     end: '2026-05-07',
     gradient: 'linear-gradient(135deg, #F0B546 0%, #E87030 100%)',
@@ -19,7 +19,7 @@ const EXPERIMENTS = [
     id: 'gesture',
     label: 'Body Language',
     route: '/lab/gesture',
-    desc: 'No buttons. Just your hands — and a character that watches your every move.',
+    desc: 'Words are only half the story. Move your hands, lean in, point — the character reads your body and responds.',
     start: '2026-05-08',
     end: '2026-05-10',
     gradient: 'linear-gradient(135deg, #7B5EA7 0%, #4A3580 100%)',
@@ -28,7 +28,7 @@ const EXPERIMENTS = [
     id: 'objects',
     label: 'Show & Tell',
     route: '/lab/objects',
-    desc: 'Hold something up to the camera. The character sees it. Then it has opinions.',
+    desc: 'Hold something up. The character doesn\'t just see it — it reacts, has a take, and wants to talk about it.',
     start: '2026-05-11',
     end: '2026-05-13',
     gradient: 'linear-gradient(135deg, #2F8F6A 0%, #1B5A45 100%)',
@@ -37,7 +37,7 @@ const EXPERIMENTS = [
     id: 'custom',
     label: 'Wear the Character',
     route: '/lab/custom',
-    desc: 'Your face. Your voice. Built into a character that moves and speaks like you.',
+    desc: 'One photo. One voice clip. Your look and sound — wired to a digital brain that speaks as you.',
     start: '2026-05-14',
     end: '2026-05-16',
     gradient: 'linear-gradient(135deg, #D9492B 0%, #9E2D10 100%)',
@@ -46,7 +46,7 @@ const EXPERIMENTS = [
     id: 'broadcast',
     label: 'Open the Room',
     route: '/lab/broadcast',
-    desc: 'Start a room. Share the link. Let anyone talk to the same character at once.',
+    desc: 'AI stops being a private assistant. Open a room, share the link — anyone can walk in and talk to it, live.',
     start: '2026-05-17',
     end: '2026-05-19',
     gradient: 'linear-gradient(135deg, #3A6FD8 0%, #1A4AA0 100%)',
@@ -103,7 +103,7 @@ export default function AtriumLabs() {
           Five experiments. <em>One at a time.</em>
         </h1>
         <p className="lede lede--center">
-          Each one live for three days — one new experience every few days.
+          Most AI makes you more efficient. These are built to make you feel something.
           {allDone && ' All experiments are now open.'}
         </p>
       </section>
