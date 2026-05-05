@@ -573,41 +573,49 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   }, [isStreamingReady, voiceStatus]);
 
   useEffect(() => {
-    if (streamState !== 'streaming') {
+    if (showLanding || !selectedCharacterId) {
       if (sessionTimerRef.current) {
         clearInterval(sessionTimerRef.current);
         sessionTimerRef.current = null;
       }
       return;
     }
-    sessionTimerRef.current = setInterval(() => {
-      setSessionSecondsLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(sessionTimerRef.current!);
-          sessionTimerRef.current = null;
-          retryStreamRef.current = null;
-          stopGeminiLiveSession();
-          serviceRef.current?.endStream().catch(() => undefined);
-          ++ttsGenerationRef.current;
-          ttsAbortRef.current?.abort();
-          ttsAbortRef.current = null;
-          for (const node of ttsSourceNodesRef.current) { try { node.stop(); } catch { /* already stopped */ } }
-          ttsSourceNodesRef.current = [];
-          setIsStreamingReady(false);
-          setSessionExpired(true);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+
+    // Start or resume the 5-minute timer as soon as a character is selected.
+    // This makes the session limit independent of stream flickers or reconnection delays.
+    if (!sessionTimerRef.current) {
+      sessionTimerRef.current = setInterval(() => {
+        setSessionSecondsLeft((prev) => {
+          if (prev <= 1) {
+            if (sessionTimerRef.current) {
+              clearInterval(sessionTimerRef.current);
+              sessionTimerRef.current = null;
+            }
+            retryStreamRef.current = null;
+            stopGeminiLiveSession();
+            serviceRef.current?.endStream().catch(() => undefined);
+            ++ttsGenerationRef.current;
+            ttsAbortRef.current?.abort();
+            ttsAbortRef.current = null;
+            for (const node of ttsSourceNodesRef.current) { try { node.stop(); } catch { /* already stopped */ } }
+            ttsSourceNodesRef.current = [];
+            setIsStreamingReady(false);
+            setSessionExpired(true);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
 
     return () => {
+      // We only clear the interval here if the effect is torn down (character switch or landing)
       if (sessionTimerRef.current) {
         clearInterval(sessionTimerRef.current);
         sessionTimerRef.current = null;
       }
     };
-  }, [streamState]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [showLanding, selectedCharacterId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (voiceStatus === 'connected' && isVoiceAgentSlide) {
