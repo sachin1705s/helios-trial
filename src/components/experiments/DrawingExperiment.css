@@ -245,103 +245,129 @@
   margin: 0;
 }
 
-.dtl-stream__actions {
+/* ── Unified chat pill (matches main site pattern) ─────────────────────────── */
+
+.dtl-pill {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   width: 100%;
   max-width: 520px;
-}
-
-/* Mic button */
-.dtl-stream__mic {
-  width: 44px;
-  height: 44px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  border: 1.5px solid var(--moss);
-  background: rgba(47, 94, 72, 0.25);
-  backdrop-filter: blur(8px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: background 0.2s var(--ease), box-shadow 0.2s var(--ease);
-}
-
-.dtl-stream__mic:hover {
-  background: rgba(47, 94, 72, 0.40);
-}
-
-.dtl-stream__mic--active {
-  border-color: var(--clay);
-  background: rgba(217, 73, 43, 0.25);
-  animation: dtl-mic-pulse 2s ease-in-out infinite;
-}
-
-@keyframes dtl-mic-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(217, 73, 43, 0.4); }
-  50%      { box-shadow: 0 0 0 8px rgba(217, 73, 43, 0); }
-}
-
-.dtl-stream__mic .recording-icon {
-  width: 20px;
-  height: 20px;
-  display: block;
-}
-
-/* Text input row */
-.dtl-stream__input-wrap {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 0;
-  background: rgba(14, 22, 20, 0.55);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(245, 241, 232, 0.15);
+  height: 48px;
+  padding: 4px 4px 4px 16px;
   border-radius: var(--radius-pill);
-  overflow: hidden;
-  transition: border-color 0.2s var(--ease);
+  background: rgba(14, 22, 20, 0.55);
+  border: 1px solid rgba(245, 241, 232, 0.12);
+  box-shadow:
+    inset 0 1px 0 rgba(245, 241, 232, 0.06),
+    0 8px 24px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  transition: border-color 0.3s var(--ease), box-shadow 0.3s var(--ease);
 }
 
-.dtl-stream__input-wrap:focus-within {
-  border-color: var(--moss);
+.dtl-pill:focus-within {
+  border-color: rgba(245, 241, 232, 0.24);
+  box-shadow:
+    inset 0 1px 0 rgba(245, 241, 232, 0.08),
+    0 12px 32px rgba(0, 0, 0, 0.36);
 }
 
-.dtl-stream__input {
-  flex: 1;
-  border: none;
+.dtl-pill__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
   background: transparent;
-  color: var(--paper);
+  border: 0;
+  outline: none;
+  color: rgba(245, 241, 232, 0.95);
   font-family: var(--body);
   font-size: 0.9rem;
-  padding: 10px 16px;
-  outline: none;
+  letter-spacing: 0.01em;
+  padding: 0;
 }
 
-.dtl-stream__input::placeholder {
-  color: rgba(245, 241, 232, 0.38);
+.dtl-pill__input::placeholder {
+  color: rgba(245, 241, 232, 0.42);
+  font-style: italic;
 }
 
-.dtl-stream__send {
-  font-family: var(--body);
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: var(--paper);
-  background: var(--moss);
-  border: none;
-  border-radius: var(--radius-pill);
-  padding: 8px 16px;
-  margin: 4px 4px 4px 0;
+.dtl-pill__input:disabled {
+  cursor: not-allowed;
+}
+
+/* Shared action button slot — only one renders at a time */
+.dtl-pill__action {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid transparent;
   cursor: pointer;
-  transition: background 0.2s var(--ease);
+  transition: background 0.25s var(--ease), border-color 0.25s var(--ease),
+              transform 0.2s var(--ease), color 0.25s var(--ease), opacity 0.25s var(--ease);
+  animation: dtl-action-in 0.2s var(--ease) both;
 }
 
-.dtl-stream__send:hover {
-  background: var(--moss-deep);
+@keyframes dtl-action-in {
+  from { opacity: 0; transform: scale(0.8); }
+  to   { opacity: 1; transform: scale(1); }
 }
 
-.dtl-stream__send:disabled {
+/* Send state — moss accent */
+.dtl-pill__action--send {
+  background: rgba(47, 94, 72, 0.30);
+  color: rgba(245, 241, 232, 0.92);
+}
+
+.dtl-pill__action--send:hover:not(:disabled) {
+  background: rgba(47, 94, 72, 0.50);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.dtl-pill__action--send:disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+}
+
+/* Mic state — neutral glass */
+.dtl-pill__action--mic {
+  background: rgba(245, 241, 232, 0.06);
+  color: rgba(245, 241, 232, 0.78);
+  border-color: rgba(245, 241, 232, 0.14);
+}
+
+.dtl-pill__action--mic:hover:not(:disabled) {
+  background: rgba(245, 241, 232, 0.14);
+  color: rgba(245, 241, 232, 0.95);
+  border-color: rgba(245, 241, 232, 0.24);
+}
+
+.dtl-pill__action--mic:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* Listening state — pulsing clay orb */
+.dtl-pill__action--listening {
+  background: rgba(217, 73, 43, 0.22);
+  border-color: rgba(217, 73, 43, 0.5);
+}
+
+.dtl-pill__pulse {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--clay);
+  animation: dtl-pulse-listen 1.4s ease-in-out infinite;
+}
+
+@keyframes dtl-pulse-listen {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(217, 73, 43, 0.5); transform: scale(1); }
+  50%      { box-shadow: 0 0 0 6px rgba(217, 73, 43, 0); transform: scale(1.1); }
 }

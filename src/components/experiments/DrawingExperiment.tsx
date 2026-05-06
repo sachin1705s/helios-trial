@@ -288,39 +288,65 @@ export default function DrawingExperiment() {
 
         <footer className="dtl-stream__footer">
           <p className="dtl-stream__hint">Your photo is alive — say something</p>
-          <div className="dtl-stream__actions">
-            {getSpeechRecognition() && (
+          <div className="dtl-pill">
+            <input
+              type="text"
+              className="dtl-pill__input"
+              value={textPrompt}
+              onChange={(e) => setTextPrompt(e.target.value)}
+              onKeyDown={handleTextKeyDown}
+              placeholder="say something…"
+              disabled={!isStreamingReady}
+            />
+            {isListening ? (
               <button
-                className={`dtl-stream__mic${isListening ? ' dtl-stream__mic--active' : ''}`}
+                type="button"
+                className="dtl-pill__action dtl-pill__action--listening"
                 onClick={toggleListening}
-                aria-label={isListening ? 'Stop listening' : 'Speak your prompt'}
+                aria-label="Listening — tap to stop"
               >
-                <img
-                  className="recording-icon"
-                  src="/images/recording_icon_v3.png"
-                  alt=""
-                  aria-hidden="true"
-                />
+                <span className="dtl-pill__pulse" aria-hidden />
               </button>
-            )}
-            <div className="dtl-stream__input-wrap">
-              <input
-                type="text"
-                className="dtl-stream__input"
-                value={textPrompt}
-                onChange={(e) => setTextPrompt(e.target.value)}
-                onKeyDown={handleTextKeyDown}
-                placeholder="say something…"
-                disabled={!isStreamingReady}
-              />
+            ) : textPrompt.trim().length > 0 ? (
               <button
-                className="dtl-stream__send"
+                type="button"
+                className="dtl-pill__action dtl-pill__action--send"
                 onClick={handleSendPrompt}
                 disabled={!isStreamingReady}
+                aria-label="Send message"
               >
-                Send
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M22 2L11 13" />
+                  <path d="M22 2l-7 20-4-9-9-4 20-7z" />
+                </svg>
               </button>
-            </div>
+            ) : getSpeechRecognition() ? (
+              <button
+                type="button"
+                className="dtl-pill__action dtl-pill__action--mic"
+                onClick={toggleListening}
+                disabled={!isStreamingReady}
+                aria-label="Speak your prompt"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="9" y="3" width="6" height="12" rx="3" />
+                  <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" />
+                </svg>
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="dtl-pill__action dtl-pill__action--send"
+                onClick={handleSendPrompt}
+                disabled={!isStreamingReady}
+                aria-label="Send message"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M22 2L11 13" />
+                  <path d="M22 2l-7 20-4-9-9-4 20-7z" />
+                </svg>
+              </button>
+            )}
           </div>
         </footer>
       </div>
