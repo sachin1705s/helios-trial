@@ -10,7 +10,7 @@ const EXPERIMENTS = [
     id: 'drawing',
     label: 'Drawn to Life',
     route: '/lab/drawing',
-    desc: 'Upload a photo — it comes back with a personality, a voice, and opinions about everything you say to it.',
+    desc: 'Upload a photo or drawing and watch what\'s inside wake up. The character comes to life — moving, speaking, reacting to you in real time.',
     start: '2026-05-05',
     end: '2026-05-07',
     gradient: 'linear-gradient(135deg, #F0B546 0%, #E87030 100%)',
