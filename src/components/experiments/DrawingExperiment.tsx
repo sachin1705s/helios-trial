@@ -287,7 +287,6 @@ export default function DrawingExperiment() {
         </header>
 
         <footer className="dtl-stream__footer">
-          <p className="dtl-stream__hint">Your photo is alive — say something</p>
           <div className="dtl-pill">
             <input
               type="text"
