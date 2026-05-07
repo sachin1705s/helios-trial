@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { OdysseyService, credentialsFromDict, type StreamState } from '../../lib/odyssey';
 import { AtriumNav } from '../../demo/atrium/Layout';
+import DrawCanvasModal from './DrawCanvasModal';
 import '../../demo/shared/tokens.css';
 import '../../demo/atrium/Atrium.css';
 import './DrawingExperiment.css';
 
 type Phase = 'upload' | 'processing' | 'streaming';
 type Style = 'manga' | 'comic' | 'realism' | 'ghibli-inspired';
+type Source = 'upload' | 'draw';
 
 const STYLES: { value: Style; label: string; description: string }[] = [
   { value: 'manga',           label: 'Manga',     description: 'Bold, high contrast' },
@@ -40,6 +42,8 @@ export default function DrawingExperiment() {
   const [phase, setPhase] = useState<Phase>('upload');
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [source, setSource] = useState<Source | null>(null);
+  const [showDrawCanvas, setShowDrawCanvas] = useState(false);
   const [selectedStyle, setSelectedStyle] = useState<Style>('manga');
   const [error, setError] = useState<string | null>(null);
   const [processingStep, setProcessingStep] = useState('');
@@ -97,11 +101,23 @@ export default function DrawingExperiment() {
       return;
     }
     setUploadedFile(file);
+    setSource('upload');
     const url = URL.createObjectURL(file);
     setPreviewUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
       return url;
     });
+    setError(null);
+  };
+
+  const handleDrawingDone = (file: File, dataUrl: string) => {
+    setUploadedFile(file);
+    setSource('draw');
+    setPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return dataUrl;
+    });
+    setShowDrawCanvas(false);
     setError(null);
   };
 
@@ -213,6 +229,7 @@ export default function DrawingExperiment() {
     serviceRef.current = null;
     setPhase('upload');
     setUploadedFile(null);
+    setSource(null);
     setPreviewUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
       return null;
@@ -378,23 +395,41 @@ export default function DrawingExperiment() {
           <p className="lede">A photo goes in. The character sees it, thinks about it, and has things to say.</p>
         </div>
 
-        <label className={`dtl-upload${uploadedFile ? ' has-file' : ''}`}>
-          <input
-            type="file"
-            accept="image/*"
-            onChange={handleFileChange}
-            style={{ display: 'none' }}
-          />
-          {previewUrl ? (
-            <img src={previewUrl} alt="Your photo" className="dtl-upload-preview" />
-          ) : (
-            <div className="dtl-upload-placeholder">
-              <span className="dtl-upload-icon">✏️</span>
-              <span>Upload a photo</span>
-              <span className="dtl-upload-hint">tap to choose</span>
-            </div>
-          )}
-        </label>
+        <div className="dtl-source-row">
+          <label className={`dtl-upload${source === 'upload' && previewUrl ? ' has-file' : ''}`}>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleFileChange}
+              style={{ display: 'none' }}
+            />
+            {source === 'upload' && previewUrl ? (
+              <img src={previewUrl} alt="Your photo" className="dtl-upload-preview" />
+            ) : (
+              <div className="dtl-upload-placeholder">
+                <span className="dtl-upload-icon" aria-hidden>📷</span>
+                <span>Upload a photo</span>
+                <span className="dtl-upload-hint">tap to choose</span>
+              </div>
+            )}
+          </label>
+
+          <button
+            type="button"
+            className={`dtl-upload dtl-draw${source === 'draw' && previewUrl ? ' has-file' : ''}`}
+            onClick={() => setShowDrawCanvas(true)}
+          >
+            {source === 'draw' && previewUrl ? (
+              <img src={previewUrl} alt="Your drawing" className="dtl-upload-preview" />
+            ) : (
+              <div className="dtl-upload-placeholder">
+                <span className="dtl-upload-icon" aria-hidden>✏️</span>
+                <span>Draw it</span>
+                <span className="dtl-upload-hint">tap to sketch</span>
+              </div>
+            )}
+          </button>
+        </div>
 
         <div className="dtl-styles">
           {STYLES.map((s) => (
@@ -420,6 +455,13 @@ export default function DrawingExperiment() {
           Bring to Life
         </button>
       </main>
+
+      {showDrawCanvas && (
+        <DrawCanvasModal
+          onCancel={() => setShowDrawCanvas(false)}
+          onDone={handleDrawingDone}
+        />
+      )}
     </div>
   );
 }
