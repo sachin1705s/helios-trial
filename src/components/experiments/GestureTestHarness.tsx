@@ -36,6 +36,10 @@ export default function GestureTestHarness() {
   const logRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    setLog(prev => [...prev, `[${new Date().toLocaleTimeString()}] Status: ${status}${error ? ` — ${error}` : ''}`]);
+  }, [status, error]);
+
+  useEffect(() => {
     if (status !== 'ready') return;
     const run = async () => {
       const image = await loadImageFile(CHARACTER_IMAGE, 'einstein.png');
