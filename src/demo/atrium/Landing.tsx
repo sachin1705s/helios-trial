@@ -3,8 +3,38 @@ import { useEffect, useRef } from 'react';
 import { characters } from '../shared/characters';
 import { AtriumNav, AtriumFooter } from './Layout';
 import MusicToggle from './MusicToggle';
+import { EXPERIMENTS, endOfDay, getStatus } from './experiments';
 import '../shared/tokens.css';
 import './Atrium.css';
+
+function LabTicker() {
+  const now = new Date();
+  const allDone = EXPERIMENTS.every((e) => now > endOfDay(e.end));
+  const live = EXPERIMENTS.find(
+    (e) => getStatus(e.start, e.end, allDone) === 'live'
+  );
+
+  if (!live) return null;
+
+  const items = Array.from({ length: 8 }, (_, i) => (
+    <span className="ticker__item" key={i} aria-hidden={i > 0 || undefined}>
+      <span className="ticker__dot" />
+      <span className="ticker__name">{live.label}</span>
+      {' '}is live now — try it in the Lab
+      <span className="ticker__sep" aria-hidden="true">&#x25C6;</span>
+    </span>
+  ));
+
+  return (
+    <Link
+      to="/labs"
+      className="ticker"
+      aria-label={`${live.label} is live now — try it in the Lab`}
+    >
+      <div className="ticker__track">{items}</div>
+    </Link>
+  );
+}
 
 const previewIds = ['bear', 'da-vinci', 'cleopatra', 'circus-lion'];
 const featuredCharacters = previewIds
@@ -25,6 +55,7 @@ export default function AtriumLanding() {
   return (
     <div className="atrium">
       <AtriumNav />
+      <LabTicker />
 
       {/* HERO */}
       <section className="hero" aria-labelledby="hero-title">
