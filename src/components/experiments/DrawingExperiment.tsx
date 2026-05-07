@@ -171,7 +171,7 @@ export default function DrawingExperiment() {
               }
             };
             attach();
-            service.startStream({ image: stylizedFile }).catch((err: unknown) => {
+            service.startStream({ image: stylizedFile, portrait: false }).catch((err: unknown) => {
               if (!settled) { settled = true; reject(err); }
             });
           },
