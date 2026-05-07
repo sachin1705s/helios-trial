@@ -17,6 +17,7 @@ import GestureExperiment from './components/experiments/GestureExperiment';
 import ObjectDetectionExperiment from './components/experiments/ObjectDetectionExperiment';
 import CustomCharacterExperiment from './components/experiments/CustomCharacterExperiment';
 import BroadcastExperiment from './components/experiments/BroadcastExperiment';
+import GestureTestHarness from './components/experiments/GestureTestHarness';
 
 function ScrollToTop() {
   const { pathname } = useLocation();
@@ -70,6 +71,7 @@ createRoot(document.getElementById('root')!).render(
           <Route path="/character/:id" element={<CharacterRoute />} />
           <Route path="/lab/drawing"   element={<DrawingExperiment />} />
           <Route path="/lab/gesture"   element={<GestureExperiment />} />
+          <Route path="/lab/gesture-test" element={<GestureTestHarness />} />
           <Route path="/lab/objects"   element={<ObjectDetectionExperiment />} />
           <Route path="/lab/custom"    element={<CustomCharacterExperiment />} />
           <Route path="/lab/broadcast" element={<BroadcastExperiment />} />

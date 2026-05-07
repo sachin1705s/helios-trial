@@ -1350,14 +1350,15 @@ app.post('/api/gesture', aiLimiter, async (req, res) => {
     const response = await ai.models.generateContent({
       model,
       contents: [{ role: 'user', parts: [
-        { text: 'Classify the gesture from the feature summary. Only return one of: hello, thumbs_up, victory, namaste, none. No extra words.' },
+        { text: 'Classify the body language or gesture from the feature summary. Only return one of: hello, thumbs_up, victory, namaste, pointing, thinking, shrug, crossed_arms, leaning_forward, leaning_back, facepalm, clapping, none. No extra words.' },
         { text: features },
       ]}],
     });
 
+    const allowed = ['hello', 'thumbs_up', 'victory', 'namaste', 'pointing', 'thinking', 'shrug', 'crossed_arms', 'leaning_forward', 'leaning_back', 'facepalm', 'clapping', 'none'];
     const text = response.text?.trim().toLowerCase() || 'none';
-    const label = ['hello', 'thumbs_up', 'victory', 'namaste', 'none'].includes(text) ? text : 'none';
-    return res.json({ label });
+    const gesture = allowed.includes(text) ? text : 'none';
+    return res.json({ gesture });
   } catch {
     return res.status(500).json({ error: 'Gesture classification failed.' });
   }
@@ -1374,14 +1375,15 @@ app.post('/api/gesture-vision', aiLimiter, async (req, res) => {
     const response = await ai.models.generateContent({
       model,
       contents: [{ role: 'user', parts: [
-        { text: 'Classify the hand gesture in this image. Only return one of: hello, thumbs_up, victory, namaste, none. No extra words.' },
+        { text: 'Classify the body language or gesture in this image. Only return one of: hello, thumbs_up, victory, namaste, pointing, thinking, shrug, crossed_arms, leaning_forward, leaning_back, facepalm, clapping, none. No extra words.' },
         { inlineData: { mimeType, data: image } },
       ]}],
     });
 
+    const allowed = ['hello', 'thumbs_up', 'victory', 'namaste', 'pointing', 'thinking', 'shrug', 'crossed_arms', 'leaning_forward', 'leaning_back', 'facepalm', 'clapping', 'none'];
     const text = response.text?.trim().toLowerCase() || 'none';
-    const label = ['hello', 'thumbs_up', 'victory', 'namaste', 'none'].includes(text) ? text : 'none';
-    return res.json({ label });
+    const gesture = allowed.includes(text) ? text : 'none';
+    return res.json({ gesture });
   } catch (error) {
     if (error?.status === 429) {
       return res.status(429).json({ error: 'Rate limited', retryAfterMs: 10000 });
