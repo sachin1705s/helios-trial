@@ -8,227 +8,252 @@ const CHARACTER_IMAGE  = '/images/characters/einstein.png';
 const CHARACTER_PROMPT = 'You are Einstein. React expressively to the user\'s gestures and body language. Keep every reply under 20 words.';
 
 const ALL_GESTURES = [
-  'hello',
-  'thumbs_up',
-  'victory',
-  'namaste',
-  'pointing',
-  'thinking',
-  'shrug',
-  'crossed_arms',
-  'leaning_forward',
-  'leaning_back',
-  'facepalm',
-  'clapping',
+  'hello', 'thumbs_up', 'victory', 'namaste', 'pointing',
+  'thinking', 'shrug', 'crossed_arms', 'leaning_forward',
+  'leaning_back', 'facepalm', 'clapping',
 ];
 
+// A/B prompt variations — {id, label, template} where {g} = gesture label (spaces)
+const PROMPT_VARIANTS = [
+  { id: 'A', label: 'Original',   template: 'The user is {g}. React to that gesture expressively in one sentence.' },
+  { id: 'B', label: 'Body lang',  template: 'The user is {g}. React to this body language expressively in one sentence.' },
+  { id: 'C', label: 'Physical',   template: 'The user is {g}. Match their energy with a physical reaction and one sentence.' },
+  { id: 'D', label: 'Short',      template: 'User is {g}. React!' },
+  { id: 'E', label: 'In-scene',   template: 'The person in front of you is {g}. React as Einstein would in one sentence.' },
+  { id: 'F', label: 'Imperative', template: '{G}! Respond physically and say something brief.' },
+] as const;
+
+type VariantId = typeof PROMPT_VARIANTS[number]['id'];
 type Result = 'pass' | 'fail' | 'pending';
+type ResultKey = `${string}::${VariantId}`;
 
 export default function GestureTestHarness() {
-  const { status, error, videoRef, startStream, interact, disconnect } = useOdysseyStream();
+  const { status, error, videoRef, startStream, interact } = useOdysseyStream();
 
-  const [results, setResults] = useState<Record<string, Result>>(() =>
-    Object.fromEntries(ALL_GESTURES.map(g => [g, 'pending' as Result]))
-  );
-  const [current, setCurrent] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
-  const [log, setLog] = useState<string[]>([]);
+  const [results, setResults]         = useState<Record<ResultKey, Result>>({} as Record<ResultKey, Result>);
+  const [activeVariant, setActiveVariant] = useState<VariantId>('A');
+  const [sending, setSending]         = useState(false);
+  const [log, setLog]                 = useState<string[]>([]);
   const logRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    setLog(prev => [...prev, `[${new Date().toLocaleTimeString()}] Status: ${status}${error ? ` — ${error}` : ''}`]);
-  }, [status, error]);
-
-  useEffect(() => {
-    if (status !== 'ready') return;
-    const run = async () => {
-      const image = await loadImageFile(CHARACTER_IMAGE, 'einstein.png');
-      await startStream({ image, prompt: CHARACTER_PROMPT, portrait: true });
-    };
-    void run();
-  }, [status, startStream]);
-
-  useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [log]);
 
   const addLog = useCallback((msg: string) => {
     setLog(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
   }, []);
 
+  // Log status changes
+  useEffect(() => {
+    addLog(`Status → ${status}${error ? `: ${error}` : ''}`);
+  }, [status, error]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Start stream once ready
+  useEffect(() => {
+    if (status !== 'ready') return;
+    const run = async () => {
+      addLog('Loading Einstein image…');
+      const image = await loadImageFile(CHARACTER_IMAGE, 'einstein.png');
+      await startStream({ image, prompt: CHARACTER_PROMPT, portrait: true });
+      addLog('Stream started — Send buttons are active');
+    };
+    void run();
+  }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [log]);
+
   const sendGesture = useCallback(async (gesture: string) => {
-    if (sending) return;
+    if (sending || status !== 'streaming') return;
     setSending(true);
-    setCurrent(gesture);
+    const variant = PROMPT_VARIANTS.find(v => v.id === activeVariant)!;
     const label = gesture.replace(/_/g, ' ');
-    const prompt = `The user is ${label}. React to this body language expressively in one sentence.`;
-    addLog(`Sending: "${prompt}"`);
+    const prompt = variant.template
+      .replace('{g}', label)
+      .replace('{G}', label.charAt(0).toUpperCase() + label.slice(1));
+    addLog(`[${variant.id}] "${prompt}"`);
     try {
       await interact(prompt);
-      addLog(`Sent "${gesture}" — watch Einstein's reaction`);
     } catch (err) {
-      addLog(`Error sending "${gesture}": ${err}`);
+      addLog(`Error: ${err}`);
     } finally {
       setSending(false);
     }
-  }, [sending, interact, addLog]);
+  }, [sending, status, activeVariant, interact, addLog]);
 
   const markResult = useCallback((gesture: string, result: Result) => {
-    setResults(prev => ({ ...prev, [gesture]: result }));
-    addLog(`Marked "${gesture}" as ${result.toUpperCase()}`);
-  }, [addLog]);
+    const key = `${gesture}::${activeVariant}` as ResultKey;
+    setResults(prev => ({ ...prev, [key]: result }));
+    addLog(`[${activeVariant}] ${gesture} → ${result.toUpperCase()}`);
+  }, [activeVariant, addLog]);
+
+  const getResult = (gesture: string, variantId: VariantId): Result =>
+    results[`${gesture}::${variantId}` as ResultKey] ?? 'pending';
 
   const exportResults = useCallback(() => {
-    const passed = ALL_GESTURES.filter(g => results[g] === 'pass');
-    const failed = ALL_GESTURES.filter(g => results[g] === 'fail');
-    const pending = ALL_GESTURES.filter(g => results[g] === 'pending');
-    const summary = [
-      '=== Gesture Test Results ===',
-      '',
-      `PASS (${passed.length}): ${passed.join(', ') || 'none'}`,
-      `FAIL (${failed.length}): ${failed.join(', ') || 'none'}`,
-      `UNTESTED (${pending.length}): ${pending.join(', ') || 'none'}`,
-      '',
-      'Array for live version:',
-      `const GESTURES = ${JSON.stringify(passed, null, 2)};`,
-    ].join('\n');
+    const lines = ['=== Gesture A/B Test Results ===', ''];
+    PROMPT_VARIANTS.forEach(v => {
+      const passed  = ALL_GESTURES.filter(g => getResult(g, v.id) === 'pass');
+      const failed  = ALL_GESTURES.filter(g => getResult(g, v.id) === 'fail');
+      lines.push(`Variant ${v.id} — "${v.label}" (${v.template})`);
+      lines.push(`  PASS (${passed.length}): ${passed.join(', ') || 'none'}`);
+      lines.push(`  FAIL (${failed.length}): ${failed.join(', ') || 'none'}`);
+      lines.push('');
+    });
+    // Best variant = most passes
+    const best = PROMPT_VARIANTS.map(v => ({
+      v, passes: ALL_GESTURES.filter(g => getResult(g, v.id) === 'pass').length,
+    })).sort((a, b) => b.passes - a.passes)[0];
+    const bestGestures = ALL_GESTURES.filter(g => getResult(g, best.v.id) === 'pass');
+    lines.push(`Best variant: ${best.v.id} (${best.passes} passes)`);
+    lines.push(`const GESTURES = ${JSON.stringify(bestGestures)};`);
+    const summary = lines.join('\n');
     addLog(summary);
     navigator.clipboard?.writeText(summary).then(() => addLog('Copied to clipboard'));
-  }, [results, addLog]);
+  }, [results, addLog]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const isStreaming = status === 'streaming';
 
   return (
-    <div className="atrium" style={{ minHeight: '100vh', background: 'var(--paper)', display: 'flex' }}>
-      {/* Video panel */}
-      <div style={{ flex: 1, background: 'var(--night)', position: 'relative', minHeight: '100vh' }}>
-        <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-        {status !== 'streaming' && (
-          <div style={{
-            position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: 'var(--paper)', fontFamily: 'var(--body)', fontSize: '0.9rem', opacity: 0.6,
-          }}>
-            {status === 'connecting' ? 'Connecting to Odyssey…' :
-             status === 'ready' ? 'Starting stream…' :
-             status === 'error' ? `Error: ${error}` : 'Initializing…'}
-          </div>
-        )}
+    <div className="atrium" style={{
+      height: '100vh', overflow: 'hidden', display: 'flex', flexDirection: 'column',
+      background: 'var(--paper)',
+    }}>
+      {/* Top bar */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px',
+        borderBottom: '1px solid var(--paper-edge)', flexShrink: 0,
+        background: 'var(--paper)',
+      }}>
+        <span style={{ fontFamily: 'var(--display)', fontSize: '1rem', fontWeight: 600, color: 'var(--ink)' }}>
+          Gesture Test Harness
+        </span>
+        <span style={{
+          padding: '3px 10px', borderRadius: 'var(--radius-pill)', fontSize: '0.72rem',
+          fontFamily: 'var(--body)', fontWeight: 600,
+          background: isStreaming ? 'rgba(47,94,72,0.1)' : 'rgba(20,40,38,0.06)',
+          color: isStreaming ? 'var(--moss)' : 'var(--ink-mute)',
+          border: `1px solid ${isStreaming ? 'rgba(47,94,72,0.25)' : 'rgba(20,40,38,0.1)'}`,
+        }}>
+          {isStreaming ? '● LIVE' : status.toUpperCase()}
+        </span>
+
+        {/* Variant selector */}
+        <div style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
+          {PROMPT_VARIANTS.map(v => (
+            <button key={v.id} onClick={() => setActiveVariant(v.id)} style={{
+              padding: '4px 10px', borderRadius: 'var(--radius-pill)', cursor: 'pointer',
+              fontFamily: 'var(--body)', fontSize: '0.72rem', fontWeight: 600,
+              border: '1px solid',
+              borderColor: activeVariant === v.id ? 'var(--moss)' : 'rgba(20,40,38,0.15)',
+              background: activeVariant === v.id ? 'var(--moss)' : 'transparent',
+              color: activeVariant === v.id ? 'var(--paper)' : 'var(--ink)',
+            }}>
+              {v.id} — {v.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Test panel */}
-      <aside style={{
-        width: 380, flexShrink: 0, display: 'flex', flexDirection: 'column',
-        borderLeft: '1px solid var(--paper-edge)', overflow: 'hidden',
+      {/* Active prompt preview */}
+      <div style={{
+        padding: '6px 16px', flexShrink: 0, fontSize: '0.75rem', fontFamily: 'var(--body)',
+        color: 'var(--ink-mute)', borderBottom: '1px solid var(--paper-edge)',
+        background: 'rgba(20,40,38,0.02)',
       }}>
-        {/* Header */}
-        <div style={{
-          padding: '16px 20px', borderBottom: '1px solid var(--paper-edge)',
-          fontFamily: 'var(--display)', fontSize: '1.2rem', fontWeight: 600, color: 'var(--ink)',
-        }}>
-          Gesture Test Harness
+        <strong style={{ color: 'var(--ink)' }}>Prompt [{activeVariant}]:</strong>{' '}
+        {PROMPT_VARIANTS.find(v => v.id === activeVariant)?.template.replace('{g}', '<gesture>').replace('{G}', '<Gesture>')}
+      </div>
+
+      {/* Main area */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+        {/* Video */}
+        <div style={{ flex: 1, background: 'var(--night)', position: 'relative' }}>
+          <video ref={videoRef} autoPlay playsInline muted
+            style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+          {!isStreaming && (
+            <div style={{
+              position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
+              justifyContent: 'center', color: 'rgba(245,241,232,0.5)',
+              fontFamily: 'var(--body)', fontSize: '0.85rem',
+            }}>
+              {status === 'error' ? `Error: ${error}` : 'Connecting…'}
+            </div>
+          )}
         </div>
 
-        {/* Gesture list */}
-        <div style={{ flex: 1, overflow: 'auto', padding: '12px 16px' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {/* Right panel */}
+        <div style={{
+          width: 360, flexShrink: 0, display: 'flex', flexDirection: 'column',
+          borderLeft: '1px solid var(--paper-edge)', overflow: 'hidden',
+        }}>
+          {/* Gesture list — scrollable */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 4 }}>
             {ALL_GESTURES.map(gesture => {
-              const r = results[gesture];
-              const isCurrent = current === gesture;
+              const r = getResult(gesture, activeVariant);
               return (
                 <div key={gesture} style={{
-                  display: 'flex', alignItems: 'center', gap: 8,
-                  padding: '10px 12px', borderRadius: 'var(--radius-sm)',
-                  border: `1.5px solid ${isCurrent ? 'var(--moss)' : r === 'pass' ? 'rgba(47,94,72,0.3)' : r === 'fail' ? 'rgba(217,73,43,0.3)' : 'rgba(20,40,38,0.08)'}`,
-                  background: r === 'pass' ? 'rgba(47,94,72,0.06)' : r === 'fail' ? 'rgba(217,73,43,0.06)' : 'transparent',
-                  transition: 'all 0.2s',
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '7px 10px', borderRadius: 'var(--radius-sm)',
+                  border: `1.5px solid ${r === 'pass' ? 'rgba(47,94,72,0.3)' : r === 'fail' ? 'rgba(217,73,43,0.25)' : 'rgba(20,40,38,0.08)'}`,
+                  background: r === 'pass' ? 'rgba(47,94,72,0.05)' : r === 'fail' ? 'rgba(217,73,43,0.05)' : 'transparent',
                 }}>
-                  {/* Gesture name */}
-                  <span style={{
-                    flex: 1, fontFamily: 'var(--body)', fontSize: '0.85rem', fontWeight: 500,
-                    color: 'var(--ink)', textTransform: 'capitalize',
-                  }}>
+                  <span style={{ flex: 1, fontFamily: 'var(--body)', fontSize: '0.82rem', fontWeight: 500, color: 'var(--ink)', textTransform: 'capitalize' }}>
                     {gesture.replace(/_/g, ' ')}
                   </span>
-
-                  {/* Status badge */}
                   <span style={{
-                    fontSize: '0.7rem', fontWeight: 600, textTransform: 'uppercase',
-                    letterSpacing: '0.05em', fontFamily: 'var(--body)',
+                    fontSize: '0.65rem', fontWeight: 700, fontFamily: 'var(--body)',
                     color: r === 'pass' ? 'var(--moss)' : r === 'fail' ? 'var(--clay)' : 'var(--ink-mute)',
+                    minWidth: 44, textAlign: 'center',
                   }}>
-                    {r}
+                    {r.toUpperCase()}
                   </span>
-
-                  {/* Send button */}
-                  <button
-                    onClick={() => sendGesture(gesture)}
-                    disabled={sending || status !== 'streaming'}
+                  <button onClick={() => sendGesture(gesture)} disabled={sending || !isStreaming}
                     style={{
-                      padding: '4px 10px', borderRadius: 'var(--radius-pill)',
+                      padding: '3px 8px', borderRadius: 'var(--radius-pill)', cursor: 'pointer',
                       border: '1px solid rgba(20,40,38,0.15)', background: 'var(--paper)',
-                      fontFamily: 'var(--body)', fontSize: '0.72rem', fontWeight: 600,
-                      color: 'var(--ink)', cursor: 'pointer', opacity: sending ? 0.4 : 1,
-                    }}
-                  >
-                    Send
-                  </button>
-
-                  {/* Pass/Fail buttons */}
-                  <button
-                    onClick={() => markResult(gesture, 'pass')}
+                      fontFamily: 'var(--body)', fontSize: '0.7rem', fontWeight: 600, color: 'var(--ink)',
+                      opacity: (sending || !isStreaming) ? 0.4 : 1,
+                    }}>Send</button>
+                  <button onClick={() => markResult(gesture, 'pass')}
                     style={{
-                      padding: '4px 8px', borderRadius: 'var(--radius-pill)',
-                      border: '1px solid rgba(47,94,72,0.3)', background: r === 'pass' ? 'var(--moss)' : 'transparent',
+                      padding: '3px 8px', borderRadius: 'var(--radius-pill)', cursor: 'pointer',
+                      border: '1px solid rgba(47,94,72,0.3)', fontFamily: 'var(--body)',
+                      fontSize: '0.7rem', fontWeight: 600,
+                      background: r === 'pass' ? 'var(--moss)' : 'transparent',
                       color: r === 'pass' ? 'var(--paper)' : 'var(--moss)',
-                      fontFamily: 'var(--body)', fontSize: '0.7rem', fontWeight: 600, cursor: 'pointer',
-                    }}
-                  >
-                    Pass
-                  </button>
-                  <button
-                    onClick={() => markResult(gesture, 'fail')}
+                    }}>✓</button>
+                  <button onClick={() => markResult(gesture, 'fail')}
                     style={{
-                      padding: '4px 8px', borderRadius: 'var(--radius-pill)',
-                      border: '1px solid rgba(217,73,43,0.3)', background: r === 'fail' ? 'var(--clay)' : 'transparent',
+                      padding: '3px 8px', borderRadius: 'var(--radius-pill)', cursor: 'pointer',
+                      border: '1px solid rgba(217,73,43,0.25)', fontFamily: 'var(--body)',
+                      fontSize: '0.7rem', fontWeight: 600,
+                      background: r === 'fail' ? 'var(--clay)' : 'transparent',
                       color: r === 'fail' ? 'var(--paper)' : 'var(--clay)',
-                      fontFamily: 'var(--body)', fontSize: '0.7rem', fontWeight: 600, cursor: 'pointer',
-                    }}
-                  >
-                    Fail
-                  </button>
+                    }}>✗</button>
                 </div>
               );
             })}
+            <button onClick={exportResults} style={{
+              marginTop: 4, padding: '10px', borderRadius: 'var(--radius-pill)',
+              border: 'none', background: 'var(--ink)', color: 'var(--paper)',
+              fontFamily: 'var(--body)', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer',
+            }}>Export Results</button>
           </div>
 
-          {/* Export */}
-          <button
-            onClick={exportResults}
-            style={{
-              marginTop: 16, width: '100%', padding: '12px',
-              borderRadius: 'var(--radius-pill)', border: 'none',
-              background: 'var(--ink)', color: 'var(--paper)',
-              fontFamily: 'var(--body)', fontSize: '0.85rem', fontWeight: 600,
-              cursor: 'pointer',
-            }}
-          >
-            Export Results
-          </button>
+          {/* Log — fixed height, always visible */}
+          <div ref={logRef} style={{
+            height: 140, flexShrink: 0, overflowY: 'auto',
+            borderTop: '1px solid var(--paper-edge)',
+            background: 'var(--night)', padding: '6px 10px',
+            fontFamily: 'monospace', fontSize: '0.68rem', lineHeight: 1.6,
+            color: 'rgba(245,241,232,0.65)',
+          }}>
+            {log.length === 0
+              ? <span style={{ opacity: 0.4 }}>No activity yet…</span>
+              : log.map((line, i) => <div key={i}>{line}</div>)
+            }
+          </div>
         </div>
-
-        {/* Log */}
-        <div
-          ref={logRef}
-          style={{
-            height: 160, flexShrink: 0, overflow: 'auto',
-            borderTop: '1px solid var(--paper-edge)', padding: '8px 12px',
-            background: 'var(--night)', color: 'rgba(245,241,232,0.7)',
-            fontFamily: 'monospace', fontSize: '0.7rem', lineHeight: 1.6,
-          }}
-        >
-          {log.length === 0 ? (
-            <span style={{ opacity: 0.4 }}>Waiting for connection…</span>
-          ) : log.map((line, i) => <div key={i}>{line}</div>)}
-        </div>
-      </aside>
+      </div>
     </div>
   );
 }
