@@ -162,7 +162,7 @@
 }
 
 .atrium .nav--scrolled {
-  width: calc(100% - 240px);
+  width: calc(100% - 400px);
   border-radius: 999px;
 }
 .atrium .nav__brand {
