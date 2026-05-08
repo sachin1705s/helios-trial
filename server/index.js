@@ -554,16 +554,26 @@ app.post('/api/animate-drawings/stylize', imageGenLimiter, aiLimiter, imageUploa
       return res.json({ imageBase64: imagePart.inlineData.data, mimeType: imagePart.inlineData.mimeType || 'image/png' });
     } catch (err) {
       const status = err?.status ?? err?.response?.status;
+      const errMsg = (err?.message || '').toLowerCase();
       const isRetryable = status === 503 || status === 429;
+      const isSafetyBlock =
+        status === 400 &&
+        (errMsg.includes('terms of service') ||
+          errMsg.includes('safety') ||
+          errMsg.includes('policy') ||
+          errMsg.includes('violates'));
+
       if (isRetryable && attempt < MAX_RETRIES) {
         await new Promise((r) => setTimeout(r, (attempt + 1) * 3000));
         continue;
       }
       console.error('[animate-drawings] stylize error:', err?.message || err);
-      const message = isRetryable
-        ? 'The image service is busy right now. Please try again in a moment.'
-        : 'Image stylization failed. Please try again.';
-      return res.status(500).json({ error: message });
+      const message = isSafetyBlock
+        ? "We couldn't stylize this image — try a different photo."
+        : isRetryable
+          ? 'The image service is busy right now. Please try again in a moment.'
+          : 'Image stylization failed. Please try again.';
+      return res.status(isSafetyBlock ? 422 : 500).json({ error: message });
     }
   }
 });

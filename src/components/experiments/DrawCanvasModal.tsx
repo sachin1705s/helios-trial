@@ -44,7 +44,7 @@ export default function DrawCanvasModal({ onCancel, onDone }: Props) {
     <div className="dtl-canvas-modal" role="dialog" aria-modal="true" aria-label="Draw">
       <header className="dtl-canvas-toolbar">
         <button type="button" className="dtl-canvas-btn" onClick={onCancel}>
-          Cancel
+          Back
         </button>
         <span className="dtl-canvas-title">Draw something</span>
         <button

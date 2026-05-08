@@ -195,7 +195,7 @@
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
   object-position: center;
   transition: opacity 0.35s ease;
 }
@@ -256,6 +256,22 @@
   font-size: 0.85rem;
   color: rgba(245, 241, 232, 0.72);
   margin: 0;
+}
+
+/* Gallery placard — museum-style caption */
+.dtl-stream__placard {
+  font-family: var(--display);
+  font-size: 0.78rem;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  color: rgba(245, 241, 232, 0.48);
+  margin: 0;
+  text-align: center;
+}
+
+.dtl-stream__placard em {
+  font-style: italic;
+  color: rgba(245, 241, 232, 0.62);
 }
 
 /* ── Unified chat pill (matches main site pattern) ─────────────────────────── */

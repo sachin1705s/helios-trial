@@ -37,6 +37,143 @@ function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
   return win.SpeechRecognition ?? win.webkitSpeechRecognition ?? null;
 }
 
+/* ── Style-specific frame accent colors (Atrium palette) ─────────────────── */
+const FRAME_ACCENTS: Record<Style, string> = {
+  manga:           '#142826',  // --ink: dark charcoal, echoes panel borders
+  comic:           '#E8745A',  // --clay-soft: warm comic energy
+  'ghibli-inspired': '#F0B546', // --sun: golden painterly warmth
+  realism:         '#ECE5D2',  // --paper-edge: neutral, doesn't compete
+};
+
+/**
+ * Wrap an image in a gallery-style frame before sending to Odyssey.
+ * Bakes a warm paper matte + thin accent border into the canvas so
+ * Odyssey's zoom absorbs the matte instead of cropping the subject.
+ */
+function addGalleryFrame(file: File, style: Style): Promise<File> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const iw = img.naturalWidth;
+      const ih = img.naturalHeight;
+
+      // Matte = 15% of shortest side — enough to absorb Odyssey's zoom
+      const matteSize = Math.round(Math.min(iw, ih) * 0.15);
+      // Thin gilded edge between matte and image
+      const borderWidth = Math.max(2, Math.round(matteSize * 0.06));
+
+      const cw = iw + matteSize * 2;
+      const ch = ih + matteSize * 2;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = cw;
+      canvas.height = ch;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { resolve(file); return; }
+
+      // ── 1. Paper matte background ──
+      ctx.fillStyle = '#F5F1E8'; // --paper
+      ctx.fillRect(0, 0, cw, ch);
+
+      // Subtle paper grain noise (very faint)
+      const grainData = ctx.createImageData(cw, ch);
+      for (let i = 0; i < grainData.data.length; i += 4) {
+        const noise = Math.random() * 18 - 9;
+        grainData.data[i]     = Math.min(255, Math.max(0, 245 + noise)); // R
+        grainData.data[i + 1] = Math.min(255, Math.max(0, 241 + noise)); // G
+        grainData.data[i + 2] = Math.min(255, Math.max(0, 232 + noise)); // B
+        grainData.data[i + 3] = 30; // very subtle alpha
+      }
+      ctx.putImageData(grainData, 0, 0);
+
+      // Re-fill paper under the image area (clean base for the art)
+      ctx.fillStyle = '#F5F1E8';
+      ctx.fillRect(matteSize - borderWidth, matteSize - borderWidth,
+                   iw + borderWidth * 2, ih + borderWidth * 2);
+
+      // ── 2. Accent border (thin gilded edge) ──
+      const accent = FRAME_ACCENTS[style] || '#ECE5D2';
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = borderWidth;
+      // Outer edge of border
+      ctx.strokeRect(
+        matteSize - borderWidth / 2,
+        matteSize - borderWidth / 2,
+        iw + borderWidth,
+        ih + borderWidth,
+      );
+
+      // Subtle inner shadow for depth
+      ctx.shadowColor = 'rgba(20, 40, 38, 0.12)';
+      ctx.shadowBlur = borderWidth * 2;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = borderWidth;
+      ctx.strokeStyle = 'rgba(20, 40, 38, 0.06)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(matteSize, matteSize, iw, ih);
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetY = 0;
+
+      // ── 3. The artwork ──
+      ctx.drawImage(img, matteSize, matteSize, iw, ih);
+
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) { resolve(file); return; }
+          resolve(new File([blob], file.name, { type: 'image/png' }));
+        },
+        'image/png',
+      );
+    };
+    img.onerror = () => resolve(file);
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+/**
+ * Center-crop an image file to match the current viewport aspect ratio.
+ * Returns a new File with the cropped result (PNG).
+ */
+function cropToViewport(file: File): Promise<File> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const viewportRatio = window.innerWidth / window.innerHeight;
+      const imgRatio = img.naturalWidth / img.naturalHeight;
+
+      let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
+
+      if (imgRatio > viewportRatio) {
+        // Image is wider than viewport — crop sides
+        sw = Math.round(img.naturalHeight * viewportRatio);
+        sx = Math.round((img.naturalWidth - sw) / 2);
+      } else {
+        // Image is taller than viewport — crop top/bottom
+        sh = Math.round(img.naturalWidth / viewportRatio);
+        sy = Math.round((img.naturalHeight - sh) / 2);
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = sw;
+      canvas.height = sh;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { resolve(file); return; }
+
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) { resolve(file); return; }
+          resolve(new File([blob], file.name, { type: 'image/png' }));
+        },
+        'image/png',
+      );
+    };
+    img.onerror = () => reject(new Error('Failed to load image'));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
 export default function DrawingExperiment() {
   const navigate = useNavigate();
   const [phase, setPhase] = useState<Phase>('upload');
@@ -51,6 +188,7 @@ export default function DrawingExperiment() {
   const [isStreamingReady, setIsStreamingReady] = useState(false);
   const [textPrompt, setTextPrompt] = useState('');
   const [isListening, setIsListening] = useState(false);
+  const [skipStylize, setSkipStylize] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const serviceRef = useRef<OdysseyService | null>(null);
@@ -93,21 +231,32 @@ export default function DrawingExperiment() {
     };
   }, []);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 18 * 1024 * 1024) {
       setError('Photo is too large. Please choose an image under 18 MB.');
       return;
     }
-    setUploadedFile(file);
-    setSource('upload');
-    const url = URL.createObjectURL(file);
-    setPreviewUrl((prev) => {
-      if (prev) URL.revokeObjectURL(prev);
-      return url;
-    });
     setError(null);
+    setSource('upload');
+
+    try {
+      const cropped = await cropToViewport(file);
+      setUploadedFile(cropped);
+      const url = URL.createObjectURL(cropped);
+      setPreviewUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return url;
+      });
+    } catch {
+      setUploadedFile(file);
+      const url = URL.createObjectURL(file);
+      setPreviewUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return url;
+      });
+    }
   };
 
   const handleDrawingDone = (file: File, dataUrl: string) => {
@@ -127,22 +276,55 @@ export default function DrawingExperiment() {
     setError(null);
 
     try {
-      setProcessingStep('Stylizing your photo…');
-      const formData = new FormData();
-      formData.append('image', uploadedFile);
-      formData.append('style', selectedStyle);
+      let stylizedFile: File;
 
-      const stylizeRes = await fetch('/api/animate-drawings/stylize', { method: 'POST', body: formData });
-      if (!stylizeRes.ok) {
-        const errData = await stylizeRes.json().catch(() => ({ error: 'Stylization failed' }));
-        throw new Error(errData.error || 'Stylization failed');
+      if (import.meta.env.DEV && skipStylize) {
+        setProcessingStep('Skipping stylization (dev mode)…');
+        // Use a neutral placeholder so Odyssey's content policy never triggers.
+        // We only care that the stream connects and the UI works in dev.
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 288; // 16:9
+        const ctx = canvas.getContext('2d')!;
+        const grad = ctx.createLinearGradient(0, 0, 512, 288);
+        grad.addColorStop(0, '#2F5E48');
+        grad.addColorStop(1, '#0E1614');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 512, 288);
+        ctx.fillStyle = 'rgba(245,241,232,0.15)';
+        ctx.font = 'bold 22px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Dev placeholder', 256, 150);
+        const blob = await new Promise<Blob>((res) => canvas.toBlob((b) => res(b!), 'image/png'));
+        stylizedFile = new File([blob], 'placeholder.png', { type: 'image/png' });
+      } else {
+        setProcessingStep('Stylizing your photo…');
+        const formData = new FormData();
+        formData.append('image', uploadedFile);
+        formData.append('style', selectedStyle);
+
+        const stylizeRes = await fetch('/api/animate-drawings/stylize', { method: 'POST', body: formData });
+        if (!stylizeRes.ok) {
+          const errData = await stylizeRes.json().catch(() => ({ error: 'Stylization failed' }));
+          throw new Error(errData.error || 'Stylization failed');
+        }
+        const { imageBase64, mimeType: stylizedMime } = await stylizeRes.json();
+
+        const binary = atob(imageBase64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        stylizedFile = new File([bytes], 'photo.png', { type: stylizedMime || 'image/png' });
       }
-      const { imageBase64, mimeType: stylizedMime } = await stylizeRes.json();
 
-      const binary = atob(imageBase64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const stylizedFile = new File([bytes], 'photo.png', { type: stylizedMime || 'image/png' });
+      // ── Gallery frame (documented, not active) ────────────────────────────
+      // Odyssey zooms ~30-40% into the source image. addGalleryFrame() fixes
+      // this by baking a warm paper matte (15% of shortest side) + style-
+      // specific accent border into the image before streaming, so the zoom
+      // absorbs the matte rather than cropping the subject.
+      //
+      // Re-enable when we want the "living artwork on a gallery wall" look:
+      //   stylizedFile = await addGalleryFrame(stylizedFile, selectedStyle);
+      // ─────────────────────────────────────────────────────────────────────
 
       setProcessingStep('Preparing animation…');
       const credRes = await fetch('/api/odyssey/token');
@@ -182,6 +364,7 @@ export default function DrawingExperiment() {
                     setTimeout(() => videoRef.current?.play().catch(() => undefined), 150);
                   }
                 });
+
               } else {
                 setTimeout(attach, 100);
               }
@@ -214,7 +397,12 @@ export default function DrawingExperiment() {
         });
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Something went wrong. Please try again.';
+      const raw = err instanceof Error ? err.message : '';
+      const lower = raw.toLowerCase();
+      const message =
+        lower.includes('terms of service') || lower.includes('violates') || lower.includes('policy')
+          ? "We couldn't process this image — try a different photo."
+          : raw || 'Something went wrong. Please try again.';
       setError(message);
       setPhase('upload');
       stopHeartbeat();
@@ -304,6 +492,11 @@ export default function DrawingExperiment() {
         </header>
 
         <footer className="dtl-stream__footer">
+          {/* Gallery placard — re-enable with addGalleryFrame()
+          <p className="dtl-stream__placard">
+            Drawn to Life — <em>{STYLES.find(s => s.value === selectedStyle)?.label}</em>
+          </p>
+          */}
           <div className="dtl-pill">
             <input
               type="text"
@@ -446,6 +639,17 @@ export default function DrawingExperiment() {
         </div>
 
         {error && <p className="dtl-error">{error}</p>}
+
+        {import.meta.env.DEV && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.78rem', color: 'var(--ink-soft)', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={skipStylize}
+              onChange={(e) => setSkipStylize(e.target.checked)}
+            />
+            Skip AI styling (dev — saves quota)
+          </label>
+        )}
 
         <button
           className="btn btn--primary dtl-cta"
