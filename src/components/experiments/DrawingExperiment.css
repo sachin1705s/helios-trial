@@ -31,19 +31,32 @@
   margin: 4px 0 0;
 }
 
+/* Source row — Upload + Draw side by side */
+.drawn-to-life .dtl-source-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  width: 100%;
+}
+
 /* Upload zone */
 .drawn-to-life .dtl-upload {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 100%;
-  aspect-ratio: 4/3;
+  aspect-ratio: 1/1;
   border: 1.5px dashed rgba(20, 40, 38, 0.20);
   border-radius: var(--radius-lg);
   background: var(--paper);
   cursor: pointer;
   overflow: hidden;
   transition: border-color 0.3s var(--ease), box-shadow 0.3s var(--ease);
+  /* Draw box uses <button>, normalize default styling */
+  font: inherit;
+  color: inherit;
+  padding: 0;
+  margin: 0;
 }
 
 .drawn-to-life .dtl-upload:hover {
@@ -371,3 +384,81 @@
   0%, 100% { box-shadow: 0 0 0 0 rgba(217, 73, 43, 0.5); transform: scale(1); }
   50%      { box-shadow: 0 0 0 6px rgba(217, 73, 43, 0); transform: scale(1.1); }
 }
+
+/* ── Draw canvas modal (tldraw) ─────────────────────────────────────────── */
+
+.dtl-canvas-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper, #f5f1e8);
+}
+
+.dtl-canvas-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px clamp(12px, 3vw, 24px);
+  border-bottom: 1px solid rgba(20, 40, 38, 0.10);
+  background: var(--paper, #f5f1e8);
+}
+
+.dtl-canvas-title {
+  font-family: var(--body);
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.dtl-canvas-btn {
+  font-family: var(--body);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid rgba(20, 40, 38, 0.18);
+  border-radius: var(--radius-pill);
+  padding: 8px 18px;
+  cursor: pointer;
+  transition: background 0.2s var(--ease), border-color 0.2s var(--ease);
+}
+
+.dtl-canvas-btn:hover:not(:disabled) {
+  background: rgba(20, 40, 38, 0.04);
+  border-color: rgba(20, 40, 38, 0.28);
+}
+
+.dtl-canvas-btn--primary {
+  color: var(--paper, #f5f1e8);
+  background: var(--moss, #2f5e48);
+  border-color: var(--moss, #2f5e48);
+}
+
+.dtl-canvas-btn--primary:hover:not(:disabled) {
+  background: #244a39;
+  border-color: #244a39;
+}
+
+.dtl-canvas-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dtl-canvas-error {
+  margin: 0;
+  padding: 8px clamp(12px, 3vw, 24px);
+  font-family: var(--body);
+  font-size: 0.85rem;
+  color: var(--clay, #d9492b);
+  background: rgba(217, 73, 43, 0.08);
+}
+
+.dtl-canvas-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
