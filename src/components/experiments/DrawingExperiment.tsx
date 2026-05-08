@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { OdysseyService, credentialsFromDict, type StreamState } from '../../lib/odyssey';
 import { AtriumNav } from '../../demo/atrium/Layout';
@@ -166,7 +167,7 @@ export default function DrawingExperiment() {
     }
   };
 
-  const handleDrawingDone = (file: File, dataUrl: string) => {
+  const handleDrawingDone = useCallback((file: File, dataUrl: string) => {
     setUploadedFile(file);
     setSource('draw');
     setPreviewUrl((prev) => {
@@ -175,7 +176,9 @@ export default function DrawingExperiment() {
     });
     setShowDrawCanvas(false);
     setError(null);
-  };
+  }, []);
+
+  const handleDrawCancel = useCallback(() => setShowDrawCanvas(false), []);
 
   const handleBringToLife = async () => {
     if (!uploadedFile) return;
@@ -552,11 +555,9 @@ export default function DrawingExperiment() {
         </button>
       </main>
 
-      {showDrawCanvas && (
-        <DrawCanvasModal
-          onCancel={() => setShowDrawCanvas(false)}
-          onDone={handleDrawingDone}
-        />
+      {showDrawCanvas && createPortal(
+        <DrawCanvasModal onCancel={handleDrawCancel} onDone={handleDrawingDone} />,
+        document.body,
       )}
     </div>
   );
