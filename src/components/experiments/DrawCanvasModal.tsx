@@ -1,43 +1,137 @@
-import { useRef, useState } from 'react';
-import { Tldraw, type Editor } from 'tldraw';
-import 'tldraw/tldraw.css';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 type Props = {
   onCancel: () => void;
   onDone: (file: File, dataUrl: string) => void;
 };
 
+const COLORS = [
+  '#142826', '#2F5E48', '#E8745A', '#F0B546',
+  '#3B82F6', '#8B5CF6', '#EC4899', '#F5F1E8',
+];
+const SIZES = [3, 6, 12, 20];
+
+type Stroke = { points: [number, number][]; color: string; size: number };
+
 export default function DrawCanvasModal({ onCancel, onDone }: Props) {
-  const editorRef = useRef<Editor | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [strokes, setStrokes] = useState<Stroke[]>([]);
+  const activeStroke = useRef<Stroke | null>(null);
+  const [color, setColor] = useState(COLORS[0]);
+  const [size, setSize] = useState(SIZES[1]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const drawing = useRef(false);
 
-  const handleDone = async () => {
-    const editor = editorRef.current;
-    if (!editor) return;
+  const redraw = useCallback((allStrokes: Stroke[]) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#F5F1E8';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    const shapeIds = [...editor.getCurrentPageShapeIds()];
-    if (shapeIds.length === 0) {
+    for (const s of allStrokes) {
+      if (s.points.length < 2) continue;
+      ctx.beginPath();
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = s.size;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.moveTo(s.points[0][0], s.points[0][1]);
+      for (let i = 1; i < s.points.length; i++) {
+        ctx.lineTo(s.points[i][0], s.points[i][1]);
+      }
+      ctx.stroke();
+    }
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const parent = canvas.parentElement;
+    if (!parent) return;
+
+    const resize = () => {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = parent.getBoundingClientRect();
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${rect.height}px`;
+      const ctx = canvas.getContext('2d');
+      if (ctx) ctx.scale(dpr, dpr);
+      redraw(strokes);
+    };
+
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(parent);
+    return () => ro.disconnect();
+  }, [strokes, redraw]);
+
+  const getPos = (e: React.PointerEvent): [number, number] => {
+    const rect = canvasRef.current!.getBoundingClientRect();
+    return [e.clientX - rect.left, e.clientY - rect.top];
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    drawing.current = true;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    activeStroke.current = { points: [getPos(e)], color, size };
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!drawing.current || !activeStroke.current) return;
+    activeStroke.current.points.push(getPos(e));
+    redraw([...strokes, activeStroke.current]);
+  };
+
+  const onPointerUp = () => {
+    if (!drawing.current || !activeStroke.current) return;
+    drawing.current = false;
+    if (activeStroke.current.points.length >= 2) {
+      setStrokes((prev) => [...prev, activeStroke.current!]);
+    }
+    activeStroke.current = null;
+  };
+
+  const handleUndo = () => {
+    setStrokes((prev) => {
+      const next = prev.slice(0, -1);
+      redraw(next);
+      return next;
+    });
+  };
+
+  const handleClear = () => {
+    setStrokes([]);
+    redraw([]);
+  };
+
+  const handleDone = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    if (strokes.length === 0) {
       setError('Draw something first.');
       return;
     }
-
     setSubmitting(true);
     setError(null);
-    try {
-      const result = await editor.toImage(shapeIds, {
-        format: 'png',
-        background: true,
-        padding: 32,
-        scale: 2,
-      });
-      const file = new File([result.blob], 'drawing.png', { type: 'image/png' });
-      const dataUrl = URL.createObjectURL(result.blob);
-      onDone(file, dataUrl);
-    } catch {
-      setError('Could not export the drawing. Please try again.');
-      setSubmitting(false);
-    }
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          setError('Could not export the drawing. Please try again.');
+          setSubmitting(false);
+          return;
+        }
+        const file = new File([blob], 'drawing.png', { type: 'image/png' });
+        const dataUrl = URL.createObjectURL(blob);
+        onDone(file, dataUrl);
+      },
+      'image/png',
+    );
   };
 
   return (
@@ -46,7 +140,39 @@ export default function DrawCanvasModal({ onCancel, onDone }: Props) {
         <button type="button" className="dtl-canvas-btn" onClick={onCancel}>
           Back
         </button>
-        <span className="dtl-canvas-title">Draw something</span>
+        <div className="dtl-canvas-controls">
+          <div className="dtl-canvas-colors">
+            {COLORS.map((c) => (
+              <button
+                key={c}
+                type="button"
+                className={`dtl-color-swatch${c === color ? ' active' : ''}`}
+                style={{ background: c, border: c === '#F5F1E8' ? '1px solid rgba(20,40,38,0.2)' : 'none' }}
+                onClick={() => setColor(c)}
+                aria-label={`Color ${c}`}
+              />
+            ))}
+          </div>
+          <div className="dtl-canvas-sizes">
+            {SIZES.map((s) => (
+              <button
+                key={s}
+                type="button"
+                className={`dtl-size-btn${s === size ? ' active' : ''}`}
+                onClick={() => setSize(s)}
+                aria-label={`Brush size ${s}`}
+              >
+                <span className="dtl-size-dot" style={{ width: s, height: s }} />
+              </button>
+            ))}
+          </div>
+          <button type="button" className="dtl-canvas-btn" onClick={handleUndo} disabled={strokes.length === 0}>
+            Undo
+          </button>
+          <button type="button" className="dtl-canvas-btn" onClick={handleClear} disabled={strokes.length === 0}>
+            Clear
+          </button>
+        </div>
         <button
           type="button"
           className="dtl-canvas-btn dtl-canvas-btn--primary"
@@ -60,10 +186,14 @@ export default function DrawCanvasModal({ onCancel, onDone }: Props) {
       {error && <p className="dtl-canvas-error">{error}</p>}
 
       <div className="dtl-canvas-stage">
-        <Tldraw
-          onMount={(editor) => {
-            editorRef.current = editor;
-          }}
+        <canvas
+          ref={canvasRef}
+          className="dtl-freehand-canvas"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerLeave={onPointerUp}
+          style={{ touchAction: 'none', cursor: 'crosshair' }}
         />
       </div>
     </div>
