@@ -26,18 +26,22 @@ export default function DrawCanvasModal({ onCancel, onDone }: Props) {
 
   strokesRef.current = strokes;
 
+  const rafId = useRef(0);
+
   const redraw = useCallback((allStrokes: Stroke[]) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
+    const w = canvas.width / dpr;
+    const h = canvas.height / dpr;
+
     ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.scale(dpr, dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
     ctx.fillStyle = '#F5F1E8';
-    ctx.fillRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+    ctx.fillRect(0, 0, w, h);
 
     for (const s of allStrokes) {
       if (s.points.length < 2) continue;
@@ -90,23 +94,29 @@ export default function DrawCanvasModal({ onCancel, onDone }: Props) {
 
   const onPointerDown = (e: React.PointerEvent) => {
     drawing.current = true;
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    try { (e.target as HTMLElement).setPointerCapture(e.pointerId); } catch { /* optional — keep drawing even if capture fails */ }
     activeStroke.current = { points: [getPos(e)], color, size };
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
     if (!drawing.current || !activeStroke.current) return;
     activeStroke.current.points.push(getPos(e));
-    redraw([...strokesRef.current, activeStroke.current]);
+    cancelAnimationFrame(rafId.current);
+    rafId.current = requestAnimationFrame(() => {
+      if (!activeStroke.current) return;
+      redraw([...strokesRef.current, activeStroke.current]);
+    });
   };
 
   const onPointerUp = () => {
     if (!drawing.current || !activeStroke.current) return;
+    cancelAnimationFrame(rafId.current);
     drawing.current = false;
-    if (activeStroke.current.points.length >= 2) {
-      setStrokes((prev) => [...prev, activeStroke.current!]);
-    }
+    const finished = activeStroke.current;
     activeStroke.current = null;
+    if (finished.points.length >= 2) {
+      setStrokes((prev) => [...prev, finished]);
+    }
   };
 
   const handleUndo = () => setStrokes((prev) => prev.slice(0, -1));
