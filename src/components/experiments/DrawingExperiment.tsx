@@ -37,99 +37,6 @@ function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
   return win.SpeechRecognition ?? win.webkitSpeechRecognition ?? null;
 }
 
-/* ── Style-specific frame accent colors (Atrium palette) ─────────────────── */
-const FRAME_ACCENTS: Record<Style, string> = {
-  manga:           '#142826',  // --ink: dark charcoal, echoes panel borders
-  comic:           '#E8745A',  // --clay-soft: warm comic energy
-  'ghibli-inspired': '#F0B546', // --sun: golden painterly warmth
-  realism:         '#ECE5D2',  // --paper-edge: neutral, doesn't compete
-};
-
-/**
- * Wrap an image in a gallery-style frame before sending to Odyssey.
- * Bakes a warm paper matte + thin accent border into the canvas so
- * Odyssey's zoom absorbs the matte instead of cropping the subject.
- */
-function addGalleryFrame(file: File, style: Style): Promise<File> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const iw = img.naturalWidth;
-      const ih = img.naturalHeight;
-
-      // Matte = 15% of shortest side — enough to absorb Odyssey's zoom
-      const matteSize = Math.round(Math.min(iw, ih) * 0.15);
-      // Thin gilded edge between matte and image
-      const borderWidth = Math.max(2, Math.round(matteSize * 0.06));
-
-      const cw = iw + matteSize * 2;
-      const ch = ih + matteSize * 2;
-
-      const canvas = document.createElement('canvas');
-      canvas.width = cw;
-      canvas.height = ch;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) { resolve(file); return; }
-
-      // ── 1. Paper matte background ──
-      ctx.fillStyle = '#F5F1E8'; // --paper
-      ctx.fillRect(0, 0, cw, ch);
-
-      // Subtle paper grain noise (very faint)
-      const grainData = ctx.createImageData(cw, ch);
-      for (let i = 0; i < grainData.data.length; i += 4) {
-        const noise = Math.random() * 18 - 9;
-        grainData.data[i]     = Math.min(255, Math.max(0, 245 + noise)); // R
-        grainData.data[i + 1] = Math.min(255, Math.max(0, 241 + noise)); // G
-        grainData.data[i + 2] = Math.min(255, Math.max(0, 232 + noise)); // B
-        grainData.data[i + 3] = 30; // very subtle alpha
-      }
-      ctx.putImageData(grainData, 0, 0);
-
-      // Re-fill paper under the image area (clean base for the art)
-      ctx.fillStyle = '#F5F1E8';
-      ctx.fillRect(matteSize - borderWidth, matteSize - borderWidth,
-                   iw + borderWidth * 2, ih + borderWidth * 2);
-
-      // ── 2. Accent border (thin gilded edge) ──
-      const accent = FRAME_ACCENTS[style] || '#ECE5D2';
-      ctx.strokeStyle = accent;
-      ctx.lineWidth = borderWidth;
-      // Outer edge of border
-      ctx.strokeRect(
-        matteSize - borderWidth / 2,
-        matteSize - borderWidth / 2,
-        iw + borderWidth,
-        ih + borderWidth,
-      );
-
-      // Subtle inner shadow for depth
-      ctx.shadowColor = 'rgba(20, 40, 38, 0.12)';
-      ctx.shadowBlur = borderWidth * 2;
-      ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = borderWidth;
-      ctx.strokeStyle = 'rgba(20, 40, 38, 0.06)';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(matteSize, matteSize, iw, ih);
-      ctx.shadowColor = 'transparent';
-      ctx.shadowBlur = 0;
-      ctx.shadowOffsetY = 0;
-
-      // ── 3. The artwork ──
-      ctx.drawImage(img, matteSize, matteSize, iw, ih);
-
-      canvas.toBlob(
-        (blob) => {
-          if (!blob) { resolve(file); return; }
-          resolve(new File([blob], file.name, { type: 'image/png' }));
-        },
-        'image/png',
-      );
-    };
-    img.onerror = () => resolve(file);
-    img.src = URL.createObjectURL(file);
-  });
-}
 
 /**
  * Center-crop an image file to match the current viewport aspect ratio.
@@ -316,16 +223,6 @@ export default function DrawingExperiment() {
         stylizedFile = new File([bytes], 'photo.png', { type: stylizedMime || 'image/png' });
       }
 
-      // ── Gallery frame (documented, not active) ────────────────────────────
-      // Odyssey zooms ~30-40% into the source image. addGalleryFrame() fixes
-      // this by baking a warm paper matte (15% of shortest side) + style-
-      // specific accent border into the image before streaming, so the zoom
-      // absorbs the matte rather than cropping the subject.
-      //
-      // Re-enable when we want the "living artwork on a gallery wall" look:
-      //   stylizedFile = await addGalleryFrame(stylizedFile, selectedStyle);
-      // ─────────────────────────────────────────────────────────────────────
-
       setProcessingStep('Preparing animation…');
       const credRes = await fetch('/api/odyssey/token');
       if (!credRes.ok) {
@@ -492,11 +389,6 @@ export default function DrawingExperiment() {
         </header>
 
         <footer className="dtl-stream__footer">
-          {/* Gallery placard — re-enable with addGalleryFrame()
-          <p className="dtl-stream__placard">
-            Drawn to Life — <em>{STYLES.find(s => s.value === selectedStyle)?.label}</em>
-          </p>
-          */}
           <div className="dtl-pill">
             <input
               type="text"
