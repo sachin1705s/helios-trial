@@ -1,13 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { OdysseyService, credentialsFromDict, type StreamState } from '../../lib/odyssey';
 import { AtriumNav } from '../../demo/atrium/Layout';
+import DrawCanvasModal from './DrawCanvasModal';
 import '../../demo/shared/tokens.css';
 import '../../demo/atrium/Atrium.css';
 import './DrawingExperiment.css';
 
 type Phase = 'upload' | 'processing' | 'streaming';
 type Style = 'manga' | 'comic' | 'realism' | 'ghibli-inspired';
+type Source = 'upload' | 'draw';
 
 const STYLES: { value: Style; label: string; description: string }[] = [
   { value: 'manga',           label: 'Manga',     description: 'Bold, high contrast' },
@@ -35,11 +38,57 @@ function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
   return win.SpeechRecognition ?? win.webkitSpeechRecognition ?? null;
 }
 
+
+/**
+ * Center-crop an image file to match the current viewport aspect ratio.
+ * Returns a new File with the cropped result (PNG).
+ */
+function cropToViewport(file: File): Promise<File> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const viewportRatio = window.innerWidth / window.innerHeight;
+      const imgRatio = img.naturalWidth / img.naturalHeight;
+
+      let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
+
+      if (imgRatio > viewportRatio) {
+        // Image is wider than viewport — crop sides
+        sw = Math.round(img.naturalHeight * viewportRatio);
+        sx = Math.round((img.naturalWidth - sw) / 2);
+      } else {
+        // Image is taller than viewport — crop top/bottom
+        sh = Math.round(img.naturalWidth / viewportRatio);
+        sy = Math.round((img.naturalHeight - sh) / 2);
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = sw;
+      canvas.height = sh;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { resolve(file); return; }
+
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) { resolve(file); return; }
+          resolve(new File([blob], file.name, { type: 'image/png' }));
+        },
+        'image/png',
+      );
+    };
+    img.onerror = () => reject(new Error('Failed to load image'));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
 export default function DrawingExperiment() {
   const navigate = useNavigate();
   const [phase, setPhase] = useState<Phase>('upload');
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [source, setSource] = useState<Source | null>(null);
+  const [showDrawCanvas, setShowDrawCanvas] = useState(false);
   const [selectedStyle, setSelectedStyle] = useState<Style>('manga');
   const [error, setError] = useState<string | null>(null);
   const [processingStep, setProcessingStep] = useState('');
@@ -47,6 +96,7 @@ export default function DrawingExperiment() {
   const [isStreamingReady, setIsStreamingReady] = useState(false);
   const [textPrompt, setTextPrompt] = useState('');
   const [isListening, setIsListening] = useState(false);
+  const [skipStylize, setSkipStylize] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const serviceRef = useRef<OdysseyService | null>(null);
@@ -89,21 +139,46 @@ export default function DrawingExperiment() {
     };
   }, []);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 18 * 1024 * 1024) {
       setError('Photo is too large. Please choose an image under 18 MB.');
       return;
     }
+    setError(null);
+    setSource('upload');
+
+    try {
+      const cropped = await cropToViewport(file);
+      setUploadedFile(cropped);
+      const url = URL.createObjectURL(cropped);
+      setPreviewUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return url;
+      });
+    } catch {
+      setUploadedFile(file);
+      const url = URL.createObjectURL(file);
+      setPreviewUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return url;
+      });
+    }
+  };
+
+  const handleDrawingDone = useCallback((file: File, dataUrl: string) => {
     setUploadedFile(file);
-    const url = URL.createObjectURL(file);
+    setSource('draw');
     setPreviewUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
-      return url;
+      return dataUrl;
     });
+    setShowDrawCanvas(false);
     setError(null);
-  };
+  }, []);
+
+  const handleDrawCancel = useCallback(() => setShowDrawCanvas(false), []);
 
   const handleBringToLife = async () => {
     if (!uploadedFile) return;
@@ -111,22 +186,45 @@ export default function DrawingExperiment() {
     setError(null);
 
     try {
-      setProcessingStep('Stylizing your photo…');
-      const formData = new FormData();
-      formData.append('image', uploadedFile);
-      formData.append('style', selectedStyle);
+      let stylizedFile: File;
 
-      const stylizeRes = await fetch('/api/animate-drawings/stylize', { method: 'POST', body: formData });
-      if (!stylizeRes.ok) {
-        const errData = await stylizeRes.json().catch(() => ({ error: 'Stylization failed' }));
-        throw new Error(errData.error || 'Stylization failed');
+      if (import.meta.env.DEV && skipStylize) {
+        setProcessingStep('Skipping stylization (dev mode)…');
+        // Use a neutral placeholder so Odyssey's content policy never triggers.
+        // We only care that the stream connects and the UI works in dev.
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 288; // 16:9
+        const ctx = canvas.getContext('2d')!;
+        const grad = ctx.createLinearGradient(0, 0, 512, 288);
+        grad.addColorStop(0, '#2F5E48');
+        grad.addColorStop(1, '#0E1614');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 512, 288);
+        ctx.fillStyle = 'rgba(245,241,232,0.15)';
+        ctx.font = 'bold 22px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Dev placeholder', 256, 150);
+        const blob = await new Promise<Blob>((res) => canvas.toBlob((b) => res(b!), 'image/png'));
+        stylizedFile = new File([blob], 'placeholder.png', { type: 'image/png' });
+      } else {
+        setProcessingStep('Stylizing your photo…');
+        const formData = new FormData();
+        formData.append('image', uploadedFile);
+        formData.append('style', selectedStyle);
+
+        const stylizeRes = await fetch('/api/animate-drawings/stylize', { method: 'POST', body: formData });
+        if (!stylizeRes.ok) {
+          const errData = await stylizeRes.json().catch(() => ({ error: 'Stylization failed' }));
+          throw new Error(errData.error || 'Stylization failed');
+        }
+        const { imageBase64, mimeType: stylizedMime } = await stylizeRes.json();
+
+        const binary = atob(imageBase64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        stylizedFile = new File([bytes], 'photo.png', { type: stylizedMime || 'image/png' });
       }
-      const { imageBase64, mimeType: stylizedMime } = await stylizeRes.json();
-
-      const binary = atob(imageBase64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const stylizedFile = new File([bytes], 'photo.png', { type: stylizedMime || 'image/png' });
 
       setProcessingStep('Preparing animation…');
       const credRes = await fetch('/api/odyssey/token');
@@ -166,6 +264,7 @@ export default function DrawingExperiment() {
                     setTimeout(() => videoRef.current?.play().catch(() => undefined), 150);
                   }
                 });
+
               } else {
                 setTimeout(attach, 100);
               }
@@ -198,7 +297,12 @@ export default function DrawingExperiment() {
         });
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Something went wrong. Please try again.';
+      const raw = err instanceof Error ? err.message : '';
+      const lower = raw.toLowerCase();
+      const message =
+        lower.includes('terms of service') || lower.includes('violates') || lower.includes('policy')
+          ? "We couldn't process this image — try a different photo."
+          : raw || 'Something went wrong. Please try again.';
       setError(message);
       setPhase('upload');
       stopHeartbeat();
@@ -213,6 +317,7 @@ export default function DrawingExperiment() {
     serviceRef.current = null;
     setPhase('upload');
     setUploadedFile(null);
+    setSource(null);
     setPreviewUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
       return null;
@@ -378,23 +483,41 @@ export default function DrawingExperiment() {
           <p className="lede">A photo goes in. The character sees it, thinks about it, and has things to say.</p>
         </div>
 
-        <label className={`dtl-upload${uploadedFile ? ' has-file' : ''}`}>
-          <input
-            type="file"
-            accept="image/*"
-            onChange={handleFileChange}
-            style={{ display: 'none' }}
-          />
-          {previewUrl ? (
-            <img src={previewUrl} alt="Your photo" className="dtl-upload-preview" />
-          ) : (
-            <div className="dtl-upload-placeholder">
-              <span className="dtl-upload-icon">✏️</span>
-              <span>Upload a photo</span>
-              <span className="dtl-upload-hint">tap to choose</span>
-            </div>
-          )}
-        </label>
+        <div className="dtl-source-row">
+          <label className={`dtl-upload${source === 'upload' && previewUrl ? ' has-file' : ''}`}>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleFileChange}
+              style={{ display: 'none' }}
+            />
+            {source === 'upload' && previewUrl ? (
+              <img src={previewUrl} alt="Your photo" className="dtl-upload-preview" />
+            ) : (
+              <div className="dtl-upload-placeholder">
+                <span className="dtl-upload-icon" aria-hidden>📷</span>
+                <span>Upload a photo</span>
+                <span className="dtl-upload-hint">tap to choose</span>
+              </div>
+            )}
+          </label>
+
+          <button
+            type="button"
+            className={`dtl-upload dtl-draw${source === 'draw' && previewUrl ? ' has-file' : ''}`}
+            onClick={() => setShowDrawCanvas(true)}
+          >
+            {source === 'draw' && previewUrl ? (
+              <img src={previewUrl} alt="Your drawing" className="dtl-upload-preview" />
+            ) : (
+              <div className="dtl-upload-placeholder">
+                <span className="dtl-upload-icon" aria-hidden>✏️</span>
+                <span>Draw it</span>
+                <span className="dtl-upload-hint">tap to sketch</span>
+              </div>
+            )}
+          </button>
+        </div>
 
         <div className="dtl-styles">
           {STYLES.map((s) => (
@@ -412,6 +535,17 @@ export default function DrawingExperiment() {
 
         {error && <p className="dtl-error">{error}</p>}
 
+        {import.meta.env.DEV && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.78rem', color: 'var(--ink-soft)', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={skipStylize}
+              onChange={(e) => setSkipStylize(e.target.checked)}
+            />
+            Skip AI styling (dev — saves quota)
+          </label>
+        )}
+
         <button
           className="btn btn--primary dtl-cta"
           onClick={handleBringToLife}
@@ -420,6 +554,11 @@ export default function DrawingExperiment() {
           Bring to Life
         </button>
       </main>
+
+      {showDrawCanvas && createPortal(
+        <DrawCanvasModal onCancel={handleDrawCancel} onDone={handleDrawingDone} />,
+        document.body,
+      )}
     </div>
   );
 }
