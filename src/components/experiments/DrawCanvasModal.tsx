@@ -16,6 +16,7 @@ type Stroke = { points: [number, number][]; color: string; size: number };
 export default function DrawCanvasModal({ onCancel, onDone }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [strokes, setStrokes] = useState<Stroke[]>([]);
+  const strokesRef = useRef<Stroke[]>([]);
   const activeStroke = useRef<Stroke | null>(null);
   const [color, setColor] = useState(COLORS[0]);
   const [size, setSize] = useState(SIZES[1]);
@@ -23,14 +24,20 @@ export default function DrawCanvasModal({ onCancel, onDone }: Props) {
   const [error, setError] = useState<string | null>(null);
   const drawing = useRef(false);
 
+  strokesRef.current = strokes;
+
   const redraw = useCallback((allStrokes: Stroke[]) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.scale(dpr, dpr);
     ctx.fillStyle = '#F5F1E8';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, canvas.width / dpr, canvas.height / dpr);
 
     for (const s of allStrokes) {
       if (s.points.length < 2) continue;
@@ -45,8 +52,10 @@ export default function DrawCanvasModal({ onCancel, onDone }: Props) {
       }
       ctx.stroke();
     }
+    ctx.restore();
   }, []);
 
+  // Resize canvas to match container — only runs on mount and container resize
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -60,15 +69,18 @@ export default function DrawCanvasModal({ onCancel, onDone }: Props) {
       canvas.height = rect.height * dpr;
       canvas.style.width = `${rect.width}px`;
       canvas.style.height = `${rect.height}px`;
-      const ctx = canvas.getContext('2d');
-      if (ctx) ctx.scale(dpr, dpr);
-      redraw(strokes);
+      redraw(strokesRef.current);
     };
 
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(parent);
     return () => ro.disconnect();
+  }, [redraw]);
+
+  // Redraw when strokes change (no canvas reset)
+  useEffect(() => {
+    redraw(strokes);
   }, [strokes, redraw]);
 
   const getPos = (e: React.PointerEvent): [number, number] => {
@@ -85,7 +97,7 @@ export default function DrawCanvasModal({ onCancel, onDone }: Props) {
   const onPointerMove = (e: React.PointerEvent) => {
     if (!drawing.current || !activeStroke.current) return;
     activeStroke.current.points.push(getPos(e));
-    redraw([...strokes, activeStroke.current]);
+    redraw([...strokesRef.current, activeStroke.current]);
   };
 
   const onPointerUp = () => {
@@ -97,18 +109,8 @@ export default function DrawCanvasModal({ onCancel, onDone }: Props) {
     activeStroke.current = null;
   };
 
-  const handleUndo = () => {
-    setStrokes((prev) => {
-      const next = prev.slice(0, -1);
-      redraw(next);
-      return next;
-    });
-  };
-
-  const handleClear = () => {
-    setStrokes([]);
-    redraw([]);
-  };
+  const handleUndo = () => setStrokes((prev) => prev.slice(0, -1));
+  const handleClear = () => setStrokes([]);
 
   const handleDone = () => {
     const canvas = canvasRef.current;
