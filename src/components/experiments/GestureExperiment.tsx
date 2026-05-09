@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useOdysseyStream } from '../../hooks/useOdysseyStream';
 import { loadImageFile } from '../../lib/odyssey';
+import { applySeo, SEO_PAGES } from '../../lib/seo';
 import { AtriumNav } from '../../demo/atrium/Layout';
 import '../../demo/shared/tokens.css';
 import '../../demo/atrium/Atrium.css';
@@ -34,16 +35,120 @@ const getEncouragement = (score: number): string => {
   return 'Einstein kept most of his cards close.';
 };
 
+// ── Canvas score card ─────────────────────────────────────────────────────────
+function roundRectPath(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number, r: number,
+) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h);
+  ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+}
+
+function wrapText(
+  ctx: CanvasRenderingContext2D,
+  text: string, x: number, y: number,
+  maxWidth: number, lineHeight: number,
+): void {
+  const words = text.split(' ');
+  let line = '';
+  for (const word of words) {
+    const test = line + word + ' ';
+    if (ctx.measureText(test).width > maxWidth && line) {
+      ctx.fillText(line.trim(), x, y);
+      line = word + ' ';
+      y += lineHeight;
+    } else {
+      line = test;
+    }
+  }
+  ctx.fillText(line.trim(), x, y);
+}
+
+function drawScoreCard(
+  canvas: HTMLCanvasElement,
+  score: number,
+  encouragement: string,
+  einsteinImg: HTMLImageElement,
+): void {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const W = 1080, H = 1080;
+
+  // Background
+  ctx.fillStyle = '#0E1614';
+  ctx.fillRect(0, 0, W, H);
+
+  // Inset panel fill
+  ctx.fillStyle = '#19251F';
+  roundRectPath(ctx, 60, 60, 960, 960, 32);
+  ctx.fill();
+
+  // Inset panel border
+  ctx.strokeStyle = '#2F5E48';
+  ctx.lineWidth = 1.5;
+  roundRectPath(ctx, 60, 60, 960, 960, 32);
+  ctx.stroke();
+
+  // Einstein portrait
+  ctx.drawImage(einsteinImg, W / 2 - 160, 100, 320, 320);
+
+  // Score numeral
+  ctx.font = '700 200px Fraunces, Georgia, serif';
+  ctx.fillStyle = '#F5F1E8';
+  ctx.textAlign = 'center';
+  ctx.fillText(String(score), W / 2, 590);
+
+  // /10
+  ctx.font = '400 48px Fraunces, Georgia, serif';
+  ctx.fillStyle = '#6B7B72';
+  ctx.fillText('/ 10', W / 2, 650);
+
+  // Encouragement (word-wrapped)
+  ctx.font = '400 36px Inter, system-ui, sans-serif';
+  ctx.fillStyle = '#F5F1E8';
+  wrapText(ctx, encouragement, W / 2, 720, 640, 44);
+
+  // Divider
+  ctx.strokeStyle = '#2F5E48';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(200, 800); ctx.lineTo(880, 800);
+  ctx.stroke();
+
+  // URL footer
+  ctx.font = '500 28px Inter, system-ui, sans-serif';
+  ctx.fillStyle = '#6B7B72';
+  ctx.fillText('interactstudio.space/lab/gesture', W / 2, 850);
+
+  // CTA pill
+  ctx.fillStyle = '#2F5E48';
+  roundRectPath(ctx, 340, 890, 400, 64, 32);
+  ctx.fill();
+  ctx.font = '600 26px Inter, system-ui, sans-serif';
+  ctx.fillStyle = '#F5F1E8';
+  ctx.fillText('Can you beat me?', W / 2, 931);
+}
+
 type GameState = 'idle' | 'playing' | 'finished';
 
 export default function GestureExperiment() {
   const navigate   = useNavigate();
   const { status, error, videoRef: odysseyVideoRef, startStream, interact, disconnect } = useOdysseyStream();
 
-  const webcamVideoRef  = useRef<HTMLVideoElement | null>(null);
-  const webcamCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const pollingRef      = useRef<ReturnType<typeof setInterval> | null>(null);
-  const streamRef       = useRef<MediaStream | null>(null);
+  const webcamVideoRef    = useRef<HTMLVideoElement | null>(null);
+  const webcamCanvasRef   = useRef<HTMLCanvasElement | null>(null);
+  const scorecardCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const pollingRef        = useRef<ReturnType<typeof setInterval> | null>(null);
+  const streamRef         = useRef<MediaStream | null>(null);
 
   // Existing detection state
   const [webcamActive, setWebcamActive] = useState(false);
@@ -61,6 +166,11 @@ export default function GestureExperiment() {
 
   const timerRef      = useRef<ReturnType<typeof setInterval> | null>(null);
   const discoveredRef = useRef<Set<string>>(new Set()); // mirrors state — safe in callbacks
+
+  // ── SEO ───────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    applySeo(SEO_PAGES.gesture);
+  }, []);
 
   // ── Odyssey: start stream when ready ─────────────────────────────────────
   useEffect(() => {
@@ -80,6 +190,18 @@ export default function GestureExperiment() {
       catch { /* malformed — ignore */ }
     }
   }, []);
+
+  // ── Score card: draw when game finishes ───────────────────────────────────
+  useEffect(() => {
+    if (gameState !== 'finished') return;
+    const canvas = scorecardCanvasRef.current;
+    if (!canvas) return;
+    const img = new Image();
+    img.src = CHARACTER_IMAGE;
+    img.onload = () => {
+      drawScoreCard(canvas, discoveredRef.current.size, getEncouragement(discoveredRef.current.size), img);
+    };
+  }, [gameState]); // discoveredRef.current is stable once finished
 
   // ── Webcam helpers ────────────────────────────────────────────────────────
   const startWebcam = useCallback(async () => {
@@ -227,6 +349,37 @@ export default function GestureExperiment() {
   // ── Share ─────────────────────────────────────────────────────────────────
   const handleShare = useCallback(async (score: number) => {
     const text = `I found ${score}/10 of Einstein's reactions in 3 minutes. Can you beat me? interactstudio.space/lab/gesture`;
+
+    // Get score card as a shareable File
+    const canvas = scorecardCanvasRef.current;
+    let imageFile: File | null = null;
+    if (canvas) {
+      imageFile = await new Promise<File | null>((resolve) => {
+        canvas.toBlob(
+          (blob) => resolve(blob ? new File([blob], 'einstein-score.png', { type: 'image/png' }) : null),
+          'image/png',
+        );
+      });
+    }
+
+    // Build share payload — include image only if the platform supports file sharing
+    const shareData: ShareData = { text };
+    if (imageFile && navigator.canShare?.({ files: [imageFile] })) {
+      shareData.files = [imageFile];
+    }
+
+    // Web Share API — native OS sheet (mobile + some desktop)
+    if (navigator.share && navigator.canShare?.(shareData)) {
+      try {
+        await navigator.share(shareData);
+        return; // OS sheet provides its own feedback
+      } catch (err) {
+        if ((err as DOMException).name === 'AbortError') return; // user cancelled
+        // fall through to clipboard
+      }
+    }
+
+    // Clipboard fallback (desktop Firefox, unsupported browsers)
     try {
       await navigator.clipboard.writeText(text);
       setShareCopied(true);
@@ -280,7 +433,7 @@ export default function GestureExperiment() {
                 className="bl-btn bl-btn--primary"
                 onClick={() => void handleShare(discovered.size)}
               >
-                {shareCopied ? 'Copied!' : 'Share Result'}
+                {shareCopied ? 'Copied to clipboard!' : 'Share Result'}
               </button>
               <p className="bl-results__return">Come back tomorrow for another attempt.</p>
             </div>
@@ -347,13 +500,16 @@ export default function GestureExperiment() {
                 </div>
               )}
 
-              {/* Brief flash on new find — replaces old .bl-detected card */}
+              {/* Brief flash on new find */}
               {lastFlash && <div className="bl-flash">New reaction found!</div>}
             </>
           )}
 
         </aside>
       </div>
+
+      {/* Hidden score card canvas — drawn when game finishes, used for sharing */}
+      <canvas ref={scorecardCanvasRef} width={1080} height={1080} style={{ display: 'none' }} />
     </div>
   );
 }
