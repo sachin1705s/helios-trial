@@ -231,6 +231,21 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* Bonus counter suffix (inline, smaller) */
+.body-language .bl-counter__bonus {
+  font-size: 1rem;
+  font-weight: 400;
+  color: var(--clay);
+  margin-left: 4px;
+}
+
+/* Bonus flash variant */
+.body-language .bl-flash--bonus {
+  color: var(--clay);
+  background: rgba(217, 73, 43, 0.08);
+  border-color: rgba(217, 73, 43, 0.2);
+}
+
 /* Results screen */
 .body-language .bl-results {
   display: flex;
@@ -250,6 +265,14 @@
   line-height: 0.96;
   letter-spacing: -0.03em;
   color: var(--ink);
+}
+
+.body-language .bl-results__bonus {
+  font-family: var(--body);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--clay);
+  margin: -8px 0 0;
 }
 
 .body-language .bl-results__encouragement {
@@ -290,6 +313,10 @@
 .body-language .bl-already-played__score strong {
   font-weight: 700;
   color: var(--moss);
+}
+
+.body-language .bl-already-played__score .bl-bonus {
+  color: var(--clay);
 }
 
 .body-language .bl-already-played__sub {

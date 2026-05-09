@@ -24,7 +24,13 @@ const GESTURE_EMOJI: Record<string, string> = {
 };
 
 // ── Game constants ────────────────────────────────────────────────────────────
-const TOTAL_GESTURES  = Object.keys(GESTURE_EMOJI).length; // 10
+// CORE: the 10 reactions that count toward the win condition (tied to GESTURE_EMOJI).
+// BONUS: extras unlocked after reviewing log data — empty on launch day.
+//        To expand tomorrow: add the label here + an emoji entry in GESTURE_EMOJI.
+const CORE_GESTURE_KEYS  = Object.keys(GESTURE_EMOJI);
+const BONUS_GESTURE_KEYS: string[] = []; // e.g. ['waving', 'dab'] — add after log review
+
+const TOTAL_GESTURES  = CORE_GESTURE_KEYS.length; // 10 — win condition never changes
 const GAME_DURATION_S = 180; // 3 minutes
 
 const getTodayKey = () =>
@@ -162,13 +168,16 @@ export default function GestureExperiment() {
   // ── Game state ──────────────────────────────────────────────────────────────
   const [gameState, setGameState]         = useState<GameState>('idle');
   const [discovered, setDiscovered]       = useState<Set<string>>(new Set());
+  const [discoveredBonus, setDiscoveredBonus] = useState<Set<string>>(new Set());
   const [timeLeft, setTimeLeft]           = useState(GAME_DURATION_S);
-  const [alreadyPlayed, setAlreadyPlayed] = useState<{ score: number; finishedAt: string } | null>(null);
+  const [alreadyPlayed, setAlreadyPlayed] = useState<{ score: number; bonus: number; finishedAt: string } | null>(null);
   const [lastFlash, setLastFlash]         = useState<string | null>(null);
+  const [lastFlashIsBonus, setLastFlashIsBonus] = useState(false);
   const [shareCopied, setShareCopied]     = useState(false);
 
-  const timerRef      = useRef<ReturnType<typeof setInterval> | null>(null);
-  const discoveredRef = useRef<Set<string>>(new Set()); // mirrors state — safe in callbacks
+  const timerRef          = useRef<ReturnType<typeof setInterval> | null>(null);
+  const discoveredRef     = useRef<Set<string>>(new Set()); // mirrors state — safe in callbacks
+  const discoveredBonusRef = useRef<Set<string>>(new Set());
 
   // ── SEO ───────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -204,7 +213,7 @@ export default function GestureExperiment() {
     img.onload = () => {
       drawScoreCard(canvas, discoveredRef.current.size, getEncouragement(discoveredRef.current.size), img);
     };
-  }, [gameState]); // discoveredRef.current is stable once finished
+  }, [gameState]); // discoveredRef / discoveredBonusRef are stable once finished
 
   // ── Webcam helpers ────────────────────────────────────────────────────────
   const startWebcam = useCallback(async () => {
@@ -230,7 +239,11 @@ export default function GestureExperiment() {
   const finishGame = useCallback(() => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
     stopPolling();
-    const result = { score: discoveredRef.current.size, finishedAt: new Date().toISOString() };
+    const result = {
+      score: discoveredRef.current.size,
+      bonus: discoveredBonusRef.current.size,
+      finishedAt: new Date().toISOString(),
+    };
     localStorage.setItem(getTodayKey(), JSON.stringify(result));
     setGameState('finished');
   }, [stopPolling]);
@@ -265,9 +278,11 @@ export default function GestureExperiment() {
   const startGame = useCallback(() => {
     if (gameState !== 'idle') return;
     // Record attempt immediately — prevents refresh exploit
-    localStorage.setItem(getTodayKey(), JSON.stringify({ score: 0, finishedAt: new Date().toISOString() }));
+    localStorage.setItem(getTodayKey(), JSON.stringify({ score: 0, bonus: 0, finishedAt: new Date().toISOString() }));
     discoveredRef.current = new Set();
+    discoveredBonusRef.current = new Set();
     setDiscovered(new Set());
+    setDiscoveredBonus(new Set());
     setTimeLeft(GAME_DURATION_S);
     setGameState('playing');
     timerRef.current = setInterval(() => {
@@ -300,7 +315,7 @@ export default function GestureExperiment() {
       if (res.status === 429) { stopPolling(); return; }
       if (!res.ok) return;
 
-      const { gesture, raw } = await res.json() as { gesture: string; raw?: string };
+      const { gesture, isBonus, raw } = await res.json() as { gesture: string; isBonus?: boolean; raw?: string };
 
       // Log unmapped gestures — Gemini detected something outside our vocabulary
       if (raw && raw !== 'none' && gesture === 'none') {
@@ -310,12 +325,25 @@ export default function GestureExperiment() {
 
       // ── Game: track new discoveries ────────────────────────────────────
       if (gesture && gesture !== 'none' && gameState === 'playing') {
-        if (!discoveredRef.current.has(gesture)) {
-          discoveredRef.current.add(gesture);
-          setDiscovered(new Set(discoveredRef.current));
-          setLastFlash(gesture);
-          setTimeout(() => setLastFlash(null), 1200);
-          if (discoveredRef.current.size >= TOTAL_GESTURES) finishGame();
+        if (isBonus) {
+          // Bonus discovery — extra credit, doesn't affect the 10-gesture win condition
+          if (!discoveredBonusRef.current.has(gesture)) {
+            discoveredBonusRef.current.add(gesture);
+            setDiscoveredBonus(new Set(discoveredBonusRef.current));
+            setLastFlashIsBonus(true);
+            setLastFlash(gesture);
+            setTimeout(() => { setLastFlash(null); setLastFlashIsBonus(false); }, 1200);
+          }
+        } else {
+          // Core discovery — counts toward the 10
+          if (!discoveredRef.current.has(gesture)) {
+            discoveredRef.current.add(gesture);
+            setDiscovered(new Set(discoveredRef.current));
+            setLastFlashIsBonus(false);
+            setLastFlash(gesture);
+            setTimeout(() => setLastFlash(null), 1200);
+            if (discoveredRef.current.size >= TOTAL_GESTURES) finishGame();
+          }
         }
       }
 
@@ -357,8 +385,9 @@ export default function GestureExperiment() {
   }, [disconnect, navigate, stopPolling, stopWebcam]);
 
   // ── Share ─────────────────────────────────────────────────────────────────
-  const handleShare = useCallback(async (score: number) => {
-    const text = `I found ${score}/10 of Einstein's reactions in 3 minutes. Can you beat me? interactstudio.space/lab/gesture`;
+  const handleShare = useCallback(async (score: number, bonus: number) => {
+    const bonusSuffix = bonus > 0 ? ` + ${bonus} bonus` : '';
+    const text = `I found ${score}/10${bonusSuffix} of Einstein's reactions in 3 minutes. Can you beat me? interactstudio.space/lab/gesture`;
 
     // Get score card as a shareable File
     const canvas = scorecardCanvasRef.current;
@@ -382,7 +411,7 @@ export default function GestureExperiment() {
     if (navigator.share && navigator.canShare?.(shareData)) {
       try {
         await navigator.share(shareData);
-        posthog?.capture('gesture_share', { score, method: 'web_share' });
+        posthog?.capture('gesture_share', { score, bonus, method: 'web_share' });
         return; // OS sheet provides its own feedback
       } catch (err) {
         if ((err as DOMException).name === 'AbortError') return; // user cancelled
@@ -393,7 +422,7 @@ export default function GestureExperiment() {
     // Clipboard fallback (desktop Firefox, unsupported browsers)
     try {
       await navigator.clipboard.writeText(text);
-      posthog?.capture('gesture_share', { score, method: 'clipboard' });
+      posthog?.capture('gesture_share', { score, bonus, method: 'clipboard' });
       setShareCopied(true);
       setTimeout(() => setShareCopied(false), 2000);
     } catch { /* silent — clipboard unavailable */ }
@@ -432,6 +461,9 @@ export default function GestureExperiment() {
             <div className="bl-already-played">
               <p className="bl-already-played__score">
                 You found <strong>{alreadyPlayed.score} / {TOTAL_GESTURES}</strong> today.
+                {(alreadyPlayed.bonus ?? 0) > 0 && (
+                  <> + <strong className="bl-bonus">{alreadyPlayed.bonus} bonus</strong></>
+                )}
               </p>
               <p className="bl-already-played__sub">Come back tomorrow for another attempt.</p>
             </div>
@@ -440,10 +472,13 @@ export default function GestureExperiment() {
             /* ── Results screen ─────────────────────────────────────── */
             <div className="bl-results">
               <div className="bl-results__score">{discovered.size} / {TOTAL_GESTURES}</div>
+              {discoveredBonus.size > 0 && (
+                <div className="bl-results__bonus">+{discoveredBonus.size} bonus</div>
+              )}
               <p className="bl-results__encouragement">{getEncouragement(discovered.size)}</p>
               <button
                 className="bl-btn bl-btn--primary"
-                onClick={() => void handleShare(discovered.size)}
+                onClick={() => void handleShare(discovered.size, discoveredBonus.size)}
               >
                 {shareCopied ? 'Copied to clipboard!' : 'Share Result'}
               </button>
@@ -456,7 +491,7 @@ export default function GestureExperiment() {
                   link.download = 'einstein-score.png';
                   link.href = canvas.toDataURL('image/png');
                   link.click();
-                  posthog?.capture('gesture_share', { score: discovered.size, method: 'download' });
+                  posthog?.capture('gesture_share', { score: discovered.size, bonus: discoveredBonus.size, method: 'download' });
                 }}
               >
                 Download Card
@@ -516,18 +551,25 @@ export default function GestureExperiment() {
                   <div className={`bl-timer${timerUrgent ? ' bl-timer--urgent' : ''}`}>
                     {timerDisplay}
                   </div>
-                  {/* key={discovered.size} forces remount so animation replays on each find */}
+                  {/* key forces remount so animation replays on each find */}
                   <div
-                    key={discovered.size}
+                    key={discovered.size + discoveredBonus.size}
                     className={`bl-counter${lastFlash ? ' bl-counter-bump' : ''}`}
                   >
                     {discovered.size} / {TOTAL_GESTURES}
+                    {discoveredBonus.size > 0 && (
+                      <span className="bl-counter__bonus"> +{discoveredBonus.size}</span>
+                    )}
                   </div>
                 </div>
               )}
 
               {/* Brief flash on new find */}
-              {lastFlash && <div className="bl-flash">New reaction found!</div>}
+              {lastFlash && (
+                <div className={`bl-flash${lastFlashIsBonus ? ' bl-flash--bonus' : ''}`}>
+                  {lastFlashIsBonus ? 'Bonus reaction!' : 'New reaction found!'}
+                </div>
+              )}
             </>
           )}
 
