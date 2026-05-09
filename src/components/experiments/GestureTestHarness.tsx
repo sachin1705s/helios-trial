@@ -28,7 +28,7 @@ type Result = 'pass' | 'fail' | 'pending';
 type ResultKey = `${string}::${VariantId}`;
 
 export default function GestureTestHarness() {
-  const { status, error, videoRef, startStream, interact } = useOdysseyStream();
+  const { status, error, videoRef, startStream, interact, disconnect, connect } = useOdysseyStream();
 
   const [results, setResults]         = useState<Record<ResultKey, Result>>({} as Record<ResultKey, Result>);
   const [activeVariant, setActiveVariant] = useState<VariantId>('A');
@@ -60,6 +60,21 @@ export default function GestureTestHarness() {
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [log]);
+
+  const [reconnecting, setReconnecting] = useState(false);
+
+  const reconnect = useCallback(async () => {
+    setReconnecting(true);
+    addLog('Reconnecting…');
+    try {
+      await disconnect();
+      await connect();
+    } catch (err) {
+      addLog(`Reconnect error: ${err}`);
+    } finally {
+      setReconnecting(false);
+    }
+  }, [disconnect, connect, addLog]);
 
   const sendGesture = useCallback(async (gesture: string) => {
     if (sending || status !== 'streaming') return;
@@ -135,6 +150,18 @@ export default function GestureTestHarness() {
         }}>
           {isStreaming ? '● LIVE' : status.toUpperCase()}
         </span>
+
+        {/* Reconnect button */}
+        <button onClick={() => void reconnect()} disabled={reconnecting} style={{
+          padding: '4px 12px', borderRadius: 'var(--radius-pill)', cursor: 'pointer',
+          fontFamily: 'var(--body)', fontSize: '0.72rem', fontWeight: 600,
+          border: '1px solid rgba(20,40,38,0.2)',
+          background: reconnecting ? 'rgba(20,40,38,0.06)' : 'var(--paper)',
+          color: reconnecting ? 'var(--ink-mute)' : 'var(--ink)',
+          opacity: reconnecting ? 0.6 : 1,
+        }}>
+          {reconnecting ? 'Reconnecting…' : '↺ Reconnect'}
+        </button>
 
         {/* Variant selector */}
         <div style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
