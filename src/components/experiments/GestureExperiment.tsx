@@ -11,11 +11,13 @@ const POLL_INTERVAL_MS = 1500;
 const CHARACTER_IMAGE  = '/images/characters/einstein.png';
 const CHARACTER_PROMPT = 'You are Einstein. React expressively to the user\'s gestures and body language. Keep every reply under 20 words.';
 
+// Gestures validated via A/B test (leaning_forward + leaning_back removed —
+// failed across all prompt variants).
 const GESTURE_EMOJI: Record<string, string> = {
   hello: '\u{1F44B}', thumbs_up: '\u{1F44D}', victory: '✌️',
   namaste: '\u{1F64F}', pointing: '\u{1F449}', thinking: '\u{1F914}',
-  shrug: '\u{1F937}', crossed_arms: '\u{1F645}', leaning_forward: '\u{1F9D0}',
-  leaning_back: '\u{1F60C}', facepalm: '\u{1F926}', clapping: '\u{1F44F}',
+  shrug: '\u{1F937}', crossed_arms: '\u{1F645}', facepalm: '\u{1F926}',
+  clapping: '\u{1F44F}',
 };
 
 export default function GestureExperiment() {
@@ -106,7 +108,7 @@ export default function GestureExperiment() {
       if (gesture && gesture !== 'none' && gesture !== lastGesture) {
         setLastGesture(gesture);
         const label = gesture.replace(/_/g, ' ');
-        await interact(`The user is ${label}. React to this body language expressively in one sentence.`);
+        await interact(`The user just did ${label}. React!`);
       }
     } catch { /* network error — skip this cycle */ } finally {
       setDetecting(false);
