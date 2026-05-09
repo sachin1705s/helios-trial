@@ -975,6 +975,78 @@ app.post('/api/extract-objects', aiLimiter, async (req, res) => {
   }
 });
 
+// ─── Drip Check (Gemini Vision describes the user) ────────────────────────────
+app.post('/api/drip-check', aiLimiter, imageUpload.single('image'), async (req, res) => {
+  try {
+    const ai = getAiClient();
+    if (!ai) return res.status(503).json({ error: 'AI service not configured.' });
+    if (!req.file) return res.status(400).json({ error: 'Missing image file.' });
+
+    const mimeType = req.file.mimetype || 'image/jpeg';
+    const base64 = req.file.buffer.toString('base64');
+    const prompt = [
+      'Look at the person in this image and describe ONLY:',
+      '- their hairstyle (color, length, shape)',
+      '- their clothing (visible items, color, style)',
+      '- any standout style details (accessories, vibe)',
+      '',
+      'Return 1–2 short factual sentences. No opinions, no greetings, no preamble.',
+      'If no person is visible, return exactly: NO_PERSON',
+    ].join('\n');
+
+    const result = await ai.models.generateContent({
+      model: 'gemini-2.0-flash',
+      generationConfig: { maxOutputTokens: 120 },
+      contents: [{ role: 'user', parts: [{ inlineData: { mimeType, data: base64 } }, { text: prompt }] }],
+    });
+
+    let description = '';
+    try { description = (result.text || '').trim(); } catch { /* safety filter */ }
+    if (!description || description === 'NO_PERSON') {
+      return res.json({ description: '', noPerson: true });
+    }
+    return res.json({ description });
+  } catch (err) {
+    console.error('[drip-check] failed:', err?.message || err);
+    return res.status(500).json({ error: 'Drip check failed.' });
+  }
+});
+
+// ─── Item Grab (Gemini Vision identifies what the user is holding) ────────────
+app.post('/api/item-grab', aiLimiter, imageUpload.single('image'), async (req, res) => {
+  try {
+    const ai = getAiClient();
+    if (!ai) return res.status(503).json({ error: 'AI service not configured.' });
+    if (!req.file) return res.status(400).json({ error: 'Missing image file.' });
+
+    const mimeType = req.file.mimetype || 'image/jpeg';
+    const base64 = req.file.buffer.toString('base64');
+    const prompt = [
+      'Look at this image. The user is showing or holding an object toward the camera.',
+      'Identify the most prominent object (or 1–2 objects) in 1 short factual sentence.',
+      'Mention color, brand if obvious, and notable details.',
+      'No greetings, no opinions, no preamble.',
+      'If no clear object is being shown, return exactly: NO_OBJECT',
+    ].join('\n');
+
+    const result = await ai.models.generateContent({
+      model: 'gemini-2.0-flash',
+      generationConfig: { maxOutputTokens: 100 },
+      contents: [{ role: 'user', parts: [{ inlineData: { mimeType, data: base64 } }, { text: prompt }] }],
+    });
+
+    let description = '';
+    try { description = (result.text || '').trim(); } catch { /* safety filter */ }
+    if (!description || description === 'NO_OBJECT') {
+      return res.json({ description: '', noObject: true });
+    }
+    return res.json({ description });
+  } catch (err) {
+    console.error('[item-grab] failed:', err?.message || err);
+    return res.status(500).json({ error: 'Item grab failed.' });
+  }
+});
+
 // ─── Voice cloning ────────────────────────────────────────────────────────────
 app.post('/api/voice-clone', uploadVoiceClone.single('audio'), async (req, res) => {
   try {

@@ -30,7 +30,7 @@ export default function AtriumLabs() {
       <section className="labs-experiments" aria-label="Experiments">
         {EXPERIMENTS.map((exp) => {
           const status = getStatus(exp.start, exp.end, allDone);
-          const isClickable = status === 'live' || status === 'ended' || status === 'archive';
+          const isClickable = true;
 
           const card = (
             <article
