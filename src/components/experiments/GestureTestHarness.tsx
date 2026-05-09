@@ -14,12 +14,15 @@ const ALL_GESTURES = [
 ];
 
 // A/B prompt variations — {id, label, template} where {g} = gesture label (spaces)
+// Note: gesture labels are noun/participle phrases ("thumbs up", "crossed arms",
+// "leaning forward") so "The user is {g}" breaks for noun forms. Use "just did" or
+// "is showing" framing so all labels read naturally.
 const PROMPT_VARIANTS = [
-  { id: 'A', label: 'Original',   template: 'The user is {g}. React to that gesture expressively in one sentence.' },
-  { id: 'B', label: 'Body lang',  template: 'The user is {g}. React to this body language expressively in one sentence.' },
-  { id: 'C', label: 'Physical',   template: 'The user is {g}. Match their energy with a physical reaction and one sentence.' },
-  { id: 'D', label: 'Short',      template: 'User is {g}. React!' },
-  { id: 'E', label: 'In-scene',   template: 'The person in front of you is {g}. React as Einstein would in one sentence.' },
+  { id: 'A', label: 'Just did',   template: 'The user just did {g}. React to that gesture expressively in one sentence.' },
+  { id: 'B', label: 'Showing',    template: 'The user is showing {g}. React to this body language expressively in one sentence.' },
+  { id: 'C', label: 'Physical',   template: 'The user just did {g}. Match their energy with a physical reaction and one sentence.' },
+  { id: 'D', label: 'Short',      template: 'The user just did {g}. React!' },
+  { id: 'E', label: 'In-scene',   template: 'The person in front of you just did {g}. React as Einstein would in one sentence.' },
   { id: 'F', label: 'Imperative', template: '{G}! Respond physically and say something brief.' },
 ] as const;
 
