@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BroadcastInfo } from '@odysseyml/odyssey';
 import { OdysseyService, credentialsFromDict, loadImageFile } from '../lib/odyssey';
+import { trackEvent } from '../lib/analytics';
 
 export type OdysseyStreamStatus = 'idle' | 'connecting' | 'ready' | 'streaming' | 'error';
 
@@ -81,7 +82,10 @@ export function useOdysseyStream(options: UseOdysseyStreamOptions = {}) {
         },
         onStreamStarted: () => setStatus('streaming'),
         onStreamEnded: () => { streamActiveRef.current = false; },
-        onStreamError: (_, msg) => setError(msg ?? 'Stream error.'),
+        onStreamError: (reason, msg) => {
+          setError(msg ?? 'Stream error.');
+          trackEvent('odyssey_stream_error', { reason, message: msg });
+        },
         onBroadcastReady: (info) => { onBroadcastReadyRef.current?.(info); },
       });
     } catch (err) {
@@ -120,7 +124,15 @@ export function useOdysseyStream(options: UseOdysseyStreamOptions = {}) {
   }, []);
 
   const interact = useCallback(async (prompt: string) => {
-    await serviceRef.current?.interact(prompt);
+    try {
+      await serviceRef.current?.interact(prompt);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Log content-policy / NSFW rejections for later review
+      console.warn(`[odyssey:interact] rejected prompt="${prompt}" error="${msg}"`);
+      trackEvent('odyssey_interact_rejected', { prompt, error: msg });
+      throw err;
+    }
   }, []);
 
   const disconnect = useCallback(async () => {

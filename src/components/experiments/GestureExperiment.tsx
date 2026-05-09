@@ -4,6 +4,7 @@ import { usePostHog } from 'posthog-js/react';
 import { useOdysseyStream } from '../../hooks/useOdysseyStream';
 import { loadImageFile } from '../../lib/odyssey';
 import { applySeo, SEO_PAGES } from '../../lib/seo';
+import { trackEvent } from '../../lib/analytics';
 import { AtriumNav } from '../../demo/atrium/Layout';
 import '../../demo/shared/tokens.css';
 import '../../demo/atrium/Atrium.css';
@@ -299,7 +300,13 @@ export default function GestureExperiment() {
       if (res.status === 429) { stopPolling(); return; }
       if (!res.ok) return;
 
-      const { gesture } = await res.json() as { gesture: string };
+      const { gesture, raw } = await res.json() as { gesture: string; raw?: string };
+
+      // Log unmapped gestures — Gemini detected something outside our vocabulary
+      if (raw && raw !== 'none' && gesture === 'none') {
+        console.info(`[gesture] unmapped detection: "${raw}"`);
+        trackEvent('gesture_unmapped', { raw });
+      }
 
       // ── Game: track new discoveries ────────────────────────────────────
       if (gesture && gesture !== 'none' && gameState === 'playing') {

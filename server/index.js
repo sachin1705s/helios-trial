@@ -1358,6 +1358,9 @@ app.post('/api/gesture', aiLimiter, async (req, res) => {
     const allowed = ['hello', 'thumbs_up', 'victory', 'namaste', 'pointing', 'thinking', 'shrug', 'crossed_arms', 'facepalm', 'clapping', 'none'];
     const text = response.text?.trim().toLowerCase() || 'none';
     const gesture = allowed.includes(text) ? text : 'none';
+    if (text !== 'none' && gesture === 'none') {
+      console.log(`[gesture] raw="${text}" UNMAPPED`);
+    }
     return res.json({ gesture });
   } catch {
     return res.status(500).json({ error: 'Gesture classification failed.' });
@@ -1383,7 +1386,14 @@ app.post('/api/gesture-vision', aiLimiter, async (req, res) => {
     const allowed = ['hello', 'thumbs_up', 'victory', 'namaste', 'pointing', 'thinking', 'shrug', 'crossed_arms', 'facepalm', 'clapping', 'none'];
     const text = response.text?.trim().toLowerCase() || 'none';
     const gesture = allowed.includes(text) ? text : 'none';
-    return res.json({ gesture });
+
+    // Log raw Gemini response — captures out-of-vocabulary detections for vocabulary expansion
+    if (text !== 'none') {
+      const mapped = gesture === 'none' ? 'UNMAPPED' : 'ok';
+      console.log(`[gesture-vision] raw="${text}" mapped="${gesture}" (${mapped})`);
+    }
+
+    return res.json({ gesture, raw: text });
   } catch (error) {
     if (error?.status === 429) {
       return res.status(429).json({ error: 'Rate limited', retryAfterMs: 10000 });
