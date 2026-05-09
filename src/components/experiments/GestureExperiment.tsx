@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { usePostHog } from 'posthog-js/react';
 import { useOdysseyStream } from '../../hooks/useOdysseyStream';
 import { loadImageFile } from '../../lib/odyssey';
 import { applySeo, SEO_PAGES } from '../../lib/seo';
@@ -142,6 +143,7 @@ type GameState = 'idle' | 'playing' | 'finished';
 
 export default function GestureExperiment() {
   const navigate   = useNavigate();
+  const posthog    = usePostHog();
   const { status, error, videoRef: odysseyVideoRef, startStream, interact, disconnect } = useOdysseyStream();
 
   const webcamVideoRef    = useRef<HTMLVideoElement | null>(null);
@@ -373,6 +375,7 @@ export default function GestureExperiment() {
     if (navigator.share && navigator.canShare?.(shareData)) {
       try {
         await navigator.share(shareData);
+        posthog?.capture('gesture_share', { score, method: 'web_share' });
         return; // OS sheet provides its own feedback
       } catch (err) {
         if ((err as DOMException).name === 'AbortError') return; // user cancelled
@@ -383,10 +386,11 @@ export default function GestureExperiment() {
     // Clipboard fallback (desktop Firefox, unsupported browsers)
     try {
       await navigator.clipboard.writeText(text);
+      posthog?.capture('gesture_share', { score, method: 'clipboard' });
       setShareCopied(true);
       setTimeout(() => setShareCopied(false), 2000);
     } catch { /* silent — clipboard unavailable */ }
-  }, []);
+  }, [posthog]);
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const timerDisplay = `${Math.floor(timeLeft / 60)}:${String(timeLeft % 60).padStart(2, '0')}`;
@@ -445,6 +449,7 @@ export default function GestureExperiment() {
                   link.download = 'einstein-score.png';
                   link.href = canvas.toDataURL('image/png');
                   link.click();
+                  posthog?.capture('gesture_share', { score: discovered.size, method: 'download' });
                 }}
               >
                 Download Card
