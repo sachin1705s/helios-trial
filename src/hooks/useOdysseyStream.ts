@@ -98,7 +98,25 @@ export function useOdysseyStream(options: UseOdysseyStreamOptions = {}) {
   }) => {
     if (!serviceRef.current) return;
     streamActiveRef.current = true;
-    await serviceRef.current.startStream(opts);
+    // The SDK's onConnected fires before its internal state fully settles to
+    // "connected". Retry up to 5 times with 200ms backoff so callers don't
+    // have to handle this timing edge case themselves.
+    const MAX_RETRIES = 5;
+    const RETRY_DELAY_MS = 200;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        await serviceRef.current.startStream(opts);
+        return;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const isConnecting = msg.includes('connecting') || msg.includes('expected connected');
+        if (isConnecting && attempt < MAX_RETRIES) {
+          await new Promise(r => setTimeout(r, RETRY_DELAY_MS * attempt));
+        } else {
+          throw err;
+        }
+      }
+    }
   }, []);
 
   const interact = useCallback(async (prompt: string) => {
