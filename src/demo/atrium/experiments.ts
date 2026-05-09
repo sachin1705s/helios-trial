@@ -61,11 +61,30 @@ export function endOfDay(dateStr: string): Date {
   return d;
 }
 
-export function getStatus(start: string, end: string, allDone: boolean): Status {
+/** 5 PM on the given date — when an experiment goes live */
+export function liveAt(dateStr: string): Date {
+  const d = parseLocal(dateStr);
+  d.setHours(17, 0, 0, 0);
+  return d;
+}
+
+/** Minutes until 5 PM on the given date (0 if already past) */
+export function minutesUntilLive(dateStr: string): number {
+  return Math.max(0, Math.round((liveAt(dateStr).getTime() - Date.now()) / 60000));
+}
+
+/**
+ * Get the status of an experiment.
+ * - Goes live at 5 PM on start date.
+ * - Stays live until 5 PM on nextStart (so no gap between experiments).
+ * - For the last experiment, ends at end-of-day on its end date.
+ */
+export function getStatus(start: string, end: string, allDone: boolean, nextStart?: string): Status {
   if (allDone) return 'archive';
   const now = new Date();
-  if (now < parseLocal(start)) return 'upcoming';
-  if (now > endOfDay(end)) return 'ended';
+  if (now < liveAt(start)) return 'upcoming';
+  const effectiveEnd = nextStart ? liveAt(nextStart) : endOfDay(end);
+  if (now >= effectiveEnd) return 'ended';
   return 'live';
 }
 

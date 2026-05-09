@@ -1,6 +1,7 @@
-import { StrictMode, useEffect } from 'react';
+import { StrictMode, useEffect, ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route, useParams, useLocation, Navigate } from 'react-router-dom';
+import { EXPERIMENTS, endOfDay, getStatus } from './demo/atrium/experiments';
 import posthog from 'posthog-js';
 import { PostHogProvider, usePostHog } from 'posthog-js/react';
 
@@ -45,6 +46,17 @@ function CharacterRoute() {
   return <App initialCharacterId={id} />;
 }
 
+function ExperimentGuard({ expId, children }: { expId: string; children: ReactNode }) {
+  const now = new Date();
+  const allDone = EXPERIMENTS.every((e) => now > endOfDay(e.end));
+  const idx = EXPERIMENTS.findIndex((e) => e.id === expId);
+  const exp = EXPERIMENTS[idx];
+  const nextStart = EXPERIMENTS[idx + 1]?.start;
+  const status = exp ? getStatus(exp.start, exp.end, allDone, nextStart) : 'ended';
+  if (status === 'upcoming' || status === 'ended') return <Navigate to="/labs" replace />;
+  return <>{children}</>;
+}
+
 if (import.meta.env.VITE_POSTHOG_KEY) {
   posthog.init(import.meta.env.VITE_POSTHOG_KEY, {
     api_host: import.meta.env.VITE_POSTHOG_HOST || 'https://us.i.posthog.com',
@@ -68,11 +80,11 @@ createRoot(document.getElementById('root')!).render(
           <Route path="/about-us" element={<AtriumAbout />} />
           <Route path="/labs" element={<AtriumLabs />} />
           <Route path="/character/:id" element={<CharacterRoute />} />
-          <Route path="/lab/drawing"   element={<DrawingExperiment />} />
-          <Route path="/lab/gesture"   element={<GestureExperiment />} />
-          <Route path="/lab/objects"   element={<ObjectDetectionExperiment />} />
-          <Route path="/lab/custom"    element={<CustomCharacterExperiment />} />
-          <Route path="/lab/broadcast" element={<BroadcastExperiment />} />
+          <Route path="/lab/drawing"   element={<ExperimentGuard expId="drawing"><DrawingExperiment /></ExperimentGuard>} />
+          <Route path="/lab/gesture"   element={<ExperimentGuard expId="gesture"><GestureExperiment /></ExperimentGuard>} />
+          <Route path="/lab/objects"   element={<ExperimentGuard expId="objects"><ObjectDetectionExperiment /></ExperimentGuard>} />
+          <Route path="/lab/custom"    element={<ExperimentGuard expId="custom"><CustomCharacterExperiment /></ExperimentGuard>} />
+          <Route path="/lab/broadcast" element={<ExperimentGuard expId="broadcast"><BroadcastExperiment /></ExperimentGuard>} />
           <Route path="*" element={<App />} />
         </Routes>
       </BrowserRouter>

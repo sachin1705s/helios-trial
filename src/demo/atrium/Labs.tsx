@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { AtriumNav, AtriumFooter } from './Layout';
 import MusicToggle from './MusicToggle';
-import { EXPERIMENTS, endOfDay, getStatus, formatOpenDate, formatDateRange } from './experiments';
+import { EXPERIMENTS, endOfDay, getStatus, formatOpenDate, formatDateRange, minutesUntilLive } from './experiments';
 import '../shared/tokens.css';
 import './Atrium.css';
 import './Labs.css';
@@ -28,9 +28,16 @@ export default function AtriumLabs() {
       </section>
 
       <section className="labs-experiments" aria-label="Experiments">
-        {EXPERIMENTS.map((exp) => {
-          const status = getStatus(exp.start, exp.end, allDone);
-          const isClickable = status === 'live' || status === 'ended' || status === 'archive';
+        {EXPERIMENTS.map((exp, i) => {
+          const nextStart = EXPERIMENTS[i + 1]?.start;
+          const status = getStatus(exp.start, exp.end, allDone, nextStart);
+          const isClickable = status === 'live' || status === 'archive';
+
+          // Countdown for upcoming experiments
+          const mins = status === 'upcoming' ? minutesUntilLive(exp.start) : 0;
+          const upcomingLabel = mins < 24 * 60 && mins > 0
+            ? `Opens in ${Math.floor(mins / 60)}h ${mins % 60}m`
+            : `Opens ${formatOpenDate(exp.start)}`;
 
           const card = (
             <article
@@ -44,8 +51,8 @@ export default function AtriumLabs() {
                     {status === 'live' && (
                       <><span className="lab-badge__dot" />Live now</>
                     )}
-                    {status === 'ended' && 'Ended'}
-                    {status === 'upcoming' && `Opens ${formatOpenDate(exp.start)}`}
+                    {status === 'ended' && '🔒 Locked'}
+                    {status === 'upcoming' && upcomingLabel}
                     {status === 'archive' && 'Available'}
                   </span>
                 </div>
