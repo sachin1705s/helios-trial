@@ -154,7 +154,7 @@ export default function GestureExperiment() {
   const [webcamActive, setWebcamActive] = useState(false);
   const [lastGesture, setLastGesture]   = useState<string | null>(null);
   const [isPolling, setIsPolling]       = useState(false);
-  const [detecting, setDetecting]       = useState(false);
+  const detectingRef                    = useRef(false);
 
   // ── Game state ──────────────────────────────────────────────────────────────
   const [gameState, setGameState]         = useState<GameState>('idle');
@@ -223,13 +223,23 @@ export default function GestureExperiment() {
     setIsPolling(false);
   }, []);
 
+  // ── Game: finish (declared before stopWebcam so it can be referenced) ─────
+  const finishGame = useCallback(() => {
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    stopPolling();
+    const result = { score: discoveredRef.current.size, finishedAt: new Date().toISOString() };
+    localStorage.setItem(getTodayKey(), JSON.stringify(result));
+    setGameState('finished');
+  }, [stopPolling]);
+
   const stopWebcam = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     if (webcamVideoRef.current) webcamVideoRef.current.srcObject = null;
     setWebcamActive(false);
     stopPolling();
-  }, [stopPolling]);
+    if (gameState === 'playing') finishGame();
+  }, [stopPolling, gameState, finishGame]);
 
   const captureFrame = useCallback((): string | null => {
     const video  = webcamVideoRef.current;
@@ -242,15 +252,6 @@ export default function GestureExperiment() {
     ctx.drawImage(video, 0, 0);
     return canvas.toDataURL('image/jpeg', 0.7);
   }, []);
-
-  // ── Game: finish ──────────────────────────────────────────────────────────
-  const finishGame = useCallback(() => {
-    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-    stopPolling();
-    const result = { score: discoveredRef.current.size, finishedAt: new Date().toISOString() };
-    localStorage.setItem(getTodayKey(), JSON.stringify(result));
-    setGameState('finished');
-  }, [stopPolling]);
 
   // ── Game: timer expiry watcher ────────────────────────────────────────────
   useEffect(() => {
@@ -278,14 +279,14 @@ export default function GestureExperiment() {
 
   // ── Gesture polling ───────────────────────────────────────────────────────
   const pollGesture = useCallback(async () => {
-    if (detecting) return;
+    if (detectingRef.current) return;
     const dataUrl = captureFrame();
     if (!dataUrl) return;
 
     const [header, base64] = dataUrl.split(',');
     const mimeType = header.match(/:(.*?);/)?.[1] ?? 'image/jpeg';
 
-    setDetecting(true);
+    detectingRef.current = true;
     try {
       const res = await fetch('/api/gesture-vision', {
         method: 'POST',
@@ -316,9 +317,9 @@ export default function GestureExperiment() {
         await interact(`The user just did ${label}. React!`);
       }
     } catch { /* network error — skip this cycle */ } finally {
-      setDetecting(false);
+      detectingRef.current = false;
     }
-  }, [detecting, captureFrame, lastGesture, interact, stopPolling, gameState, finishGame]);
+  }, [captureFrame, lastGesture, interact, stopPolling, gameState, finishGame]);
 
   // Keep a ref so startGame can reference pollGesture without a circular dep
   const pollGestureRef = useRef(pollGesture);
