@@ -436,6 +436,19 @@ export default function GestureExperiment() {
               >
                 {shareCopied ? 'Copied to clipboard!' : 'Share Result'}
               </button>
+              <button
+                className="bl-btn bl-btn--ghost"
+                onClick={() => {
+                  const canvas = scorecardCanvasRef.current;
+                  if (!canvas) return;
+                  const link = document.createElement('a');
+                  link.download = 'einstein-score.png';
+                  link.href = canvas.toDataURL('image/png');
+                  link.click();
+                }}
+              >
+                Download Card
+              </button>
               <p className="bl-results__return">Come back tomorrow for another attempt.</p>
             </div>
 
