@@ -478,7 +478,15 @@ app.get('/api/odyssey/status', async (_req, res) => {
   return res.json(capacity);
 });
 
-app.get('/api/odyssey/token', async (_req, res) => {
+const odysseyTokenLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many token requests, please try again later.' },
+});
+
+app.get('/api/odyssey/token', odysseyTokenLimiter, async (_req, res) => {
   if (!runtimeConfig.odysseyApiKeys.length) {
     return res.status(503).json({ error: 'Odyssey not configured.' });
   }
@@ -1350,6 +1358,12 @@ app.post('/api/einstein/tts', async (req, res) => {
   }
 });
 
+// ── Gesture vocabulary ────────────────────────────────────────────────────────
+// Single source of truth for server-side gesture labels.
+// Frontend mirror: GESTURE_EMOJI in src/components/experiments/GestureExperiment.tsx
+const CORE_GESTURES  = ['hello', 'thumbs_up', 'victory', 'namaste', 'pointing', 'thinking', 'shrug', 'crossed_arms', 'facepalm', 'clapping'];
+const BONUS_GESTURES = []; // e.g. ['waving', 'dab', 'peace_sign'] — add tomorrow
+
 app.post('/api/gesture', aiLimiter, async (req, res) => {
   try {
     const ai = getAiClient();
@@ -1357,15 +1371,16 @@ app.post('/api/gesture', aiLimiter, async (req, res) => {
     const features = String(req.body?.features ?? '').trim();
     if (!features) return res.status(400).json({ error: 'Missing features.' });
 
+    const allLabels = [...CORE_GESTURES, ...BONUS_GESTURES];
     const response = await ai.models.generateContent({
       model,
       contents: [{ role: 'user', parts: [
-        { text: 'Classify the body language or gesture from the feature summary. Only return one of: hello, thumbs_up, victory, namaste, pointing, thinking, shrug, crossed_arms, facepalm, clapping, none. No extra words.' },
+        { text: `Classify the body language or gesture from the feature summary. Only return one of: ${allLabels.join(', ')}, none. No extra words.` },
         { text: features },
       ]}],
     });
 
-    const allowed = ['hello', 'thumbs_up', 'victory', 'namaste', 'pointing', 'thinking', 'shrug', 'crossed_arms', 'facepalm', 'clapping', 'none'];
+    const allowed = [...allLabels, 'none'];
     const text = response.text?.trim().toLowerCase() || 'none';
     const gesture = allowed.includes(text) ? text : 'none';
     if (text !== 'none' && gesture === 'none') {
@@ -1377,39 +1392,49 @@ app.post('/api/gesture', aiLimiter, async (req, res) => {
   }
 });
 
-// ── Gesture vocabulary ────────────────────────────────────────────────────────
-// CORE: the 10 reactions the game counts toward the win condition.
-// BONUS: extras added after reviewing log data — empty on launch day.
-//        To expand: add labels here that Gemini already returns (check
-//        /api/logs?event=gesture_unmapped) and update GESTURE_EMOJI in the frontend.
-const CORE_GESTURES  = ['hello', 'thumbs_up', 'victory', 'namaste', 'pointing', 'thinking', 'shrug', 'crossed_arms', 'facepalm', 'clapping'];
-const BONUS_GESTURES = []; // e.g. ['waving', 'dab', 'peace_sign'] — add tomorrow
+const visionLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: isProduction ? 60 : 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many vision requests, please try again later.' },
+});
 
-app.post('/api/gesture-vision', aiLimiter, async (req, res) => {
+app.post('/api/gesture-vision', visionLimiter, async (req, res) => {
   try {
     const ai = getAiClient();
     if (!ai) return res.status(503).json({ error: 'AI service not configured.' });
     const image = String(req.body?.image ?? '').trim();
     const mimeType = String(req.body?.mimeType ?? 'image/jpeg').trim();
     if (!image) return res.status(400).json({ error: 'Missing image.' });
+    if (image.length > 500_000) return res.status(413).json({ error: 'Image too large.' });
+    const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!ALLOWED_MIME.includes(mimeType)) return res.status(400).json({ error: 'Unsupported image type.' });
 
     const allLabels = [...CORE_GESTURES, ...BONUS_GESTURES];
     const prompt = `Classify the body language or gesture in this image. Only return one of: ${allLabels.join(', ')}, none. No extra words.`;
 
-    const response = await ai.models.generateContent({
-      model,
-      contents: [{ role: 'user', parts: [
-        { text: prompt },
-        { inlineData: { mimeType, data: image } },
-      ]}],
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    let response;
+    try {
+      response = await ai.models.generateContent({
+        model,
+        contents: [{ role: 'user', parts: [
+          { text: prompt },
+          { inlineData: { mimeType, data: image } },
+        ]}],
+        httpOptions: { signal: controller.signal },
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
 
     const text = response.text?.trim().toLowerCase() || 'none';
     const isCore  = CORE_GESTURES.includes(text);
     const isBonus = BONUS_GESTURES.includes(text);
     const gesture = (isCore || isBonus) ? text : 'none';
 
-    // Log raw Gemini response — captures out-of-vocabulary detections for vocabulary expansion
     if (text !== 'none') {
       const tier = isBonus ? 'bonus' : isCore ? 'core' : 'UNMAPPED';
       console.log(`[gesture-vision] raw="${text}" tier="${tier}"`);
@@ -1417,6 +1442,9 @@ app.post('/api/gesture-vision', aiLimiter, async (req, res) => {
 
     return res.json({ gesture, isBonus, raw: text });
   } catch (error) {
+    if (error?.name === 'AbortError') {
+      return res.status(504).json({ error: 'Gesture classification timed out.' });
+    }
     if (error?.status === 429) {
       return res.status(429).json({ error: 'Rate limited', retryAfterMs: 10000 });
     }
