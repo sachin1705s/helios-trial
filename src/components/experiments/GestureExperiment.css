@@ -347,6 +347,26 @@
   margin: 0;
 }
 
+/* ── Landing screen — pre-camera ────────────────────────────────────────── */
+
+.body-language .bl-landing__title {
+  font-family: var(--display, Fraunces, Georgia, serif);
+  font-size: 2rem;
+  font-weight: 500;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: #F5F1E8;
+}
+
+.body-language .bl-landing__desc {
+  font-family: var(--body, Inter, system-ui, sans-serif);
+  font-size: 0.9rem;
+  color: rgba(245, 241, 232, 0.6);
+  line-height: 1.5;
+  max-width: 260px;
+  margin: 0;
+}
+
 /* ── Responsive ──────────────────────────────────────────────────────────── */
 
 @media (max-width: 768px) {

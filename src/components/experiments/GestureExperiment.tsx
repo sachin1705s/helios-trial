@@ -182,15 +182,18 @@ export default function GestureExperiment() {
     applySeo(SEO_PAGES.gesture);
   }, []);
 
-  // ── Odyssey: start stream when ready ─────────────────────────────────────
+  // ── Odyssey: start stream only after camera is granted ───────────────────
+  // Deferring startStream until webcamActive saves the 5-minute Odyssey
+  // stream limit — no time is burned while the user decides to turn on their camera.
   useEffect(() => {
-    if (status !== 'ready') return;
+    if (status !== 'ready' || !webcamActive) return;
+    console.log('[gesture] Odyssey ready + webcam active → starting stream');
     const run = async () => {
       const image = await loadImageFile(CHARACTER_IMAGE, 'einstein.png');
       await startStream({ image, prompt: CHARACTER_PROMPT, portrait: false });
     };
     void run();
-  }, [status, startStream]);
+  }, [status, startStream, webcamActive]);
 
   // ── Game: check if already played today ──────────────────────────────────
   useEffect(() => {
@@ -466,7 +469,7 @@ export default function GestureExperiment() {
         <video ref={webcamVideoRef} autoPlay playsInline muted style={{ display: 'none' }} />
         <canvas ref={webcamCanvasRef} style={{ display: 'none' }} />
 
-        {/* Center area — results / already-played overlays */}
+        {/* Center area — landing / results / already-played overlays */}
         <div className="bl-center">
           {alreadyPlayed && gameState === 'idle' ? (
             <div className="bl-overlay">
@@ -508,6 +511,22 @@ export default function GestureExperiment() {
               </button>
               <p className="bl-results__return">Come back tomorrow for another attempt.</p>
             </div>
+
+          ) : !webcamActive && gameState === 'idle' ? (
+            /* Landing — no stream yet, prompt user to turn on camera */
+            <div className="bl-overlay">
+              <div className="bl-landing__title">Body Language</div>
+              <p className="bl-landing__desc">
+                Find Einstein&apos;s {TOTAL_GESTURES} secret reactions using your webcam.
+                You have 3 minutes. One attempt per day.
+              </p>
+              <button
+                className="bl-btn bl-btn--primary"
+                onClick={startWebcam}
+              >
+                Turn on Camera to Start
+              </button>
+            </div>
           ) : null}
         </div>
 
@@ -520,41 +539,29 @@ export default function GestureExperiment() {
             </div>
           )}
 
-          {/* Before webcam is active: show turn-on button or waking status */}
-          {!webcamActive && gameState === 'idle' && !alreadyPlayed ? (
-            <div className="bl-bar-pill bl-bar-pill--waking">
-              {status === 'connecting' || status === 'idle' ? (
-                <span className="bl-bar-status">
-                  {status === 'connecting' ? 'Waking up Einstein…' : 'Connecting…'}
-                </span>
-              ) : (
-                <button
-                  className="bl-btn bl-btn--primary"
-                  onClick={startWebcam}
-                  style={{ padding: '8px 20px', fontSize: '0.82rem' }}
+          <div className="bl-bar-pill">
+            {webcamActive && status !== 'streaming' ? (
+              /* Camera on, waiting for Odyssey to connect + stream */
+              <span className="bl-bar-status">Waking up Einstein…</span>
+            ) : (
+              /* Timer + counter — visible in all other states */
+              <>
+                <div className={`bl-timer${timerUrgent ? ' bl-timer--urgent' : ''}`}>
+                  {timerDisplay}
+                </div>
+                <span className="bl-bar-dot" />
+                <div
+                  key={discovered.size + discoveredBonus.size}
+                  className={`bl-counter${lastFlash ? ' bl-counter-bump' : ''}`}
                 >
-                  Turn on Webcam
-                </button>
-              )}
-            </div>
-          ) : (
-            /* Timer pill — always shows timer + counter once webcam is on */
-            <div className="bl-bar-pill">
-              <div className={`bl-timer${timerUrgent ? ' bl-timer--urgent' : ''}`}>
-                {timerDisplay}
-              </div>
-              <span className="bl-bar-dot" />
-              <div
-                key={discovered.size + discoveredBonus.size}
-                className={`bl-counter${lastFlash ? ' bl-counter-bump' : ''}`}
-              >
-                {discovered.size} / {TOTAL_GESTURES}
-                {discoveredBonus.size > 0 && (
-                  <span className="bl-counter__bonus"> +{discoveredBonus.size}</span>
-                )}
-              </div>
-            </div>
-          )}
+                  {discovered.size} / {TOTAL_GESTURES}
+                  {discoveredBonus.size > 0 && (
+                    <span className="bl-counter__bonus"> +{discoveredBonus.size}</span>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
