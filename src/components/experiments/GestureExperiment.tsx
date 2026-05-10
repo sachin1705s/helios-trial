@@ -5,9 +5,7 @@ import { useOdysseyStream } from '../../hooks/useOdysseyStream';
 import { loadImageFile } from '../../lib/odyssey';
 import { applySeo, SEO_PAGES } from '../../lib/seo';
 import { trackEvent } from '../../lib/analytics';
-import { AtriumNav } from '../../demo/atrium/Layout';
 import '../../demo/shared/tokens.css';
-import '../../demo/atrium/Atrium.css';
 import './GestureExperiment.css';
 
 const POLL_INTERVAL_MS = 1500;
@@ -190,7 +188,7 @@ export default function GestureExperiment() {
     if (status !== 'ready') return;
     const run = async () => {
       const image = await loadImageFile(CHARACTER_IMAGE, 'einstein.png');
-      await startStream({ image, prompt: CHARACTER_PROMPT, portrait: true });
+      await startStream({ image, prompt: CHARACTER_PROMPT, portrait: false });
     };
     void run();
   }, [status, startStream]);
@@ -436,33 +434,41 @@ export default function GestureExperiment() {
   const timerDisplay = `${Math.floor(timeLeft / 60)}:${String(timeLeft % 60).padStart(2, '0')}`;
   const timerUrgent  = timeLeft <= 30 && gameState === 'playing';
 
-  // Suppress unused-variable warning for handleBack — keep for future nav needs
-  void handleBack; void startPolling; void isPolling;
+  // Suppress unused-variable warnings — keep for programmatic use
+  void startPolling; void isPolling;
 
   return (
-    <div className="atrium body-language">
-      <AtriumNav />
+    <div className="body-language">
+      {/* ── Video layer — fills viewport ───────────────────────────────── */}
+      <div className="bl-video-layer">
+        <video ref={odysseyVideoRef} autoPlay playsInline muted />
+        <div className="bl-video-overlay" />
+      </div>
 
-      <main className="bl-main">
-        <div className="bl-intro">
-          <span className="eyebrow">
-            <span className="eyebrow__dot" /> The Lab
-          </span>
-          <h1 className="bl-heading">Body Language</h1>
-          <p className="lede">Einstein has baked-in reactions to 10 gestures. You have 3 minutes to find them all.</p>
+      {/* ── UI layer — overlays on video ───────────────────────────────── */}
+      <div className="bl-ui">
+
+        {/* Top bar */}
+        <header className="bl-top-bar">
+          <button className="bl-back-btn" onClick={handleBack}>Back</button>
+        </header>
+
+        {/* Webcam PIP */}
+        <div className="bl-webcam-pip">
+          {webcamActive ? (
+            <video ref={webcamVideoRef} autoPlay playsInline muted />
+          ) : (
+            <span className="bl-webcam-placeholder">Camera off</span>
+          )}
         </div>
-      </main>
+        {/* Hidden webcam ref when not active */}
+        {!webcamActive && <video ref={webcamVideoRef} style={{ display: 'none' }} />}
+        <canvas ref={webcamCanvasRef} style={{ display: 'none' }} />
 
-      <div className="bl-body">
-        <div className="bl-video-panel">
-          <video ref={odysseyVideoRef} autoPlay playsInline muted />
-        </div>
-
-        <aside className="bl-side-panel">
-
-          {/* ── Already played today ──────────────────────────────────── */}
+        {/* Center area — results / already-played overlays */}
+        <div className="bl-center">
           {alreadyPlayed && gameState === 'idle' ? (
-            <div className="bl-already-played">
+            <div className="bl-overlay">
               <p className="bl-already-played__score">
                 You found <strong>{alreadyPlayed.score} / {TOTAL_GESTURES}</strong> today.
                 {(alreadyPlayed.bonus ?? 0) > 0 && (
@@ -473,8 +479,7 @@ export default function GestureExperiment() {
             </div>
 
           ) : gameState === 'finished' ? (
-            /* ── Results screen ─────────────────────────────────────── */
-            <div className="bl-results">
+            <div className="bl-overlay">
               <div className="bl-results__score">{discovered.size} / {TOTAL_GESTURES}</div>
               {discoveredBonus.size > 0 && (
                 <div className="bl-results__bonus">+{discoveredBonus.size} bonus</div>
@@ -502,28 +507,43 @@ export default function GestureExperiment() {
               </button>
               <p className="bl-results__return">Come back tomorrow for another attempt.</p>
             </div>
+          ) : null}
+        </div>
 
-          ) : (
-            /* ── Active game UI ─────────────────────────────────────── */
-            <>
-              <div className="bl-status">
-                {status === 'connecting' ? 'Waking up Einstein…' :
-                 status === 'ready' || status === 'streaming' ? 'Turn on your webcam to start.' :
-                 status === 'error' ? `Error: ${error}` : status}
+        {/* Bottom bar — timer pill (covers Odyssey watermark) */}
+        <div className="bl-bottom-bar">
+          {/* Flash notification above the pill */}
+          {lastFlash && (
+            <div className={`bl-flash${lastFlashIsBonus ? ' bl-flash--bonus' : ''}`}>
+              {lastFlashIsBonus ? 'Bonus reaction!' : 'New reaction found!'}
+            </div>
+          )}
+
+          {gameState === 'playing' ? (
+            /* Playing — timer + counter + stop */
+            <div className="bl-bar-pill">
+              <div className={`bl-timer${timerUrgent ? ' bl-timer--urgent' : ''}`}>
+                {timerDisplay}
               </div>
-
-              <div className="bl-webcam-box">
-                {webcamActive ? (
-                  <video ref={webcamVideoRef} autoPlay playsInline muted />
-                ) : (
-                  <span className="bl-webcam-placeholder">Camera off</span>
+              <span className="bl-bar-dot" />
+              <div
+                key={discovered.size + discoveredBonus.size}
+                className={`bl-counter${lastFlash ? ' bl-counter-bump' : ''}`}
+              >
+                {discovered.size} / {TOTAL_GESTURES}
+                {discoveredBonus.size > 0 && (
+                  <span className="bl-counter__bonus"> +{discoveredBonus.size}</span>
                 )}
               </div>
+              <span className="bl-bar-dot" />
+              <button className="bl-btn bl-btn--danger" onClick={stopGame} style={{ padding: '6px 14px', fontSize: '0.78rem' }}>
+                Stop
+              </button>
+            </div>
 
-              {/* Hidden ref for webcam — needed when not yet active */}
-              {!webcamActive && <video ref={webcamVideoRef} style={{ display: 'none' }} />}
-              <canvas ref={webcamCanvasRef} style={{ display: 'none' }} />
-
+          ) : gameState === 'idle' && !alreadyPlayed ? (
+            /* Idle — webcam + start buttons */
+            <>
               {!webcamActive ? (
                 <button
                   className="bl-btn bl-btn--primary"
@@ -533,54 +553,35 @@ export default function GestureExperiment() {
                   Turn on Webcam
                 </button>
               ) : (
-                <>
-                  {gameState === 'idle' ? (
-                    <button className="bl-btn bl-btn--primary" onClick={startGame}>
-                      Start Detecting
-                    </button>
-                  ) : (
-                    <button className="bl-btn bl-btn--danger" onClick={stopGame}>
-                      Stop
-                    </button>
-                  )}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="bl-btn bl-btn--primary" onClick={startGame}>
+                    Start Detecting
+                  </button>
                   <button className="bl-btn bl-btn--ghost" onClick={stopWebcam}>
                     Turn off Webcam
                   </button>
-                </>
-              )}
-
-              {/* Timer + counter row — only visible while playing */}
-              {gameState === 'playing' && (
-                <div className="bl-game-row">
-                  <div className={`bl-timer${timerUrgent ? ' bl-timer--urgent' : ''}`}>
-                    {timerDisplay}
-                  </div>
-                  {/* key forces remount so animation replays on each find */}
-                  <div
-                    key={discovered.size + discoveredBonus.size}
-                    className={`bl-counter${lastFlash ? ' bl-counter-bump' : ''}`}
-                  >
-                    {discovered.size} / {TOTAL_GESTURES}
-                    {discoveredBonus.size > 0 && (
-                      <span className="bl-counter__bonus"> +{discoveredBonus.size}</span>
-                    )}
-                  </div>
                 </div>
               )}
-
-              {/* Brief flash on new find */}
-              {lastFlash && (
-                <div className={`bl-flash${lastFlashIsBonus ? ' bl-flash--bonus' : ''}`}>
-                  {lastFlashIsBonus ? 'Bonus reaction!' : 'New reaction found!'}
+              {/* Waking status pill */}
+              {(status === 'connecting' || status === 'idle') && (
+                <div className="bl-bar-pill bl-bar-pill--waking">
+                  <span className="bl-bar-status">
+                    {status === 'connecting' ? 'Waking up Einstein…' : 'Connecting…'}
+                  </span>
                 </div>
               )}
             </>
-          )}
 
-        </aside>
+          ) : (
+            /* Finished or already-played — just the watermark-covering pill */
+            <div className="bl-bar-pill bl-bar-pill--waking">
+              <span className="bl-bar-status">interactstudio.space/lab/gesture</span>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Hidden score card canvas — drawn when game finishes, used for sharing */}
+      {/* Hidden score card canvas */}
       <canvas ref={scorecardCanvasRef} width={1080} height={1080} style={{ display: 'none' }} />
     </div>
   );
