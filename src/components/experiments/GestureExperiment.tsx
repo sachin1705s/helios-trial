@@ -221,21 +221,16 @@ export default function GestureExperiment() {
     try {
       const ms = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
       streamRef.current = ms;
-      // Set webcamActive first — the PIP video element renders on next frame,
-      // then the useEffect below attaches srcObject to it.
+      // Video element is always in the DOM (hidden), so attach directly
+      if (webcamVideoRef.current) {
+        webcamVideoRef.current.srcObject = ms;
+        webcamVideoRef.current.play().catch(() => undefined);
+      }
       setWebcamActive(true);
     } catch {
       alert('Webcam access denied.');
     }
   }, []);
-
-  // Attach the webcam stream to the PIP video element once it's rendered
-  useEffect(() => {
-    if (webcamActive && streamRef.current && webcamVideoRef.current) {
-      webcamVideoRef.current.srcObject = streamRef.current;
-      webcamVideoRef.current.play().catch(() => undefined);
-    }
-  }, [webcamActive]);
 
   const stopPolling = useCallback(() => {
     if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
@@ -447,16 +442,8 @@ export default function GestureExperiment() {
           <button className="bl-back-btn" onClick={handleBack}>Back</button>
         </header>
 
-        {/* Webcam PIP */}
-        <div className="bl-webcam-pip">
-          {webcamActive ? (
-            <video ref={webcamVideoRef} autoPlay playsInline muted />
-          ) : (
-            <span className="bl-webcam-placeholder">Camera off</span>
-          )}
-        </div>
-        {/* Hidden webcam ref when not active */}
-        {!webcamActive && <video ref={webcamVideoRef} style={{ display: 'none' }} />}
+        {/* Hidden webcam elements — video feeds captureFrame(), no PIP needed */}
+        <video ref={webcamVideoRef} autoPlay playsInline muted style={{ display: 'none' }} />
         <canvas ref={webcamCanvasRef} style={{ display: 'none' }} />
 
         {/* Center area — results / already-played overlays */}
