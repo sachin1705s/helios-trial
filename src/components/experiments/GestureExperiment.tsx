@@ -161,7 +161,6 @@ export default function GestureExperiment() {
   // Existing detection state
   const [webcamActive, setWebcamActive] = useState(false);
   const [lastGesture, setLastGesture]   = useState<string | null>(null);
-  const [isPolling, setIsPolling]       = useState(false);
   const detectingRef                    = useRef(false);
 
   // ── Game state ──────────────────────────────────────────────────────────────
@@ -222,19 +221,24 @@ export default function GestureExperiment() {
     try {
       const ms = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
       streamRef.current = ms;
-      if (webcamVideoRef.current) {
-        webcamVideoRef.current.srcObject = ms;
-        await webcamVideoRef.current.play();
-      }
+      // Set webcamActive first — the PIP video element renders on next frame,
+      // then the useEffect below attaches srcObject to it.
       setWebcamActive(true);
     } catch {
       alert('Webcam access denied.');
     }
   }, []);
 
+  // Attach the webcam stream to the PIP video element once it's rendered
+  useEffect(() => {
+    if (webcamActive && streamRef.current && webcamVideoRef.current) {
+      webcamVideoRef.current.srcObject = streamRef.current;
+      webcamVideoRef.current.play().catch(() => undefined);
+    }
+  }, [webcamActive]);
+
   const stopPolling = useCallback(() => {
     if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
-    setIsPolling(false);
   }, []);
 
   // ── Game: finish (declared before stopWebcam so it can be referenced) ─────
@@ -276,9 +280,9 @@ export default function GestureExperiment() {
     if (timeLeft === 0 && gameState === 'playing') finishGame();
   }, [timeLeft, gameState, finishGame]);
 
-  // ── Game: start ───────────────────────────────────────────────────────────
-  const startGame = useCallback(() => {
-    if (gameState !== 'idle') return;
+  // ── Game: auto-start when webcam turns on ──────────────────────────────────
+  useEffect(() => {
+    if (!webcamActive || gameState !== 'idle' || alreadyPlayed) return;
     // Record attempt immediately — prevents refresh exploit
     localStorage.setItem(getTodayKey(), JSON.stringify({ score: 0, bonus: 0, finishedAt: new Date().toISOString() }));
     discoveredRef.current = new Set();
@@ -290,12 +294,9 @@ export default function GestureExperiment() {
     timerRef.current = setInterval(() => {
       setTimeLeft(prev => Math.max(0, prev - 1));
     }, 1000);
-    // startPolling is defined below — we call it indirectly via ref to avoid circular dep
     pollingRef.current = setInterval(() => void pollGestureRef.current?.(), POLL_INTERVAL_MS);
-    setIsPolling(true);
-  }, [gameState]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [webcamActive]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const stopGame = useCallback(() => { finishGame(); }, [finishGame]);
 
   // ── Gesture polling ───────────────────────────────────────────────────────
   const pollGesture = useCallback(async () => {
@@ -364,11 +365,6 @@ export default function GestureExperiment() {
   const pollGestureRef = useRef(pollGesture);
   pollGestureRef.current = pollGesture;
 
-  const startPolling = useCallback(() => {
-    if (pollingRef.current) return;
-    pollingRef.current = setInterval(() => void pollGesture(), POLL_INTERVAL_MS);
-    setIsPolling(true);
-  }, [pollGesture]);
 
   // ── Cleanup on unmount ────────────────────────────────────────────────────
   useEffect(() => {
@@ -434,8 +430,6 @@ export default function GestureExperiment() {
   const timerDisplay = `${Math.floor(timeLeft / 60)}:${String(timeLeft % 60).padStart(2, '0')}`;
   const timerUrgent  = timeLeft <= 30 && gameState === 'playing';
 
-  // Suppress unused-variable warnings — keep for programmatic use
-  void startPolling; void isPolling;
 
   return (
     <div className="body-language">
@@ -510,7 +504,7 @@ export default function GestureExperiment() {
           ) : null}
         </div>
 
-        {/* Bottom bar — timer pill (covers Odyssey watermark) */}
+        {/* Bottom bar — timer pill (always visible, covers Odyssey watermark) */}
         <div className="bl-bottom-bar">
           {/* Flash notification above the pill */}
           {lastFlash && (
@@ -519,8 +513,25 @@ export default function GestureExperiment() {
             </div>
           )}
 
-          {gameState === 'playing' ? (
-            /* Playing — timer + counter + stop */
+          {/* Before webcam is active: show turn-on button or waking status */}
+          {!webcamActive && gameState === 'idle' && !alreadyPlayed ? (
+            <div className="bl-bar-pill bl-bar-pill--waking">
+              {status === 'connecting' || status === 'idle' ? (
+                <span className="bl-bar-status">
+                  {status === 'connecting' ? 'Waking up Einstein…' : 'Connecting…'}
+                </span>
+              ) : (
+                <button
+                  className="bl-btn bl-btn--primary"
+                  onClick={startWebcam}
+                  style={{ padding: '8px 20px', fontSize: '0.82rem' }}
+                >
+                  Turn on Webcam
+                </button>
+              )}
+            </div>
+          ) : (
+            /* Timer pill — always shows timer + counter once webcam is on */
             <div className="bl-bar-pill">
               <div className={`bl-timer${timerUrgent ? ' bl-timer--urgent' : ''}`}>
                 {timerDisplay}
@@ -535,47 +546,6 @@ export default function GestureExperiment() {
                   <span className="bl-counter__bonus"> +{discoveredBonus.size}</span>
                 )}
               </div>
-              <span className="bl-bar-dot" />
-              <button className="bl-btn bl-btn--danger" onClick={stopGame} style={{ padding: '6px 14px', fontSize: '0.78rem' }}>
-                Stop
-              </button>
-            </div>
-
-          ) : gameState === 'idle' && !alreadyPlayed ? (
-            /* Idle — webcam + start buttons */
-            <>
-              {!webcamActive ? (
-                <button
-                  className="bl-btn bl-btn--primary"
-                  onClick={startWebcam}
-                  disabled={status !== 'streaming' && status !== 'ready'}
-                >
-                  Turn on Webcam
-                </button>
-              ) : (
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button className="bl-btn bl-btn--primary" onClick={startGame}>
-                    Start Detecting
-                  </button>
-                  <button className="bl-btn bl-btn--ghost" onClick={stopWebcam}>
-                    Turn off Webcam
-                  </button>
-                </div>
-              )}
-              {/* Waking status pill */}
-              {(status === 'connecting' || status === 'idle') && (
-                <div className="bl-bar-pill bl-bar-pill--waking">
-                  <span className="bl-bar-status">
-                    {status === 'connecting' ? 'Waking up Einstein…' : 'Connecting…'}
-                  </span>
-                </div>
-              )}
-            </>
-
-          ) : (
-            /* Finished or already-played — just the watermark-covering pill */
-            <div className="bl-bar-pill bl-bar-pill--waking">
-              <span className="bl-bar-status">interactstudio.space/lab/gesture</span>
             </div>
           )}
         </div>
