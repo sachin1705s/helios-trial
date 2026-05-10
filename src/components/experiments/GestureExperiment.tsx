@@ -348,7 +348,7 @@ export default function GestureExperiment() {
         if ((isNewCore || isNewBonus || gestureChanged) && gameState === 'playing') {
           const label = gesture.replace(/_/g, ' ');
           try {
-            await interact(`The user just did ${label}. React!`);
+            await interact(`React to seeing someone do: ${label}!`);
             setLastGesture(gesture); // only advance after success
 
             if (isNewCore) {
