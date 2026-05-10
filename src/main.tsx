@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, ReactNode } from 'react';
+import { StrictMode, useEffect, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route, useParams, useLocation, Navigate } from 'react-router-dom';
 import { EXPERIMENTS, endOfDay, getStatus } from './demo/atrium/experiments';
