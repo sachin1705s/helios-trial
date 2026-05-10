@@ -28,7 +28,8 @@ const GESTURE_EMOJI: Record<string, string> = {
 // BONUS: extras unlocked after reviewing log data — empty on launch day.
 //        To expand tomorrow: add the label here + an emoji entry in GESTURE_EMOJI.
 const CORE_GESTURE_KEYS  = Object.keys(GESTURE_EMOJI);
-const BONUS_GESTURE_KEYS: string[] = []; // e.g. ['waving', 'dab'] — add after log review
+// To add bonus gestures tomorrow: declare BONUS_GESTURE_KEYS = ['waving', 'dab', ...]
+// paired with BONUS_GESTURES in server/index.js, then add entries to GESTURE_EMOJI above.
 
 const TOTAL_GESTURES  = CORE_GESTURE_KEYS.length; // 10 — win condition never changes
 const GAME_DURATION_S = 180; // 3 minutes
@@ -198,7 +199,10 @@ export default function GestureExperiment() {
   useEffect(() => {
     const stored = localStorage.getItem(getTodayKey());
     if (stored) {
-      try { setAlreadyPlayed(JSON.parse(stored) as { score: number; finishedAt: string }); }
+      try {
+        const parsed = JSON.parse(stored) as { score: number; bonus?: number; finishedAt: string };
+        setAlreadyPlayed({ score: parsed.score, bonus: parsed.bonus ?? 0, finishedAt: parsed.finishedAt });
+      }
       catch { /* malformed — ignore */ }
     }
   }, []);
