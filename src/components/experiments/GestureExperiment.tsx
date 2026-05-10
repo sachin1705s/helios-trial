@@ -150,7 +150,7 @@ type GameState = 'idle' | 'playing' | 'finished';
 export default function GestureExperiment() {
   const navigate   = useNavigate();
   const posthog    = usePostHog();
-  const { status, error, videoRef: odysseyVideoRef, startStream, interact, disconnect } = useOdysseyStream();
+  const { status, videoRef: odysseyVideoRef, startStream, interact, disconnect } = useOdysseyStream();
 
   const webcamVideoRef    = useRef<HTMLVideoElement | null>(null);
   const webcamCanvasRef   = useRef<HTMLCanvasElement | null>(null);
