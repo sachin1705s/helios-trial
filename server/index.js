@@ -1360,18 +1360,30 @@ app.post('/api/gesture', aiLimiter, async (req, res) => {
     const response = await ai.models.generateContent({
       model,
       contents: [{ role: 'user', parts: [
-        { text: 'Classify the gesture from the feature summary. Only return one of: hello, thumbs_up, victory, namaste, none. No extra words.' },
+        { text: 'Classify the body language or gesture from the feature summary. Only return one of: hello, thumbs_up, victory, namaste, pointing, thinking, shrug, crossed_arms, facepalm, clapping, none. No extra words.' },
         { text: features },
       ]}],
     });
 
+    const allowed = ['hello', 'thumbs_up', 'victory', 'namaste', 'pointing', 'thinking', 'shrug', 'crossed_arms', 'facepalm', 'clapping', 'none'];
     const text = response.text?.trim().toLowerCase() || 'none';
-    const label = ['hello', 'thumbs_up', 'victory', 'namaste', 'none'].includes(text) ? text : 'none';
-    return res.json({ label });
+    const gesture = allowed.includes(text) ? text : 'none';
+    if (text !== 'none' && gesture === 'none') {
+      console.log(`[gesture] raw="${text}" UNMAPPED`);
+    }
+    return res.json({ gesture });
   } catch {
     return res.status(500).json({ error: 'Gesture classification failed.' });
   }
 });
+
+// ── Gesture vocabulary ────────────────────────────────────────────────────────
+// CORE: the 10 reactions the game counts toward the win condition.
+// BONUS: extras added after reviewing log data — empty on launch day.
+//        To expand: add labels here that Gemini already returns (check
+//        /api/logs?event=gesture_unmapped) and update GESTURE_EMOJI in the frontend.
+const CORE_GESTURES  = ['hello', 'thumbs_up', 'victory', 'namaste', 'pointing', 'thinking', 'shrug', 'crossed_arms', 'facepalm', 'clapping'];
+const BONUS_GESTURES = []; // e.g. ['waving', 'dab', 'peace_sign'] — add tomorrow
 
 app.post('/api/gesture-vision', aiLimiter, async (req, res) => {
   try {
@@ -1381,17 +1393,29 @@ app.post('/api/gesture-vision', aiLimiter, async (req, res) => {
     const mimeType = String(req.body?.mimeType ?? 'image/jpeg').trim();
     if (!image) return res.status(400).json({ error: 'Missing image.' });
 
+    const allLabels = [...CORE_GESTURES, ...BONUS_GESTURES];
+    const prompt = `Classify the body language or gesture in this image. Only return one of: ${allLabels.join(', ')}, none. No extra words.`;
+
     const response = await ai.models.generateContent({
       model,
       contents: [{ role: 'user', parts: [
-        { text: 'Classify the hand gesture in this image. Only return one of: hello, thumbs_up, victory, namaste, none. No extra words.' },
+        { text: prompt },
         { inlineData: { mimeType, data: image } },
       ]}],
     });
 
     const text = response.text?.trim().toLowerCase() || 'none';
-    const label = ['hello', 'thumbs_up', 'victory', 'namaste', 'none'].includes(text) ? text : 'none';
-    return res.json({ label });
+    const isCore  = CORE_GESTURES.includes(text);
+    const isBonus = BONUS_GESTURES.includes(text);
+    const gesture = (isCore || isBonus) ? text : 'none';
+
+    // Log raw Gemini response — captures out-of-vocabulary detections for vocabulary expansion
+    if (text !== 'none') {
+      const tier = isBonus ? 'bonus' : isCore ? 'core' : 'UNMAPPED';
+      console.log(`[gesture-vision] raw="${text}" tier="${tier}"`);
+    }
+
+    return res.json({ gesture, isBonus, raw: text });
   } catch (error) {
     if (error?.status === 429) {
       return res.status(429).json({ error: 'Rate limited', retryAfterMs: 10000 });
