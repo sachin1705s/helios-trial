@@ -218,6 +218,7 @@ export default function GestureExperiment() {
 
   // ── Webcam helpers ────────────────────────────────────────────────────────
   const startWebcam = useCallback(async () => {
+    console.log('[gesture] startWebcam called');
     try {
       const ms = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
       streamRef.current = ms;
@@ -226,18 +227,25 @@ export default function GestureExperiment() {
         webcamVideoRef.current.srcObject = ms;
         webcamVideoRef.current.play().catch(() => undefined);
       }
+      console.log('[gesture] webcam stream acquired, setting active');
       setWebcamActive(true);
-    } catch {
+    } catch (err) {
+      console.error('[gesture] webcam denied:', err);
       alert('Webcam access denied.');
     }
   }, []);
 
   const stopPolling = useCallback(() => {
-    if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
+    if (pollingRef.current) {
+      console.log('[gesture] stopPolling — clearing interval', new Error().stack?.split('\n').slice(1, 4).join(' ← '));
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
   }, []);
 
   // ── Game: finish (declared before stopWebcam so it can be referenced) ─────
   const finishGame = useCallback(() => {
+    console.log('[gesture] finishGame called', new Error().stack?.split('\n').slice(1, 3).join(' ← '));
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
     stopPolling();
     const result = {
@@ -250,6 +258,7 @@ export default function GestureExperiment() {
   }, [stopPolling]);
 
   const stopWebcam = useCallback(() => {
+    console.log('[gesture] stopWebcam called, gameState=', gameState, new Error().stack?.split('\n').slice(1, 3).join(' ← '));
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     if (webcamVideoRef.current) webcamVideoRef.current.srcObject = null;
@@ -277,7 +286,9 @@ export default function GestureExperiment() {
 
   // ── Game: auto-start when webcam turns on ──────────────────────────────────
   useEffect(() => {
+    console.log('[gesture] auto-start effect: webcamActive=', webcamActive, 'gameState=', gameState, 'alreadyPlayed=', !!alreadyPlayed);
     if (!webcamActive || gameState !== 'idle' || alreadyPlayed) return;
+    console.log('[gesture] ▶ AUTO-STARTING game — setting up timer + polling');
     // Record attempt immediately — prevents refresh exploit
     localStorage.setItem(getTodayKey(), JSON.stringify({ score: 0, bonus: 0, finishedAt: new Date().toISOString() }));
     discoveredRef.current = new Set();
@@ -297,7 +308,7 @@ export default function GestureExperiment() {
   const pollGesture = useCallback(async () => {
     if (detectingRef.current) return;
     const dataUrl = captureFrame();
-    if (!dataUrl) return;
+    if (!dataUrl) { console.log('[gesture] pollGesture: captureFrame returned null'); return; }
 
     const [header, base64] = dataUrl.split(',');
     const mimeType = header.match(/:(.*?);/)?.[1] ?? 'image/jpeg';
@@ -310,10 +321,11 @@ export default function GestureExperiment() {
         body: JSON.stringify({ image: base64, mimeType }),
       });
 
-      if (res.status === 429) { stopPolling(); return; }
-      if (!res.ok) return;
+      if (res.status === 429) { console.warn('[gesture] 429 rate-limited — stopping polling'); stopPolling(); return; }
+      if (!res.ok) { console.warn('[gesture] API error:', res.status); return; }
 
       const { gesture, isBonus, raw } = await res.json() as { gesture: string; isBonus?: boolean; raw?: string };
+      console.log('[gesture] API response:', { gesture, isBonus, raw });
 
       // Log unmapped gestures — Gemini detected something outside our vocabulary
       if (raw && raw !== 'none' && gesture === 'none') {
@@ -351,7 +363,7 @@ export default function GestureExperiment() {
         const label = gesture.replace(/_/g, ' ');
         await interact(`The user just did ${label}. React!`);
       }
-    } catch { /* network error — skip this cycle */ } finally {
+    } catch (err) { console.error('[gesture] pollGesture error:', err); } finally {
       detectingRef.current = false;
     }
   }, [captureFrame, lastGesture, interact, stopPolling, gameState, finishGame]);
@@ -362,13 +374,21 @@ export default function GestureExperiment() {
 
 
   // ── Cleanup on unmount ────────────────────────────────────────────────────
+  // Use refs so the cleanup only runs on actual unmount, not on every
+  // stopPolling/stopWebcam identity change (which caused the game to stop
+  // immediately when gameState changed from idle → playing).
+  const stopPollingRef = useRef(stopPolling);
+  stopPollingRef.current = stopPolling;
+  const stopWebcamRef = useRef(stopWebcam);
+  stopWebcamRef.current = stopWebcam;
   useEffect(() => {
     return () => {
+      console.log('[gesture] UNMOUNT cleanup running');
       if (timerRef.current) clearInterval(timerRef.current);
-      stopPolling();
-      stopWebcam();
+      stopPollingRef.current();
+      stopWebcamRef.current();
     };
-  }, [stopPolling, stopWebcam]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Navigation ────────────────────────────────────────────────────────────
   const handleBack = useCallback(async () => {
