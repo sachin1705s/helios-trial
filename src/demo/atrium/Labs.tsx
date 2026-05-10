@@ -33,7 +33,6 @@ export default function AtriumLabs() {
           const status = getStatus(exp.start, exp.end, allDone, nextStart);
           const isClickable = status === 'live' || status === 'archive';
 
-          // Countdown for upcoming experiments
           const mins = status === 'upcoming' ? minutesUntilLive(exp.start) : 0;
           const upcomingLabel = mins < 24 * 60 && mins > 0
             ? `Opens in ${Math.floor(mins / 60)}h ${mins % 60}m`
