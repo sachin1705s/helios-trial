@@ -1,3 +1,6 @@
+// Must be first import — patches RTCPeerConnection before any SDK loads
+import './lib/webrtc-diagnostics-init';
+
 import { StrictMode, useEffect, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route, useParams, useLocation, Navigate } from 'react-router-dom';
@@ -5,10 +8,9 @@ import { EXPERIMENTS, endOfDay, getStatus } from './demo/atrium/experiments';
 import posthog from 'posthog-js';
 import { PostHogProvider, usePostHog } from 'posthog-js/react';
 
-
-
 import './index.css';
 import App from './App.tsx';
+import WebRTCDebugOverlay from './components/WebRTCDebugOverlay';
 import AtriumLanding from './demo/atrium/Landing';
 import AtriumHome from './demo/atrium/Home';
 import AtriumAbout from './demo/atrium/About';
@@ -94,6 +96,7 @@ createRoot(document.getElementById('root')!).render(
           <Route path="/lab/action-test"  element={<ActionStreamHarness />} />
           <Route path="*" element={<App />} />
         </Routes>
+        <WebRTCDebugOverlay />
       </BrowserRouter>
     </PostHogProvider>
   </StrictMode>,
