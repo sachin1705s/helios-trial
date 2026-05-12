@@ -336,40 +336,33 @@ export default function GestureExperiment() {
         trackEvent('gesture_unmapped', { raw });
       }
 
-      // ── React + score: interact() first, count only on success ───────────
-      // A gesture is only "discovered" when Einstein actually reacts to it.
-      // If interact() throws (stream not ready, Odyssey rejected), discoveredRef
-      // is not updated — the next poll will retry automatically.
-      if (gesture && gesture !== 'none') {
-        const isNewCore    = !isBonus && !discoveredRef.current.has(gesture);
-        const isNewBonus   = !!isBonus && !discoveredBonusRef.current.has(gesture);
-        const gestureChanged = gesture !== lastGesture;
-
-        if ((isNewCore || isNewBonus || gestureChanged) && gameState === 'playing') {
-          const label = gesture.replace(/_/g, ' ');
-          try {
-            await interact(`React to seeing someone do: ${label}!`);
-            setLastGesture(gesture); // only advance after success
-
-            if (isNewCore) {
-              discoveredRef.current.add(gesture);
-              setDiscovered(new Set(discoveredRef.current));
-              setLastFlashIsBonus(false);
-              setLastFlash(gesture);
-              setTimeout(() => setLastFlash(null), 1200);
-              if (discoveredRef.current.size >= TOTAL_GESTURES) finishGame();
-            } else if (isNewBonus) {
-              discoveredBonusRef.current.add(gesture);
-              setDiscoveredBonus(new Set(discoveredBonusRef.current));
-              setLastFlashIsBonus(true);
-              setLastFlash(gesture);
-              setTimeout(() => { setLastFlash(null); setLastFlashIsBonus(false); }, 1200);
-            }
-          } catch (err) {
-            // Einstein didn't react — gesture not counted, will retry next poll
-            console.warn('[gesture] interact failed, gesture not counted:', gesture, err);
+      // ── Score on detection ───────────────────────────────────────────────
+      if (gesture && gesture !== 'none' && gameState === 'playing') {
+        if (isBonus) {
+          if (!discoveredBonusRef.current.has(gesture)) {
+            discoveredBonusRef.current.add(gesture);
+            setDiscoveredBonus(new Set(discoveredBonusRef.current));
+            setLastFlashIsBonus(true);
+            setLastFlash(gesture);
+            setTimeout(() => { setLastFlash(null); setLastFlashIsBonus(false); }, 1200);
+          }
+        } else {
+          if (!discoveredRef.current.has(gesture)) {
+            discoveredRef.current.add(gesture);
+            setDiscovered(new Set(discoveredRef.current));
+            setLastFlashIsBonus(false);
+            setLastFlash(gesture);
+            setTimeout(() => setLastFlash(null), 1200);
+            if (discoveredRef.current.size >= TOTAL_GESTURES) finishGame();
           }
         }
+      }
+
+      // ── Einstein reacts when gesture changes (fire and forget) ──────────
+      if (gesture && gesture !== 'none' && gesture !== lastGesture) {
+        setLastGesture(gesture);
+        const label = gesture.replace(/_/g, ' ');
+        interact(`React to seeing someone do: ${label}!`).catch(() => undefined);
       }
     } catch (err) { console.error('[gesture] pollGesture network/parse error:', err); } finally {
       detectingRef.current = false;
