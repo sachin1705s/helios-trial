@@ -6,6 +6,7 @@ type SeoPage = {
   description: string;
   path: string;
   type?: 'website' | 'article';
+  image?: string;
 };
 
 export const SEO_PAGES = {
@@ -29,6 +30,14 @@ export const SEO_PAGES = {
       'Contact Interact Studio for partnerships, questions, demos, and creative collaboration around interactive AI characters.',
     path: '/contact',
     type: 'article',
+  },
+  gesture: {
+    title: "Find Einstein's 10 Secret Reactions | Interact Studio",
+    description:
+      "You have 3 minutes to trigger all 10 of Einstein's hidden gesture reactions via your webcam. One attempt per day.",
+    path: '/lab/gesture',
+    type: 'website',
+    image: `${SITE_URL}/images/og-gesture.png`,
   },
 } satisfies Record<string, SeoPage>;
 
@@ -111,10 +120,11 @@ export function applySeo(page: SeoPage) {
   upsertMeta('meta[property="og:description"]', { property: 'og:description', content: page.description });
   upsertMeta('meta[property="og:type"]', { property: 'og:type', content: page.type ?? 'website' });
   upsertMeta('meta[property="og:url"]', { property: 'og:url', content: canonicalUrl });
-  upsertMeta('meta[property="og:image"]', { property: 'og:image', content: DEFAULT_IMAGE });
+  const ogImage = page.image ?? DEFAULT_IMAGE;
+  upsertMeta('meta[property="og:image"]', { property: 'og:image', content: ogImage });
   upsertMeta('meta[name="twitter:title"]', { name: 'twitter:title', content: page.title });
   upsertMeta('meta[name="twitter:description"]', { name: 'twitter:description', content: page.description });
-  upsertMeta('meta[name="twitter:image"]', { name: 'twitter:image', content: DEFAULT_IMAGE });
+  upsertMeta('meta[name="twitter:image"]', { name: 'twitter:image', content: ogImage });
   upsertLink('link[rel="canonical"]', { rel: 'canonical', href: canonicalUrl });
 
   upsertJsonLd('seo-organization', ORGANIZATION_SCHEMA);

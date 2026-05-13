@@ -1,0 +1,376 @@
+/* ── Body Language experiment — full-viewport layout ──────────────────────── */
+/* Matches the main character view (App.tsx): video fills the screen,
+   UI elements overlay on top, bottom bar covers the Odyssey watermark. */
+
+.body-language {
+  position: relative;
+  height: 100vh;
+  overflow: hidden;
+  background: #0E1614;
+}
+
+/* ── Video layer — fills entire viewport ─────────────────────────────────── */
+
+.body-language .bl-video-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.body-language .bl-video-layer video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center top;
+}
+
+/* Subtle vignette overlay (matches main site) */
+.body-language .bl-video-overlay {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.08), transparent 55%),
+    linear-gradient(180deg, rgba(14, 22, 20, 0.3) 0%, transparent 20%, transparent 70%, rgba(14, 22, 20, 0.6) 100%);
+  pointer-events: none;
+}
+
+/* ── UI layer — overlays on video ────────────────────────────────────────── */
+
+.body-language .bl-ui {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  pointer-events: none;
+}
+
+.body-language .bl-ui > * {
+  pointer-events: auto;
+}
+
+/* Top bar — Back button */
+.body-language .bl-top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+}
+
+.body-language .bl-back-btn {
+  padding: 8px 14px;
+  font-family: var(--body, Inter, system-ui, sans-serif);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: rgba(245, 241, 232, 0.85);
+  background: rgba(12, 16, 24, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-pill, 999px);
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.body-language .bl-back-btn:hover {
+  background: rgba(12, 16, 24, 0.55);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* ── Center area — pushes bottom bar down ────────────────────────────────── */
+
+.body-language .bl-center {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.body-language .bl-center > * {
+  pointer-events: auto;
+}
+
+/* ── Bottom bar — timer pill (covers watermark) ──────────────────────────── */
+
+.body-language .bl-bottom-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 0 20px 12px;
+}
+
+.body-language .bl-bar-pill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 480px;
+  height: 48px;
+  padding: 4px 18px;
+  border-radius: 999px;
+  background: rgba(12, 16, 24, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 8px 24px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+}
+
+.body-language .bl-bar-pill--waking {
+  justify-content: center;
+}
+
+/* ── Buttons — glass style matching dark overlay ─────────────────────────── */
+
+.body-language .bl-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 24px;
+  border-radius: var(--radius-pill, 999px);
+  font-family: var(--body, Inter, system-ui, sans-serif);
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.25s ease, transform 0.2s ease,
+              box-shadow 0.25s ease, border-color 0.25s ease;
+}
+
+.body-language .bl-btn:active { transform: scale(0.97); }
+.body-language .bl-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+.body-language .bl-btn--primary {
+  background: rgba(245, 241, 232, 0.92);
+  color: #0E1614;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.body-language .bl-btn--primary:hover:not(:disabled) {
+  background: rgba(245, 241, 232, 1);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.body-language .bl-btn--danger {
+  background: rgba(217, 73, 43, 0.2);
+  color: #E8644A;
+  border-color: rgba(217, 73, 43, 0.35);
+}
+
+.body-language .bl-btn--danger:hover:not(:disabled) {
+  background: rgba(217, 73, 43, 0.3);
+}
+
+.body-language .bl-btn--ghost {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(245, 241, 232, 0.85);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.body-language .bl-btn--ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+/* ── Timer & Counter (inside bottom pill) ────────────────────────────────── */
+
+.body-language .bl-timer {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: rgba(245, 241, 232, 0.9);
+  letter-spacing: -0.02em;
+  line-height: 1;
+  transition: color 0.3s ease;
+}
+
+.body-language .bl-timer--urgent {
+  color: #E8644A;
+  animation: bl-timer-pulse 1s ease-in-out infinite;
+}
+
+@keyframes bl-timer-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.6; }
+}
+
+.body-language .bl-counter {
+  font-family: var(--body, Inter, system-ui, sans-serif);
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: rgba(245, 241, 232, 0.7);
+  line-height: 1;
+}
+
+.body-language .bl-counter-bump {
+  animation: bl-counter-bump 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@keyframes bl-counter-bump {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.25); }
+  100% { transform: scale(1); }
+}
+
+.body-language .bl-counter__bonus {
+  font-size: 0.85rem;
+  font-weight: 400;
+  color: #E8644A;
+  margin-left: 4px;
+}
+
+/* Pill separator dot */
+.body-language .bl-bar-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: rgba(245, 241, 232, 0.3);
+  flex-shrink: 0;
+}
+
+/* Status text inside pill */
+.body-language .bl-bar-status {
+  font-family: var(--body, Inter, system-ui, sans-serif);
+  font-size: 0.85rem;
+  color: rgba(245, 241, 232, 0.55);
+}
+
+/* ── Flash notification — centered above bottom bar ──────────────────────── */
+
+.body-language .bl-flash {
+  font-family: var(--body, Inter, system-ui, sans-serif);
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #A8D5BA;
+  text-align: center;
+  background: rgba(47, 94, 72, 0.25);
+  border: 1px solid rgba(47, 94, 72, 0.3);
+  border-radius: 999px;
+  padding: 8px 20px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: bl-flash-in 0.25s ease both;
+}
+
+.body-language .bl-flash--bonus {
+  color: #E8644A;
+  background: rgba(217, 73, 43, 0.2);
+  border-color: rgba(217, 73, 43, 0.3);
+}
+
+@keyframes bl-flash-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Overlay screens — results, already-played (centered on video) ───────── */
+
+.body-language .bl-overlay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  text-align: center;
+  padding: 32px;
+  max-width: 360px;
+  background: rgba(12, 16, 24, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 24px;
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+}
+
+.body-language .bl-results__score {
+  font-family: var(--display, Fraunces, Georgia, serif);
+  font-size: 3.5rem;
+  font-weight: 500;
+  line-height: 0.96;
+  letter-spacing: -0.03em;
+  color: #F5F1E8;
+}
+
+.body-language .bl-results__bonus {
+  font-family: var(--body, Inter, system-ui, sans-serif);
+  font-size: 1rem;
+  font-weight: 600;
+  color: #E8644A;
+  margin: -8px 0 0;
+}
+
+.body-language .bl-results__encouragement {
+  font-family: var(--body, Inter, system-ui, sans-serif);
+  font-size: 0.95rem;
+  color: rgba(245, 241, 232, 0.7);
+  max-width: 240px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.body-language .bl-results__return {
+  font-family: var(--body, Inter, system-ui, sans-serif);
+  font-size: 0.78rem;
+  color: rgba(245, 241, 232, 0.4);
+  margin: 0;
+}
+
+/* Already played */
+.body-language .bl-already-played__score {
+  font-family: var(--body, Inter, system-ui, sans-serif);
+  font-size: 1.1rem;
+  color: rgba(245, 241, 232, 0.85);
+  margin: 0;
+}
+
+.body-language .bl-already-played__score strong {
+  font-weight: 700;
+  color: #A8D5BA;
+}
+
+.body-language .bl-already-played__score .bl-bonus {
+  color: #E8644A;
+}
+
+.body-language .bl-already-played__sub {
+  font-family: var(--body, Inter, system-ui, sans-serif);
+  font-size: 0.82rem;
+  color: rgba(245, 241, 232, 0.45);
+  margin: 0;
+}
+
+/* ── Landing screen — pre-camera ────────────────────────────────────────── */
+
+.body-language .bl-landing__title {
+  font-family: var(--display, Fraunces, Georgia, serif);
+  font-size: 2rem;
+  font-weight: 500;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: #F5F1E8;
+}
+
+.body-language .bl-landing__desc {
+  font-family: var(--body, Inter, system-ui, sans-serif);
+  font-size: 0.9rem;
+  color: rgba(245, 241, 232, 0.6);
+  line-height: 1.5;
+  max-width: 260px;
+  margin: 0;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .body-language .bl-bottom-bar {
+    padding: 0 12px 8px;
+  }
+}
