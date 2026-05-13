@@ -43,6 +43,32 @@
   cursor: not-allowed;
 }
 
+/* Cooldown state — distinct from generic disabled so users understand
+   this is a timed wait, not a broken/unavailable button. */
+.drip-btn.is-cooldown {
+  background: rgba(255, 255, 255, 0.55);
+  color: rgba(58, 47, 32, 0.6);
+  cursor: progress;
+  position: relative;
+  overflow: hidden;
+  font-variant-numeric: tabular-nums; /* stop number wobble during countdown */
+}
+
+/* Bottom-edge progress strip that shrinks as the cooldown drains.
+   Width is driven by the --cooldown-progress CSS variable (1.0 → 0.0) set
+   inline by the component each tick. The short transition smooths motion
+   between 250ms ticks so users see continuous drain, not stepped jumps. */
+.drip-btn.is-cooldown::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  width: calc(100% * var(--cooldown-progress, 1));
+  background: rgba(58, 47, 32, 0.35);
+  transition: width 0.25s linear;
+}
+
 .drip-error {
   font-size: 13px;
   color: #ff6b6b;

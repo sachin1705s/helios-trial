@@ -32,23 +32,30 @@ const VISION_CONFIG: Record<VisionMode, {
   },
 };
 
-// Minimum gap between consecutive button clicks. Stops accidental
-// double-clicks from burning two requests. NOT a backoff — the second
-// click is just dropped, no scary error shown.
-const ACTION_COOLDOWN_MS = 2000;
-// Soft cooldown after a 429 from Gemini. Short — the limit window is
-// rolling and another user's request finishing frees a slot.
-const RATE_LIMIT_BACKOFF_MS = 8000;
+// Shared cooldown between drip-check AND item-grab clicks. After any vision
+// action fires, both buttons lock for this duration. This keeps per-user
+// request rate under control of the shared Gemini quota and shows the user
+// a visible countdown so they don't feel the UI is broken.
+const ACTION_COOLDOWN_MS = 10000;
+// Extra backoff added on top of the normal cooldown when Gemini returns 429.
+// On free tier the quota is shared globally, so a slightly longer wait gives
+// the rolling window time to drain.
+const RATE_LIMIT_EXTRA_BACKOFF_MS = 5000;
 
 export default function DripCheckOverlay({ runCharacterInteraction, characterId, characterName, isStreamingReady }: DripCheckOverlayProps) {
   const [webcamActive, setWebcamActive] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // ms epoch when the buttons become clickable again. 0 = ready now.
+  const [cooldownEndsAt, setCooldownEndsAt] = useState<number>(0);
+  // re-render every 250ms while a cooldown is active so the countdown ticks
+  const [tickNow, setTickNow] = useState<number>(Date.now());
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastActionAtRef = useRef<number>(0);
-  const cooldownUntilRef = useRef<number>(0);
+  // Total ms of the currently-active cooldown. Stored so the progress strip
+  // knows what fraction of the wait remains regardless of normal vs 429 wait.
+  const cooldownDurationRef = useRef<number>(0);
 
   const showError = useCallback((msg: string) => {
     setError(msg);
@@ -85,6 +92,26 @@ export default function DripCheckOverlay({ runCharacterInteraction, characterId,
     return () => { if (errorTimerRef.current) clearTimeout(errorTimerRef.current); };
   }, []);
 
+  // Tick while a cooldown is active so the countdown label updates.
+  // Stops itself once the cooldown clears to avoid burning CPU at idle.
+  useEffect(() => {
+    if (cooldownEndsAt <= Date.now()) return;
+    const id = setInterval(() => {
+      const t = Date.now();
+      setTickNow(t);
+      if (t >= cooldownEndsAt) clearInterval(id);
+    }, 250);
+    return () => clearInterval(id);
+  }, [cooldownEndsAt]);
+
+  const cooldownSecondsLeft = Math.max(0, Math.ceil((cooldownEndsAt - tickNow) / 1000));
+  const inCooldown = cooldownSecondsLeft > 0;
+  // Fraction of cooldown remaining (1.0 → 0.0). Drives the progress strip
+  // width via CSS variable. Re-computed each tick so it drains continuously.
+  const cooldownProgress = inCooldown && cooldownDurationRef.current > 0
+    ? Math.max(0, (cooldownEndsAt - tickNow) / cooldownDurationRef.current)
+    : 0;
+
   const captureFrame = useCallback(async (): Promise<Blob | null> => {
     await ensureWebcam().catch(() => undefined);
     const video = videoRef.current;
@@ -101,19 +128,17 @@ export default function DripCheckOverlay({ runCharacterInteraction, characterId,
   }, [ensureWebcam]);
 
   const handleVisionAction = useCallback(async (mode: VisionMode) => {
+    // Defensive guard. The `disabled` attribute on the button is the primary
+    // mechanism that prevents clicks during cooldown / loading, but if some
+    // edge case lets a click through (e.g. keyboard activation) this still
+    // silently drops it.
     if (busy) return;
-    const now = Date.now();
-    // Silent drop on rapid double-click. No error UI — feels like the button
-    // just didn't register, which is better than a scolding message.
-    if (now - lastActionAtRef.current < ACTION_COOLDOWN_MS) return;
-    // Soft backoff after a 429 — but still let the user try; they're not at
-    // fault, the shared API quota is exhausted by other users.
-    if (now < cooldownUntilRef.current) {
-      const wait = Math.ceil((cooldownUntilRef.current - now) / 1000);
-      showError(`The bear is busy — try again in ${wait}s.`);
-      return;
-    }
-    lastActionAtRef.current = now;
+    if (Date.now() < cooldownEndsAt) return;
+    // Start the cooldown as soon as the user commits to the action — clicking
+    // again during the request shouldn't bypass the timer.
+    cooldownDurationRef.current = ACTION_COOLDOWN_MS;
+    setCooldownEndsAt(Date.now() + ACTION_COOLDOWN_MS);
+    setTickNow(Date.now());
     setBusy(true);
     setError(null);
     const config = VISION_CONFIG[mode];
@@ -126,7 +151,10 @@ export default function DripCheckOverlay({ runCharacterInteraction, characterId,
       const res = await fetch(config.endpoint, { method: 'POST', body: fd, signal: AbortSignal.timeout(12000) });
       if (!res.ok) {
         if (res.status === 429) {
-          cooldownUntilRef.current = Date.now() + RATE_LIMIT_BACKOFF_MS;
+          // Extend the cooldown a bit longer to let the Gemini quota window drain.
+          const total = ACTION_COOLDOWN_MS + RATE_LIMIT_EXTRA_BACKOFF_MS;
+          cooldownDurationRef.current = total;
+          setCooldownEndsAt(Date.now() + total);
           throw new Error('RATE_LIMITED');
         }
         throw new Error(`Request failed (${res.status})`);
@@ -150,7 +178,7 @@ export default function DripCheckOverlay({ runCharacterInteraction, characterId,
     } finally {
       setBusy(false);
     }
-  }, [busy, captureFrame, runCharacterInteraction, characterId, characterName, showError]);
+  }, [busy, cooldownEndsAt, captureFrame, runCharacterInteraction, characterId, characterName, showError]);
 
   return (
     <>
@@ -165,19 +193,31 @@ export default function DripCheckOverlay({ runCharacterInteraction, characterId,
       <div className="drip-controls">
         <button
           type="button"
-          className="drip-btn"
+          className={`drip-btn ${inCooldown && !busy ? 'is-cooldown' : ''}`}
+          style={inCooldown && !busy ? { ['--cooldown-progress' as string]: cooldownProgress } : undefined}
           onClick={() => handleVisionAction('drip-check')}
-          disabled={busy || !isStreamingReady}
+          disabled={busy || inCooldown || !isStreamingReady}
+          aria-label={inCooldown && !busy ? `Drip Check — ready in ${cooldownSecondsLeft} seconds` : 'Drip Check'}
         >
-          {busy ? 'Looking…' : '👀 Drip Check'}
+          {busy
+            ? 'Looking…'
+            : inCooldown
+              ? `👀 ${cooldownSecondsLeft}s`
+              : '👀 Drip Check'}
         </button>
         <button
           type="button"
-          className="drip-btn"
+          className={`drip-btn ${inCooldown && !busy ? 'is-cooldown' : ''}`}
+          style={inCooldown && !busy ? { ['--cooldown-progress' as string]: cooldownProgress } : undefined}
           onClick={() => handleVisionAction('item-grab')}
-          disabled={busy || !isStreamingReady}
+          disabled={busy || inCooldown || !isStreamingReady}
+          aria-label={inCooldown && !busy ? `Item Grab — ready in ${cooldownSecondsLeft} seconds` : 'Item Grab'}
         >
-          {busy ? 'Looking…' : '✋ Item Grab'}
+          {busy
+            ? 'Looking…'
+            : inCooldown
+              ? `✋ ${cooldownSecondsLeft}s`
+              : '✋ Item Grab'}
         </button>
         {error && <span className="drip-error">{error}</span>}
       </div>
