@@ -1939,7 +1939,7 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
     }
   };
 
-  const runCharacterInteraction = async (userText: string, slideId: string, characterName: string) => {
+  const runCharacterInteraction = async (userText: string, slideId: string, characterName: string, opts?: { hideFromChat?: boolean }) => {
     const history = (characterHistory[slideId] ?? []).slice(-6);
     const SEARCH_TRIGGERS = [
       'today', 'current', 'latest', 'recent', 'news', 'now',
@@ -1978,14 +1978,16 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
 
     setCharacterReply(trimmedReply);
     setCharacterSources(Array.isArray(chatData.sources) ? chatData.sources : []);
-    setCharacterHistory((prev) => ({
-      ...prev,
-      [slideId]: [
-        ...(prev[slideId] ?? []),
-        { role: 'user', content: userText },
-        { role: 'assistant', content: trimmedReply }
-      ]
-    }));
+    if (!opts?.hideFromChat) {
+      setCharacterHistory((prev) => ({
+        ...prev,
+        [slideId]: [
+          ...(prev[slideId] ?? []),
+          { role: 'user', content: userText },
+          { role: 'assistant', content: trimmedReply }
+        ]
+      }));
+    }
 
     const objectPrompt = objects.length ? ` Include ${objects.join(', ')} in the scene.` : '';
     const streamPrompt = `${action}.${objectPrompt}`.trim();

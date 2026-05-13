@@ -5,7 +5,7 @@ import './DripCheckOverlay.css';
 type VisionMode = 'drip-check' | 'item-grab';
 
 interface DripCheckOverlayProps {
-  runCharacterInteraction: (userText: string, slideId: string, characterName: string) => Promise<void>;
+  runCharacterInteraction: (userText: string, slideId: string, characterName: string, opts?: { hideFromChat?: boolean }) => Promise<void>;
   characterId: string;
   characterName: string;
   isStreamingReady: boolean;
@@ -20,14 +20,14 @@ const VISION_CONFIG: Record<VisionMode, {
   'drip-check': {
     endpoint: '/api/vision-describe',
     noResultField: 'noPerson',
-    fallbackPrompt: '[Drip Check: I stepped in front of your camera but you can\'t see me clearly. React in one short sentence.]',
+    fallbackPrompt: '[Drip Check: I stepped in front of your camera but you can\'t see me clearly. React in one short sentence. Respond in English.]',
     successTemplate: (desc) =>
-      `[Drip Check: take a quick look at me through your camera and comment on my style. Here's what you see: ${desc}. Reply in ONE sentence — under 20 words — playful and in character.]`,
+      `[Drip Check: take a quick look at me through your camera and comment on my style. Here's what you see: ${desc}. Reply in ONE sentence — under 20 words — playful and in character. Respond in English.]`,
   },
   'item-grab': {
     endpoint: '/api/vision-describe',
     noResultField: 'noObject',
-    fallbackPrompt: '[Item Grab: I tried to show you something but you can\'t see it clearly. Ask me to hold it closer in one short sentence.]',
+    fallbackPrompt: '[Item Grab: I tried to show you something but you can\'t see it clearly. Ask me to hold it closer in one short sentence. Respond in English.]',
     successTemplate: (desc) => buildBearPrompt(desc),
   },
 };
@@ -108,10 +108,10 @@ export default function DripCheckOverlay({ runCharacterInteraction, characterId,
       }
       const data = await res.json();
       if (data[config.noResultField] || !data.description) {
-        await runCharacterInteraction(config.fallbackPrompt, characterId, characterName);
+        await runCharacterInteraction(config.fallbackPrompt, characterId, characterName, { hideFromChat: true });
         return;
       }
-      await runCharacterInteraction(config.successTemplate(data.description), characterId, characterName);
+      await runCharacterInteraction(config.successTemplate(data.description), characterId, characterName, { hideFromChat: true });
     } catch (err) {
       console.error(`[${mode}] failed:`, err);
       const msg = err instanceof Error && err.message === 'RATE_LIMITED'
