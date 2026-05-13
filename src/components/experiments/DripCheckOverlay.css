@@ -1,0 +1,51 @@
+.drip-webcam {
+  position: absolute;
+  left: 24px;
+  bottom: 110px;
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  background: #000;
+  z-index: 5;
+  transform: scaleX(-1);
+}
+
+.drip-controls {
+  position: absolute;
+  left: 24px;
+  bottom: 24px;
+  z-index: 6;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.drip-btn {
+  padding: 12px 22px;
+  font-size: 15px;
+  font-weight: 600;
+  font-family: inherit;
+  color: #3a2f20;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(58, 47, 32, 0.25);
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(4px);
+  transition: background 0.15s;
+}
+
+.drip-btn:disabled {
+  background: rgba(255, 255, 255, 0.65);
+  cursor: not-allowed;
+}
+
+.drip-error {
+  font-size: 13px;
+  color: #ff6b6b;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  max-width: 200px;
+}

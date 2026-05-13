@@ -985,75 +985,62 @@ app.post('/api/extract-objects', aiLimiter, async (req, res) => {
   }
 });
 
-// ─── Drip Check (Gemini Vision describes the user) ────────────────────────────
-app.post('/api/drip-check', aiLimiter, imageUpload.single('image'), async (req, res) => {
-  try {
-    const ai = getAiClient();
-    if (!ai) return res.status(503).json({ error: 'AI service not configured.' });
-    if (!req.file) return res.status(400).json({ error: 'Missing image file.' });
-
-    const mimeType = req.file.mimetype || 'image/jpeg';
-    const base64 = req.file.buffer.toString('base64');
-    const prompt = [
+// ─── Vision Describe (Gemini Vision — drip-check or item-grab) ────────────────
+const VISION_MODES = {
+  'drip-check': {
+    prompt: [
       'Look at the person in this image and describe ONLY:',
       '- their hairstyle (color, length, shape)',
       '- their clothing (visible items, color, style)',
       '- any standout style details (accessories, vibe)',
       '',
       'Return 1–2 short factual sentences. No opinions, no greetings, no preamble.',
-      'If no person is visible, return exactly: NO_PERSON',
-    ].join('\n');
+      'If no person is visible, return exactly: NO_RESULT',
+    ].join('\n'),
+    maxTokens: 120,
+    noResultField: 'noPerson',
+  },
+  'item-grab': {
+    prompt: [
+      'Look at this image. The user is showing or holding an object toward the camera.',
+      'Name the most prominent object (or 1–2 objects) using simple, generic terms (e.g. "a phone", "a book", "a cup").',
+      'No brand names, no model numbers, no colors, no descriptions — just what the object is.',
+      'Return a single short sentence. No greetings, no opinions, no preamble.',
+      'If no clear object is being shown, return exactly: NO_RESULT',
+    ].join('\n'),
+    maxTokens: 60,
+    noResultField: 'noObject',
+  },
+};
 
-    const result = await ai.models.generateContent({
-      model: 'gemini-2.0-flash',
-      generationConfig: { maxOutputTokens: 120 },
-      contents: [{ role: 'user', parts: [{ inlineData: { mimeType, data: base64 } }, { text: prompt }] }],
-    });
-
-    let description = '';
-    try { description = (result.text || '').trim(); } catch { /* safety filter */ }
-    if (!description || description === 'NO_PERSON') {
-      return res.json({ description: '', noPerson: true });
-    }
-    return res.json({ description });
-  } catch (err) {
-    console.error('[drip-check] failed:', err?.message || err);
-    return res.status(500).json({ error: 'Drip check failed.' });
-  }
-});
-
-// ─── Item Grab (Gemini Vision identifies what the user is holding) ────────────
-app.post('/api/item-grab', aiLimiter, imageUpload.single('image'), async (req, res) => {
+app.post('/api/vision-describe', aiLimiter, imageUpload.single('image'), async (req, res) => {
   try {
     const ai = getAiClient();
     if (!ai) return res.status(503).json({ error: 'AI service not configured.' });
     if (!req.file) return res.status(400).json({ error: 'Missing image file.' });
 
+    const mode = req.body?.mode;
+    const config = VISION_MODES[mode];
+    if (!config) return res.status(400).json({ error: `Invalid mode: ${mode}` });
+
     const mimeType = req.file.mimetype || 'image/jpeg';
     const base64 = req.file.buffer.toString('base64');
-    const prompt = [
-      'Look at this image. The user is showing or holding an object toward the camera.',
-      'Identify the most prominent object (or 1–2 objects) in 1 short factual sentence.',
-      'Mention color, brand if obvious, and notable details.',
-      'No greetings, no opinions, no preamble.',
-      'If no clear object is being shown, return exactly: NO_OBJECT',
-    ].join('\n');
 
     const result = await ai.models.generateContent({
       model: 'gemini-2.0-flash',
-      generationConfig: { maxOutputTokens: 100 },
-      contents: [{ role: 'user', parts: [{ inlineData: { mimeType, data: base64 } }, { text: prompt }] }],
+      generationConfig: { maxOutputTokens: config.maxTokens },
+      contents: [{ role: 'user', parts: [{ inlineData: { mimeType, data: base64 } }, { text: config.prompt }] }],
     });
 
     let description = '';
     try { description = (result.text || '').trim(); } catch { /* safety filter */ }
-    if (!description || description === 'NO_OBJECT') {
-      return res.json({ description: '', noObject: true });
+    if (!description || description === 'NO_RESULT') {
+      return res.json({ description: '', [config.noResultField]: true });
     }
     return res.json({ description });
   } catch (err) {
-    console.error('[item-grab] failed:', err?.message || err);
-    return res.status(500).json({ error: 'Item grab failed.' });
+    console.error(`[vision-describe:${req.body?.mode}] failed:`, err?.message || err);
+    return res.status(500).json({ error: 'Vision describe failed.' });
   }
 });
 

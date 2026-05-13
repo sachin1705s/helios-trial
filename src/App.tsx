@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Analytics } from '@vercel/analytics/react';
 import { SpeedInsights } from '@vercel/speed-insights/react';
+import DripCheckOverlay from './components/experiments/DripCheckOverlay';
 import type { ConnectionStatus } from '@odysseyml/odyssey';
 import type { User } from '@supabase/supabase-js';
 import charactersData from './data/characters.json';
@@ -101,10 +102,6 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [credentials, setCredentials] = useState<ClientCredentials | undefined>(undefined);
   const [showLanding, setShowLanding] = useState(!initialCharacterId);
-  const [dripWebcamActive, setDripWebcamActive] = useState(false);
-  const [dripBusy, setDripBusy] = useState(false);
-  const dripVideoRef = useRef<HTMLVideoElement | null>(null);
-  const dripStreamRef = useRef<MediaStream | null>(null);
   const [showAbout, setShowAbout] = useState(false);
   const [showContact, setShowContact] = useState(false);
   const [showVideoModal, setShowVideoModal] = useState(false);
@@ -158,7 +155,6 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
   const ttsAbortRef = useRef<AbortController | null>(null);
   const ttsHtmlAudioRef = useRef<HTMLAudioElement | null>(null);
   const handleInteractRef = useRef<(promptOverride?: string) => void>(() => undefined);
-  const runCharacterInteractionRef = useRef<(userText: string, slideId: string, characterName: string) => Promise<void>>(async () => undefined);
   const ttsAudioCtxRef = useRef<AudioContext | null>(null);
   const ttsGenerationRef = useRef(0); // incremented on navigation — cancels any in-flight TTS across all await boundaries
   const characterOpenedAtRef = useRef<number | null>(null);
@@ -1063,107 +1059,6 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
   useEffect(() => {
     handleInteractRef.current = handleInteract;
   }, [handleInteract]);
-
-  const stopDripWebcam = useCallback(() => {
-    dripStreamRef.current?.getTracks().forEach((t) => t.stop());
-    dripStreamRef.current = null;
-    if (dripVideoRef.current) dripVideoRef.current.srcObject = null;
-    setDripWebcamActive(false);
-  }, []);
-
-  const ensureDripWebcam = useCallback(async () => {
-    if (dripStreamRef.current) return dripStreamRef.current;
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
-    dripStreamRef.current = stream;
-    setDripWebcamActive(true);
-    if (dripVideoRef.current) {
-      dripVideoRef.current.srcObject = stream;
-      await dripVideoRef.current.play().catch(() => undefined);
-    }
-    await new Promise((r) => setTimeout(r, 500));
-    return stream;
-  }, []);
-
-  // Auto-start webcam when drip-check mode is on so the circle is visible from the start
-  useEffect(() => {
-    if (!dripCheck) return;
-    void ensureDripWebcam().catch((err) => console.warn('[drip] auto-start failed:', err));
-    return () => { stopDripWebcam(); };
-  }, [dripCheck, ensureDripWebcam, stopDripWebcam]);
-
-  const captureDripFrame = useCallback(async (): Promise<Blob | null> => {
-    await ensureDripWebcam().catch(() => undefined);
-    const video = dripVideoRef.current;
-    if (!video) return null;
-    if (video.readyState < 2) await new Promise((r) => setTimeout(r, 400));
-    const w = video.videoWidth || 640;
-    const h = video.videoHeight || 480;
-    const canvas = document.createElement('canvas');
-    canvas.width = w; canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
-    ctx.drawImage(video, 0, 0, w, h);
-    return await new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.85));
-  }, [ensureDripWebcam]);
-
-  const handleDripCheck = useCallback(async () => {
-    if (dripBusy) return;
-    setDripBusy(true);
-    try {
-      const blob = await captureDripFrame();
-      if (!blob) throw new Error('No frame captured.');
-      const fd = new FormData();
-      fd.append('image', blob, 'drip.jpg');
-      const res = await fetch('/api/drip-check', { method: 'POST', body: fd });
-      if (!res.ok) throw new Error('drip-check request failed: ' + res.status);
-      const data = await res.json();
-      const slideId = selectedCharacterId ?? slide.id;
-      if (data.noPerson || !data.description) {
-        await runCharacterInteractionRef.current(
-          '[Drip Check: I stepped in front of your camera but you can\'t see me clearly. React in one short sentence.]',
-          slideId,
-          activeCharacterName,
-        );
-        return;
-      }
-      const userText = `[Drip Check: take a quick look at me through your camera and comment on my style. Here\'s what you see: ${data.description}. Reply in ONE sentence — under 20 words — playful and in character.]`;
-      await runCharacterInteractionRef.current(userText, slideId, activeCharacterName);
-    } catch (err) {
-      console.error('[drip-check] failed:', err);
-    } finally {
-      setDripBusy(false);
-    }
-  }, [dripBusy, selectedCharacterId, slide, activeCharacterName, captureDripFrame]);
-
-  const handleItemGrab = useCallback(async () => {
-    if (dripBusy) return;
-    setDripBusy(true);
-    try {
-      const blob = await captureDripFrame();
-      if (!blob) throw new Error('No frame captured.');
-      const fd = new FormData();
-      fd.append('image', blob, 'item.jpg');
-      const res = await fetch('/api/item-grab', { method: 'POST', body: fd });
-      if (!res.ok) throw new Error('item-grab request failed: ' + res.status);
-      const data = await res.json();
-      const slideId = selectedCharacterId ?? slide.id;
-      if (data.noObject || !data.description) {
-        await runCharacterInteractionRef.current(
-          '[Item Grab: I tried to show you something but you can\'t see it clearly. Ask me to hold it closer in one short sentence.]',
-          slideId,
-          activeCharacterName,
-        );
-        return;
-      }
-      const userText = `[Item Grab: I\'m holding something up to your camera. Here\'s what you see: ${data.description}. React with curiosity and comment on the object in ONE sentence — under 20 words — in character.]`;
-      await runCharacterInteractionRef.current(userText, slideId, activeCharacterName);
-    } catch (err) {
-      console.error('[item-grab] failed:', err);
-    } finally {
-      setDripBusy(false);
-    }
-  }, [dripBusy, selectedCharacterId, slide, activeCharacterName, captureDripFrame]);
-
 
   const stopVoiceCapture = () => {
     // no-op: using SDK transcripts instead of browser speech
@@ -2098,10 +1993,6 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
     playCharacterTTS(trimmedReply, slideId);
   };
 
-  useEffect(() => {
-    runCharacterInteractionRef.current = runCharacterInteraction;
-  }, [runCharacterInteraction]);
-
   const handleTextPromptSubmit = () => {
     const prompt = textPrompt.trim();
     if (!prompt) {
@@ -2527,80 +2418,12 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
         )}
 
         {dripCheck && (
-          <>
-            <video
-              ref={dripVideoRef}
-              autoPlay
-              playsInline
-              muted
-              style={{
-                position: 'absolute',
-                left: 24,
-                bottom: 110,
-                width: 140,
-                height: 140,
-                borderRadius: '50%',
-                objectFit: 'cover',
-                border: '3px solid rgba(255,255,255,0.85)',
-                boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
-                background: '#000',
-                display: dripWebcamActive ? 'block' : 'none',
-                zIndex: 5,
-                transform: 'scaleX(-1)',
-              }}
-            />
-            <div
-              style={{
-                position: 'absolute',
-                left: 24,
-                bottom: 24,
-                zIndex: 6,
-                display: 'flex',
-                gap: 10,
-              }}
-            >
-              <button
-                type="button"
-                onClick={handleDripCheck}
-                disabled={dripBusy || !isStreamingReady}
-                style={{
-                  padding: '12px 22px',
-                  fontSize: 15,
-                  fontWeight: 600,
-                  fontFamily: 'inherit',
-                  color: '#3a2f20',
-                  background: dripBusy ? 'rgba(255,255,255,0.65)' : 'rgba(255,255,255,0.92)',
-                  border: '1px solid rgba(58, 47, 32, 0.25)',
-                  borderRadius: 999,
-                  cursor: dripBusy || !isStreamingReady ? 'not-allowed' : 'pointer',
-                  boxShadow: '0 6px 18px rgba(0,0,0,0.25)',
-                  backdropFilter: 'blur(4px)',
-                }}
-              >
-                {dripBusy ? 'Looking…' : '👀 Drip Check'}
-              </button>
-              <button
-                type="button"
-                onClick={handleItemGrab}
-                disabled={dripBusy || !isStreamingReady}
-                style={{
-                  padding: '12px 22px',
-                  fontSize: 15,
-                  fontWeight: 600,
-                  fontFamily: 'inherit',
-                  color: '#3a2f20',
-                  background: dripBusy ? 'rgba(255,255,255,0.65)' : 'rgba(255,255,255,0.92)',
-                  border: '1px solid rgba(58, 47, 32, 0.25)',
-                  borderRadius: 999,
-                  cursor: dripBusy || !isStreamingReady ? 'not-allowed' : 'pointer',
-                  boxShadow: '0 6px 18px rgba(0,0,0,0.25)',
-                  backdropFilter: 'blur(4px)',
-                }}
-              >
-                {dripBusy ? 'Looking…' : '✋ Item Grab'}
-              </button>
-            </div>
-          </>
+          <DripCheckOverlay
+            runCharacterInteraction={runCharacterInteraction}
+            characterId={selectedCharacterId ?? slide.id}
+            characterName={activeCharacterName}
+            isStreamingReady={isStreamingReady}
+          />
         )}
       </div>
 
