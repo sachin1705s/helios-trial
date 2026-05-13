@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Analytics } from '@vercel/analytics/react';
 import { SpeedInsights } from '@vercel/speed-insights/react';
+import DripCheckOverlay from './components/experiments/DripCheckOverlay';
 import type { ConnectionStatus } from '@odysseyml/odyssey';
 import type { User } from '@supabase/supabase-js';
 import charactersData from './data/characters.json';
@@ -95,7 +96,7 @@ function pcmToWav(pcm: ArrayBuffer, sampleRate: number, channels: number, bitDep
   return buf;
 }
 
-function App({ initialCharacterId }: { initialCharacterId?: string }) {
+function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: string; dripCheck?: boolean }) {
   const navigate = useNavigate();
   const [user, setUser] = useState<User | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -1058,7 +1059,6 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   useEffect(() => {
     handleInteractRef.current = handleInteract;
   }, [handleInteract]);
-
 
   const stopVoiceCapture = () => {
     // no-op: using SDK transcripts instead of browser speech
@@ -2416,6 +2416,15 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
             </button>
           </div>
         )}
+
+        {dripCheck && (
+          <DripCheckOverlay
+            runCharacterInteraction={runCharacterInteraction}
+            characterId={selectedCharacterId ?? slide.id}
+            characterName={activeCharacterName}
+            isStreamingReady={isStreamingReady}
+          />
+        )}
       </div>
 
       <div className="ui">
@@ -2598,10 +2607,10 @@ function App({ initialCharacterId }: { initialCharacterId?: string }) {
   );
 }
 
-function AppWithAnalytics({ initialCharacterId }: { initialCharacterId?: string } = {}) {
+function AppWithAnalytics({ initialCharacterId, dripCheck }: { initialCharacterId?: string; dripCheck?: boolean } = {}) {
   return (
     <>
-      <App initialCharacterId={initialCharacterId} />
+      <App initialCharacterId={initialCharacterId} dripCheck={dripCheck} />
       <Analytics />
       <SpeedInsights />
     </>
