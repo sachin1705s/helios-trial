@@ -137,8 +137,9 @@ export function useOdysseyStream(options: UseOdysseyStreamOptions = {}) {
   }, []);
 
   const interact = useCallback(async (prompt: string) => {
+    if (!serviceRef.current) throw new Error('Not connected');
     try {
-      await serviceRef.current?.interact(prompt);
+      await serviceRef.current.interact(prompt);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // Log content-policy / NSFW rejections for later review
