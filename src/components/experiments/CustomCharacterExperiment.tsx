@@ -12,6 +12,10 @@ export default function CustomCharacterExperiment() {
   const [step, setStep] = useState<Step>('setup');
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [originalImageFile, setOriginalImageFile] = useState<File | null>(null);
+  const [framing, setFraming] = useState<'full' | 'headshot'>('headshot');
+  const [cloneStatus, setCloneStatus] = useState<'idle' | 'cloning' | 'done' | 'error'>('idle');
+  const [cloneError, setCloneError] = useState<string | null>(null);
   const [characterName, setCharacterName] = useState('');
   const [characterDesc, setCharacterDesc] = useState('');
 
@@ -32,9 +36,39 @@ export default function CustomCharacterExperiment() {
   const handleImagePick = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setOriginalImageFile(file);
     setImageFile(file);
     setImagePreview(URL.createObjectURL(file));
+    setCloneStatus('idle');
+    setCloneError(null);
   }, []);
+
+  const cloneCharacter = useCallback(async () => {
+    const source = originalImageFile ?? imageFile;
+    if (!source) return;
+    setCloneStatus('cloning');
+    setCloneError(null);
+    try {
+      const fd = new FormData();
+      fd.append('image', source);
+      fd.append('framing', framing);
+      const res = await fetch('/api/character-clone', { method: 'POST', body: fd });
+      const data = await res.json() as { imageBase64?: string; mimeType?: string; error?: string };
+      if (!res.ok || !data.imageBase64) throw new Error(data.error ?? 'Character generation failed.');
+      const mime = data.mimeType || 'image/png';
+      const byteString = atob(data.imageBase64);
+      const bytes = new Uint8Array(byteString.length);
+      for (let i = 0; i < byteString.length; i++) bytes[i] = byteString.charCodeAt(i);
+      const blob = new Blob([bytes], { type: mime });
+      const cloned = new File([blob], `character-clone.${mime.includes('jpeg') ? 'jpg' : 'png'}`, { type: mime });
+      setImageFile(cloned);
+      setImagePreview(URL.createObjectURL(cloned));
+      setCloneStatus('done');
+    } catch (err) {
+      setCloneStatus('error');
+      setCloneError(err instanceof Error ? err.message : 'Character generation failed.');
+    }
+  }, [originalImageFile, imageFile, framing]);
 
   const handleVoicePick = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -133,6 +167,47 @@ export default function CustomCharacterExperiment() {
             </div>
             <input ref={imageInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImagePick} />
           </div>
+
+          {/* Character clone (Pixar-style via Gemini) */}
+          {originalImageFile && (
+            <div className="setup-field">
+              <label className="setup-label">Stylize as 3D character</label>
+              <p style={{ fontSize: '0.78rem', color: 'rgba(231,237,246,0.4)', margin: '0 0 8px' }}>
+                Turn your photo into a Pixar-style 3D character before going live.
+              </p>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <button
+                  type="button"
+                  className={`exp-btn ${framing === 'headshot' ? 'primary' : 'ghost'}`}
+                  style={{ flex: 1 }}
+                  onClick={() => setFraming('headshot')}
+                  disabled={cloneStatus === 'cloning'}
+                >
+                  Headshot
+                </button>
+                <button
+                  type="button"
+                  className={`exp-btn ${framing === 'full' ? 'primary' : 'ghost'}`}
+                  style={{ flex: 1 }}
+                  onClick={() => setFraming('full')}
+                  disabled={cloneStatus === 'cloning'}
+                >
+                  Full body
+                </button>
+              </div>
+              <button
+                type="button"
+                className="exp-btn primary"
+                style={{ width: '100%' }}
+                disabled={cloneStatus === 'cloning'}
+                onClick={cloneCharacter}
+              >
+                {cloneStatus === 'cloning' ? 'Generating…' : cloneStatus === 'done' ? 'Regenerate character' : 'Generate character ✨'}
+              </button>
+              {cloneStatus === 'done' && <p style={{ color: '#6fcf97', fontSize: '0.8rem', margin: '6px 0 0' }}>Character generated. Preview updated above.</p>}
+              {cloneError && <p style={{ color: '#ff6b6b', fontSize: '0.8rem', margin: '6px 0 0' }}>{cloneError}</p>}
+            </div>
+          )}
 
           {/* Name */}
           <div className="setup-field">
