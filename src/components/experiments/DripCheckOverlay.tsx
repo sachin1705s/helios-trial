@@ -101,8 +101,11 @@ export default function DripCheckOverlay({ runCharacterInteraction, characterId,
       const fd = new FormData();
       fd.append('image', blob, `${mode}.jpg`);
       fd.append('mode', mode);
-      const res = await fetch(config.endpoint, { method: 'POST', body: fd });
-      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      const res = await fetch(config.endpoint, { method: ‘POST’, body: fd, signal: AbortSignal.timeout(12000) });
+      if (!res.ok) {
+        if (res.status === 429) throw new Error(‘RATE_LIMITED’);
+        throw new Error(`Request failed (${res.status})`);
+      }
       const data = await res.json();
       if (data[config.noResultField] || !data.description) {
         await runCharacterInteraction(config.fallbackPrompt, characterId, characterName);
@@ -111,7 +114,12 @@ export default function DripCheckOverlay({ runCharacterInteraction, characterId,
       await runCharacterInteraction(config.successTemplate(data.description), characterId, characterName);
     } catch (err) {
       console.error(`[${mode}] failed:`, err);
-      showError(mode === 'drip-check' ? 'Couldn’t check your look — try again.' : 'Couldn’t see the item — try again.');
+      const msg = err instanceof Error && err.message === ‘RATE_LIMITED’
+        ? ‘Too many requests — wait a moment and try again.’
+        : mode === ‘drip-check’
+          ? ‘Couldn’t check your look — try again.’
+          : ‘Couldn’t see the item — try again.’;
+      showError(msg);
     } finally {
       setBusy(false);
     }

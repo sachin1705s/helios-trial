@@ -218,6 +218,14 @@ const imageGenLimiter = rateLimit({
   message: { error: "You've used your 2 free generations for today. Come back tomorrow!" },
 });
 
+const visionLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: isProduction ? 60 : 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many vision requests, please try again later.' },
+});
+
 app.use('/api/', generalLimiter);
 app.use(express.json({ limit: '10mb' }));
 
@@ -524,6 +532,15 @@ app.post('/api/odyssey/release', async (req, res) => {
 
 const ANIMATE_STYLE_MAP = { realism: 'realism', comic: 'comic', manga: 'manga', 'ghibli-inspired': 'ghibli-inspired' };
 const imageUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+
+const ALLOWED_VISION_MIMES = ['image/jpeg', 'image/png', 'image/webp'];
+const visionUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    cb(null, ALLOWED_VISION_MIMES.includes(file.mimetype));
+  },
+});
 
 app.post('/api/animate-drawings/stylize', imageGenLimiter, aiLimiter, imageUpload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Missing image file.' });
@@ -1013,33 +1030,44 @@ const VISION_MODES = {
   },
 };
 
-app.post('/api/vision-describe', aiLimiter, imageUpload.single('image'), async (req, res) => {
+app.post('/api/vision-describe', visionLimiter, visionUpload.single('image'), async (req, res) => {
   try {
     const ai = getAiClient();
     if (!ai) return res.status(503).json({ error: 'AI service not configured.' });
     if (!req.file) return res.status(400).json({ error: 'Missing image file.' });
 
     const mode = req.body?.mode;
-    const config = VISION_MODES[mode];
-    if (!config) return res.status(400).json({ error: `Invalid mode: ${mode}` });
+    const cfg = VISION_MODES[mode];
+    if (!cfg) return res.status(400).json({ error: `Invalid mode: ${mode}` });
 
     const mimeType = req.file.mimetype || 'image/jpeg';
     const base64 = req.file.buffer.toString('base64');
 
     const result = await ai.models.generateContent({
       model: 'gemini-2.0-flash',
-      generationConfig: { maxOutputTokens: config.maxTokens },
-      contents: [{ role: 'user', parts: [{ inlineData: { mimeType, data: base64 } }, { text: config.prompt }] }],
+      config: { maxOutputTokens: cfg.maxTokens, abortSignal: AbortSignal.timeout(8000) },
+      contents: [{ role: 'user', parts: [{ inlineData: { mimeType, data: base64 } }, { text: cfg.prompt }] }],
     });
 
     let description = '';
-    try { description = (result.text || '').trim(); } catch { /* safety filter */ }
+    try {
+      description = (result.text || '').trim();
+    } catch (textErr) {
+      const finishReason = result.candidates?.[0]?.finishReason;
+      console.warn(`[vision-describe:${mode}] response.text threw (finishReason: ${finishReason}):`, textErr?.message);
+    }
     if (!description || description === 'NO_RESULT') {
-      return res.json({ description: '', [config.noResultField]: true });
+      return res.json({ description: '', [cfg.noResultField]: true });
     }
     return res.json({ description });
   } catch (err) {
-    console.error(`[vision-describe:${req.body?.mode}] failed:`, err?.message || err);
+    const status = err?.status ?? err?.response?.status;
+    const errMsg = err?.message || String(err);
+    if (status === 429 || /resource.?exhausted|429/i.test(errMsg)) {
+      console.warn(`[vision-describe:${req.body?.mode}] rate-limited:`, errMsg);
+      return res.status(429).json({ error: 'Rate limited', retryAfterMs: 5000 });
+    }
+    console.error(`[vision-describe:${req.body?.mode}] failed (status=${status}):`, errMsg);
     return res.status(500).json({ error: 'Vision describe failed.' });
   }
 });
@@ -1425,13 +1453,20 @@ app.post('/api/gesture', aiLimiter, async (req, res) => {
     });
 
     const allowed = ['hello', 'thumbs_up', 'victory', 'namaste', 'pointing', 'thinking', 'shrug', 'crossed_arms', 'facepalm', 'clapping', 'none'];
-    const text = response.text?.trim().toLowerCase() || 'none';
+    let text = 'none';
+    try {
+      text = response.text?.trim().toLowerCase() || 'none';
+    } catch (textErr) {
+      const finishReason = response.candidates?.[0]?.finishReason;
+      console.warn('[gesture] response.text threw (finishReason:', finishReason, '):', textErr?.message);
+    }
     const gesture = allowed.includes(text) ? text : 'none';
     if (text !== 'none' && gesture === 'none') {
       console.log(`[gesture] raw="${text}" UNMAPPED`);
     }
     return res.json({ gesture });
-  } catch {
+  } catch (err) {
+    console.error('[gesture] failed:', err?.message || err);
     return res.status(500).json({ error: 'Gesture classification failed.' });
   }
 });
@@ -1444,7 +1479,7 @@ app.post('/api/gesture', aiLimiter, async (req, res) => {
 const CORE_GESTURES  = ['hello', 'thumbs_up', 'victory', 'namaste', 'pointing', 'thinking', 'shrug', 'crossed_arms', 'facepalm', 'clapping'];
 const BONUS_GESTURES = []; // e.g. ['waving', 'dab', 'peace_sign'] — add tomorrow
 
-app.post('/api/gesture-vision', aiLimiter, async (req, res) => {
+app.post('/api/gesture-vision', visionLimiter, async (req, res) => {
   try {
     const ai = getAiClient();
     if (!ai) return res.status(503).json({ error: 'AI service not configured.' });
@@ -1457,13 +1492,20 @@ app.post('/api/gesture-vision', aiLimiter, async (req, res) => {
 
     const response = await ai.models.generateContent({
       model,
+      config: { abortSignal: AbortSignal.timeout(8000) },
       contents: [{ role: 'user', parts: [
         { text: prompt },
         { inlineData: { mimeType, data: image } },
       ]}],
     });
 
-    const text = response.text?.trim().toLowerCase() || 'none';
+    let text = 'none';
+    try {
+      text = response.text?.trim().toLowerCase() || 'none';
+    } catch (textErr) {
+      const finishReason = response.candidates?.[0]?.finishReason;
+      console.warn('[gesture-vision] response.text threw (finishReason:', finishReason, '):', textErr?.message);
+    }
     const isCore  = CORE_GESTURES.includes(text);
     const isBonus = BONUS_GESTURES.includes(text);
     const gesture = (isCore || isBonus) ? text : 'none';
@@ -1476,9 +1518,13 @@ app.post('/api/gesture-vision', aiLimiter, async (req, res) => {
 
     return res.json({ gesture, isBonus, raw: text });
   } catch (error) {
-    if (error?.status === 429) {
+    const status = error?.status ?? error?.response?.status;
+    const errMsg = error?.message || String(error);
+    if (status === 429 || /resource.?exhausted|429/i.test(errMsg)) {
+      console.warn('[gesture-vision] rate-limited:', errMsg);
       return res.status(429).json({ error: 'Rate limited', retryAfterMs: 10000 });
     }
+    console.error('[gesture-vision] failed (status=' + status + '):', errMsg);
     return res.status(500).json({ error: 'Gesture classification failed.' });
   }
 });
