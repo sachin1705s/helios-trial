@@ -1941,10 +1941,15 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
 
   const runCharacterInteraction = async (userText: string, slideId: string, characterName: string, opts?: { hideFromChat?: boolean }) => {
     const history = (characterHistory[slideId] ?? []).slice(-6);
+    // Words that strongly imply the user wants live/up-to-date information.
+    // Kept narrow on purpose — Google Search grounding doubles token usage and
+    // counts against quota differently. Removed: 'now' (matches "I have a phone
+    // now"), 'what is' (matches "what is your name"), '2024/2025/2026' (matches
+    // any conversation that mentions a date in passing).
     const SEARCH_TRIGGERS = [
-      'today', 'current', 'latest', 'recent', 'news', 'now',
-      'price', 'stock', 'weather', 'who is', 'what is', 'when did',
-      'score', 'happened', '2024', '2025', '2026',
+      'today', 'latest', 'recent', 'news',
+      'price', 'stock', 'weather', 'who is', 'when did',
+      'score', 'happened',
     ];
     const enableSearch = SEARCH_TRIGGERS.some((kw) => userText.toLowerCase().includes(kw));
     const chatStartedAt = Date.now();

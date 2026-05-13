@@ -843,8 +843,11 @@ app.post('/api/character/chat', aiLimiter, async (req, res) => {
       generateParams.tools = [{ googleSearch: {} }];
     }
 
-    // Retry with exponential backoff on rate-limit (429 / resource exhausted)
-    const MAX_RETRIES = 3;
+    // Retry on rate-limit (429 / resource exhausted). Capped at 1 retry total
+    // (was 3) because aggressive retries amplify a quota-exhausted state — if
+    // we're already 429ing, retrying 3 more times within 7s makes it worse
+    // for all concurrent users sharing the same Gemini API key.
+    const MAX_RETRIES = 1;
     const isRateLimitError = (msg) => /resource.?exhausted|429/i.test(msg);
     let response;
     let lastErr;
@@ -856,7 +859,7 @@ app.post('/api/character/chat', aiLimiter, async (req, res) => {
         lastErr = err;
         const errMsg = err?.message || String(err);
         if (isRateLimitError(errMsg) && attempt < MAX_RETRIES) {
-          const delayMs = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s
+          const delayMs = 1500; // single retry after 1.5s
           console.warn(`[character/chat] transient 429 (attempt ${attempt + 1}/${MAX_RETRIES + 1}), retrying in ${delayMs}ms…`, errMsg);
           await new Promise((r) => setTimeout(r, delayMs));
         } else {
@@ -948,10 +951,38 @@ app.post('/api/character/chat', aiLimiter, async (req, res) => {
 });
 
 // ─── Object extraction fallback (Gemini Live voice path) ──────────────────────
-// When client-side keyword matching produces no hits, the client calls this
-// endpoint with the character's full response text. A fast LLM call extracts
-// concrete objects constrained to the character's known prop vocabulary so
-// Odyssey always shows what the character is talking about.
+//
+// WHAT THIS DOES:
+// Called by the client AFTER every Gemini Live voice response, but ONLY when
+// client-side keyword matching (src/App.tsx :: glKeywordMatch) finds zero
+// matches in the character's reply. The LLM compares the reply against the
+// character's fixed prop vocabulary (OBJECT_VOCABULARY below) and returns up
+// to 3 matching objects to show in the Odyssey scene.
+//
+// EXAMPLE: bear says "I'd love to share some honey with you" — keyword
+// matcher misses because "honey" isn't in vocab, but the LLM maps it to
+// "a honeycomb" so Odyssey renders the honeycomb prop.
+//
+// WHY IT'S CURRENTLY DISABLED:
+// Every voice turn was firing a Gemini API call here, on top of Gemini Live
+// itself, consuming the free-tier 10 RPM quota and causing 429 errors on
+// drip-check / item-grab for other users on the same API key.
+//
+// IMPACT OF DISABLING:
+// - The primary keyword matcher (glKeywordMatch) still runs and handles ~90%
+//   of cases where the character mentions a vocab item by its exact name.
+// - The ~10% edge cases where the character uses a synonym/description
+//   ("the thing on your wrist" instead of "a sleek device") will no longer
+//   trigger a scene object. The character still talks normally, the scene
+//   just won't react to that one reference.
+// - Zero impact on text-mode chat (which gets objects directly from the
+//   character/chat JSON response, not from this endpoint).
+//
+// PLAN: Re-enable for paid users only via a paywall check. Set
+// ENABLE_LLM_OBJECT_EXTRACTION=true in env, then gate per-request on the
+// user's subscription tier (TODO when auth/billing is wired up).
+const ENABLE_LLM_OBJECT_EXTRACTION = process.env.ENABLE_LLM_OBJECT_EXTRACTION === 'true';
+
 const OBJECT_VOCABULARY = {
   einstein:         ['a heavy ball', 'a ticking clock', 'a beam of light', 'a trampoline', 'a rocket', 'a magnet', 'a falling apple', 'a telescope', 'an atom', 'a wave'],
   bear:             ['a handful of berries', 'a honeycomb', 'a fresh fish', 'a pine cone', 'a mushroom', 'a log'],
@@ -964,6 +995,13 @@ const OBJECT_VOCABULARY = {
 };
 
 app.post('/api/extract-objects', aiLimiter, async (req, res) => {
+  // PAYWALL GATE: LLM extraction is a "nicer scene" feature reserved for paid
+  // users. Free tier returns empty so the keyword matcher's hits are all the
+  // user gets — saves a Gemini call per voice turn.
+  if (!ENABLE_LLM_OBJECT_EXTRACTION) {
+    return res.json({ objects: [] });
+  }
+
   try {
     const ai = getAiClient();
     if (!ai) return res.status(503).json({ error: 'AI service not configured.' });
