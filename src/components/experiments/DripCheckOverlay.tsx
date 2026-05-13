@@ -32,6 +32,13 @@ const VISION_CONFIG: Record<VisionMode, {
   },
 };
 
+// Minimum gap between vision API calls (drip-check OR item-grab). Prevents
+// the user from spamming the buttons and hitting Gemini's per-minute quota.
+const ACTION_COOLDOWN_MS = 3000;
+// Backoff applied after a 429 response — user can't fire another request for
+// this long. Longer than the cooldown so the rate limit window can drain.
+const RATE_LIMIT_BACKOFF_MS = 15000;
+
 export default function DripCheckOverlay({ runCharacterInteraction, characterId, characterName, isStreamingReady }: DripCheckOverlayProps) {
   const [webcamActive, setWebcamActive] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -39,6 +46,8 @@ export default function DripCheckOverlay({ runCharacterInteraction, characterId,
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastActionAtRef = useRef<number>(0);
+  const cooldownUntilRef = useRef<number>(0);
 
   const showError = useCallback((msg: string) => {
     setError(msg);
@@ -92,6 +101,20 @@ export default function DripCheckOverlay({ runCharacterInteraction, characterId,
 
   const handleVisionAction = useCallback(async (mode: VisionMode) => {
     if (busy) return;
+    const now = Date.now();
+    // Hard cooldown after a 429 — refuse to even attempt until the window clears.
+    if (now < cooldownUntilRef.current) {
+      const wait = Math.ceil((cooldownUntilRef.current - now) / 1000);
+      showError(`Rate limited — try again in ${wait}s.`);
+      return;
+    }
+    // Per-button cooldown — prevents rapid-fire clicks from spending quota.
+    if (now - lastActionAtRef.current < ACTION_COOLDOWN_MS) {
+      const wait = Math.ceil((ACTION_COOLDOWN_MS - (now - lastActionAtRef.current)) / 1000);
+      showError(`Slow down — wait ${wait}s.`);
+      return;
+    }
+    lastActionAtRef.current = now;
     setBusy(true);
     setError(null);
     const config = VISION_CONFIG[mode];
@@ -103,7 +126,10 @@ export default function DripCheckOverlay({ runCharacterInteraction, characterId,
       fd.append('mode', mode);
       const res = await fetch(config.endpoint, { method: 'POST', body: fd, signal: AbortSignal.timeout(12000) });
       if (!res.ok) {
-        if (res.status === 429) throw new Error('RATE_LIMITED');
+        if (res.status === 429) {
+          cooldownUntilRef.current = Date.now() + RATE_LIMIT_BACKOFF_MS;
+          throw new Error('RATE_LIMITED');
+        }
         throw new Error(`Request failed (${res.status})`);
       }
       const data = await res.json();
@@ -115,7 +141,7 @@ export default function DripCheckOverlay({ runCharacterInteraction, characterId,
     } catch (err) {
       console.error(`[${mode}] failed:`, err);
       const msg = err instanceof Error && err.message === 'RATE_LIMITED'
-        ? 'Too many requests — wait a moment and try again.'
+        ? 'Too many requests — wait 15 seconds.'
         : mode === 'drip-check'
           ? "Couldn't check your look — try again."
           : "Couldn't see the item — try again.";

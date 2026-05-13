@@ -220,7 +220,7 @@ const imageGenLimiter = rateLimit({
 
 const visionLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: isProduction ? 60 : 120,
+  max: isProduction ? 20 : 60,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many vision requests, please try again later.' },

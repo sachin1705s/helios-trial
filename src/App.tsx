@@ -2409,12 +2409,12 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
         )}
         {sessionExpired && (
           <div className="session-expired-overlay">
-            <p className="session-expired-title">Your 5 minutes with {activeCharacterName} have ended.</p>
+            <p className="session-expired-title">Stream ended. Your 5 minutes with {activeCharacterName} are up.</p>
             <button
               className="session-expired-btn"
               onClick={() => { if (selectedCharacterId) handleSelectCharacter(selectedCharacterId); }}
             >
-              Start fresh
+              Restart stream
             </button>
           </div>
         )}

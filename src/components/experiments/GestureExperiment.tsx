@@ -8,7 +8,7 @@ import { trackEvent } from '../../lib/analytics';
 import '../../demo/shared/tokens.css';
 import './GestureExperiment.css';
 
-const POLL_INTERVAL_MS = 1500;
+const POLL_INTERVAL_MS = 4000;
 const CHARACTER_IMAGE  = '/images/characters/einstein.png';
 const CHARACTER_PROMPT = 'You are Einstein. React expressively to the user\'s gestures and body language. Keep every reply under 20 words.';
 
