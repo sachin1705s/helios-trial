@@ -218,13 +218,13 @@ const imageGenLimiter = rateLimit({
   message: { error: "You've used your 2 free generations for today. Come back tomorrow!" },
 });
 
-const visionLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: isProduction ? 20 : 60,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many vision requests, please try again later.' },
-});
+// NOTE: We deliberately do NOT add a separate visionLimiter here.
+// On serverless platforms (Vercel) many users share edge IPs, so a per-IP
+// limit would block first-request traffic for users sharing an IP with
+// someone else. The real rate ceiling is Gemini's per-API-key quota (10 RPM
+// on free tier, 2000 RPM on paid tier). Client-side cooldowns + Gemini's own
+// 429 responses are the right protection here.
+const visionLimiter = aiLimiter;
 
 app.use('/api/', generalLimiter);
 app.use(express.json({ limit: '10mb' }));

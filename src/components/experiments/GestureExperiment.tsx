@@ -8,7 +8,11 @@ import { trackEvent } from '../../lib/analytics';
 import '../../demo/shared/tokens.css';
 import './GestureExperiment.css';
 
-const POLL_INTERVAL_MS = 4000;
+// Each poll sends one image to Gemini Vision. Gemini's free tier is 10 RPM
+// per API key, shared across ALL users. Polling every 6s = 10 RPM per user,
+// which leaves zero headroom — but anything faster makes us the bottleneck
+// for drip-check/item-grab users on a different page sharing the same key.
+const POLL_INTERVAL_MS = 6000;
 const CHARACTER_IMAGE  = '/images/characters/einstein.png';
 const CHARACTER_PROMPT = 'You are Einstein. React expressively to the user\'s gestures and body language. Keep every reply under 20 words.';
 

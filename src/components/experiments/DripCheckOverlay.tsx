@@ -32,12 +32,13 @@ const VISION_CONFIG: Record<VisionMode, {
   },
 };
 
-// Minimum gap between vision API calls (drip-check OR item-grab). Prevents
-// the user from spamming the buttons and hitting Gemini's per-minute quota.
-const ACTION_COOLDOWN_MS = 3000;
-// Backoff applied after a 429 response — user can't fire another request for
-// this long. Longer than the cooldown so the rate limit window can drain.
-const RATE_LIMIT_BACKOFF_MS = 15000;
+// Minimum gap between consecutive button clicks. Stops accidental
+// double-clicks from burning two requests. NOT a backoff — the second
+// click is just dropped, no scary error shown.
+const ACTION_COOLDOWN_MS = 2000;
+// Soft cooldown after a 429 from Gemini. Short — the limit window is
+// rolling and another user's request finishing frees a slot.
+const RATE_LIMIT_BACKOFF_MS = 8000;
 
 export default function DripCheckOverlay({ runCharacterInteraction, characterId, characterName, isStreamingReady }: DripCheckOverlayProps) {
   const [webcamActive, setWebcamActive] = useState(false);
@@ -102,16 +103,14 @@ export default function DripCheckOverlay({ runCharacterInteraction, characterId,
   const handleVisionAction = useCallback(async (mode: VisionMode) => {
     if (busy) return;
     const now = Date.now();
-    // Hard cooldown after a 429 — refuse to even attempt until the window clears.
+    // Silent drop on rapid double-click. No error UI — feels like the button
+    // just didn't register, which is better than a scolding message.
+    if (now - lastActionAtRef.current < ACTION_COOLDOWN_MS) return;
+    // Soft backoff after a 429 — but still let the user try; they're not at
+    // fault, the shared API quota is exhausted by other users.
     if (now < cooldownUntilRef.current) {
       const wait = Math.ceil((cooldownUntilRef.current - now) / 1000);
-      showError(`Rate limited — try again in ${wait}s.`);
-      return;
-    }
-    // Per-button cooldown — prevents rapid-fire clicks from spending quota.
-    if (now - lastActionAtRef.current < ACTION_COOLDOWN_MS) {
-      const wait = Math.ceil((ACTION_COOLDOWN_MS - (now - lastActionAtRef.current)) / 1000);
-      showError(`Slow down — wait ${wait}s.`);
+      showError(`The bear is busy — try again in ${wait}s.`);
       return;
     }
     lastActionAtRef.current = now;
@@ -140,8 +139,10 @@ export default function DripCheckOverlay({ runCharacterInteraction, characterId,
       await runCharacterInteraction(config.successTemplate(data.description), characterId, characterName, { hideFromChat: true });
     } catch (err) {
       console.error(`[${mode}] failed:`, err);
+      // 429 is honestly framed as "service is busy" since on the free tier
+      // the Gemini quota is shared across all users — it's not the user's fault.
       const msg = err instanceof Error && err.message === 'RATE_LIMITED'
-        ? 'Too many requests — wait 15 seconds.'
+        ? 'The bear is busy right now — try again in a few seconds.'
         : mode === 'drip-check'
           ? "Couldn't check your look — try again."
           : "Couldn't see the item — try again.";
