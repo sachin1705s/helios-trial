@@ -1,3 +1,6 @@
+// Must be first import — patches RTCPeerConnection before any SDK loads
+import './lib/webrtc-diagnostics-init';
+
 import { StrictMode, useEffect, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route, useParams, useLocation, Navigate } from 'react-router-dom';
@@ -5,10 +8,9 @@ import { EXPERIMENTS, endOfDay, getStatus } from './demo/atrium/experiments';
 import posthog from 'posthog-js';
 import { PostHogProvider, usePostHog } from 'posthog-js/react';
 
-
-
 import './index.css';
 import App from './App.tsx';
+import WebRTCDebugOverlay from './components/WebRTCDebugOverlay';
 import AtriumLanding from './demo/atrium/Landing';
 import AtriumHome from './demo/atrium/Home';
 import AtriumAbout from './demo/atrium/About';
@@ -18,9 +20,10 @@ import GestureExperiment from './components/experiments/GestureExperiment';
 import ObjectDetectionExperiment from './components/experiments/ObjectDetectionExperiment';
 import CustomCharacterExperiment from './components/experiments/CustomCharacterExperiment';
 import BroadcastExperiment from './components/experiments/BroadcastExperiment';
-import GestureTestHarness from './components/experiments/GestureTestHarness';
-import StreamInteractHarness from './components/experiments/StreamInteractHarness';
-import ActionStreamHarness from './components/experiments/ActionStreamHarness';
+import { lazy, Suspense } from 'react';
+const GestureTestHarness = lazy(() => import('./components/experiments/GestureTestHarness'));
+const StreamInteractHarness = lazy(() => import('./components/experiments/StreamInteractHarness'));
+const ActionStreamHarness = lazy(() => import('./components/experiments/ActionStreamHarness'));
 
 function ScrollToTop() {
   const { pathname } = useLocation();
@@ -88,12 +91,17 @@ createRoot(document.getElementById('root')!).render(
           <Route path="/lab/objects"      element={<ExperimentGuard expId="objects"><ObjectDetectionExperiment /></ExperimentGuard>} />
           <Route path="/lab/custom"       element={<ExperimentGuard expId="custom"><CustomCharacterExperiment /></ExperimentGuard>} />
           <Route path="/lab/broadcast"    element={<ExperimentGuard expId="broadcast"><BroadcastExperiment /></ExperimentGuard>} />
-          {/* Internal test harnesses — no guard */}
-          <Route path="/lab/gesture-test" element={<GestureTestHarness />} />
-          <Route path="/lab/stream-test"  element={<StreamInteractHarness />} />
-          <Route path="/lab/action-test"  element={<ActionStreamHarness />} />
+          {/* Internal test harnesses — dev only */}
+          {import.meta.env.DEV && (
+            <>
+              <Route path="/lab/gesture-test" element={<Suspense fallback={null}><GestureTestHarness /></Suspense>} />
+              <Route path="/lab/stream-test"  element={<Suspense fallback={null}><StreamInteractHarness /></Suspense>} />
+              <Route path="/lab/action-test"  element={<Suspense fallback={null}><ActionStreamHarness /></Suspense>} />
+            </>
+          )}
           <Route path="*" element={<App />} />
         </Routes>
+        <WebRTCDebugOverlay />
       </BrowserRouter>
     </PostHogProvider>
   </StrictMode>,

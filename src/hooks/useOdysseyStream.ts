@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BroadcastInfo } from '@odysseyml/odyssey';
 import { OdysseyService, credentialsFromDict, loadImageFile } from '../lib/odyssey';
 import { trackEvent } from '../lib/analytics';
+import { getFirstPeerConnection } from '../lib/webrtc-diagnostics';
+import { WebRTCStatsCollector } from '../lib/webrtc-stats-collector';
 
 export type OdysseyStreamStatus = 'idle' | 'connecting' | 'ready' | 'streaming' | 'error';
 
@@ -26,6 +28,7 @@ export function useOdysseyStream(options: UseOdysseyStreamOptions = {}) {
   const leaseIdRef  = useRef<string | null>(null);
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamActiveRef = useRef(false);
+  const statsCollectorRef = useRef<WebRTCStatsCollector | null>(null);
 
   const stopHeartbeat = useCallback(() => {
     if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
@@ -78,6 +81,16 @@ export function useOdysseyStream(options: UseOdysseyStreamOptions = {}) {
             videoRef.current.srcObject = stream;
             videoRef.current.play().catch(() => undefined);
           }
+          // Start WebRTC stats collection after a brief delay for the PC to stabilize
+          setTimeout(() => {
+            const pc = getFirstPeerConnection();
+            if (pc) {
+              const collector = new WebRTCStatsCollector(pc);
+              collector.start();
+              statsCollectorRef.current = collector;
+              console.log('[WebRTC-Diag] Stats collector started');
+            }
+          }, 1000);
           setStatus('ready');
         },
         onStreamStarted: () => setStatus('streaming'),
@@ -124,8 +137,9 @@ export function useOdysseyStream(options: UseOdysseyStreamOptions = {}) {
   }, []);
 
   const interact = useCallback(async (prompt: string) => {
+    if (!serviceRef.current) throw new Error('Not connected');
     try {
-      await serviceRef.current?.interact(prompt);
+      await serviceRef.current.interact(prompt);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // Log content-policy / NSFW rejections for later review
@@ -137,6 +151,8 @@ export function useOdysseyStream(options: UseOdysseyStreamOptions = {}) {
 
   const disconnect = useCallback(async () => {
     stopHeartbeat();
+    statsCollectorRef.current?.stop();
+    statsCollectorRef.current = null;
     if (streamActiveRef.current) {
       streamActiveRef.current = false;
       await serviceRef.current?.endStream().catch(() => undefined);
@@ -169,6 +185,7 @@ export function useOdysseyStream(options: UseOdysseyStreamOptions = {}) {
     setReply,
     videoRef,
     serviceRef,
+    statsCollectorRef,
     connect,
     startStream,
     interact,
