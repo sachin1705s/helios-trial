@@ -118,7 +118,7 @@ function buildCategoryPrompt(obj) {
 
 async function askBear(prompt) {
   const result = await ai.models.generateContent({
-    model: 'gemini-2.0-flash',
+    model: 'gemini-2.5-flash',
     generationConfig: { maxOutputTokens: 80, temperature: 0.9 },
     contents: [{ role: 'user', parts: [{ text: `${BEAR_SYSTEM_PROMPT}\n\n${prompt}` }] }],
   });
