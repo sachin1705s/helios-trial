@@ -55,17 +55,29 @@ export function parseLocal(dateStr: string): Date {
   return new Date(y, m - 1, d);
 }
 
-export function endOfDay(dateStr: string): Date {
-  const d = parseLocal(dateStr);
-  d.setHours(23, 59, 59, 999);
-  return d;
+/** Wall-clock time on `dateStr` interpreted in America/Los_Angeles, returned as a UTC Date. DST-aware. */
+function ptInstant(dateStr: string, hour: number, minute: number, second: number, ms: number): Date {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const probe = new Date(Date.UTC(y, m - 1, d, 12));
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    timeZoneName: 'longOffset',
+  }).formatToParts(probe);
+  const offsetStr = parts.find((p) => p.type === 'timeZoneName')?.value ?? 'GMT-08:00';
+  const match = /GMT([+-])(\d{2}):(\d{2})/.exec(offsetStr);
+  const offsetMinutes = match
+    ? (match[1] === '+' ? 1 : -1) * (Number(match[2]) * 60 + Number(match[3]))
+    : -480;
+  return new Date(Date.UTC(y, m - 1, d, hour, minute, second, ms) - offsetMinutes * 60000);
 }
 
-/** 5 PM on the given date — when an experiment goes live */
+export function endOfDay(dateStr: string): Date {
+  return ptInstant(dateStr, 23, 59, 59, 999);
+}
+
+/** 5 PM Pacific on the given date — when an experiment goes live (same instant worldwide) */
 export function liveAt(dateStr: string): Date {
-  const d = parseLocal(dateStr);
-  d.setHours(17, 0, 0, 0);
-  return d;
+  return ptInstant(dateStr, 17, 0, 0, 0);
 }
 
 /** Minutes until 5 PM on the given date (0 if already past) */
