@@ -162,6 +162,67 @@
   justify-content: center;
 }
 
+/* ----- voice clone sub-section (upload / record) ------------------------- */
+
+.atrium-character-builder .acb-clone-sub {
+  margin-top: 4px;
+  padding: 16px;
+  background: var(--paper-edge);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.atrium-character-builder .acb-record {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.atrium-character-builder .acb-record__live {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: var(--body);
+  color: var(--ink);
+  flex: 1;
+}
+.atrium-character-builder .acb-record__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--clay);
+  box-shadow: 0 0 0 4px rgba(217, 73, 43, 0.18);
+  animation: acb-record-pulse 1.2s ease-in-out infinite;
+  align-self: center;
+}
+.atrium-character-builder .acb-record__timer {
+  font-family: var(--display);
+  font-size: 28px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.atrium-character-builder .acb-record__min {
+  font-size: 13px;
+  color: var(--ink-mute);
+  font-variant-numeric: tabular-nums;
+}
+.atrium-character-builder .acb-record > .acb-record__live + .btn {
+  align-self: flex-start;
+}
+.atrium-character-builder .acb-record:has(.acb-record__live) {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+@keyframes acb-record-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(217, 73, 43, 0.18); }
+  50%      { box-shadow: 0 0 0 9px rgba(217, 73, 43, 0.06); }
+}
+
 /* ----- generated character preview (mirrors .cast__card) ----------------- */
 
 .atrium-character-builder .acb-preview-wrap {

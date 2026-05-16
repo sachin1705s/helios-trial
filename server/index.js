@@ -477,7 +477,41 @@ const touchOdysseyLease = async (leaseId) => {
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true });
+  res.json({
+    ok: true,
+    time: new Date().toISOString(),
+    node: process.version,
+    region: process.env.VERCEL_REGION || process.env.AWS_REGION || 'local',
+    providers: {
+      gemini:   Boolean(runtimeConfig.geminiApiKey),
+      odyssey:  Boolean(runtimeConfig.odysseyApiKeys?.length),
+      smallest: Boolean(runtimeConfig.smallestApiKey),
+      fish:     Boolean(runtimeConfig.fishAudioApiKey),
+      gradium:  Boolean(runtimeConfig.gradiumApiKey),
+    },
+  });
+});
+
+// Reachability probe — does NOT consume quota. Returns whether each upstream
+// host responds at all (status code only), used by scripts/stress-test-providers.js
+// and ad-hoc debugging when a user reports "Failed to fetch" in the browser.
+app.get('/api/health/upstream', async (_req, res) => {
+  const probes = [
+    { name: 'smallest-waves-api',  url: 'https://waves-api.smallest.ai/api/v1/lightning-large/get_voices' },
+    { name: 'smallest-api',        url: 'https://api.smallest.ai/waves/v1/lightning-v3.1/get_voices' },
+    { name: 'gemini-generative',   url: 'https://generativelanguage.googleapis.com/v1beta/models' },
+  ];
+  const out = await Promise.all(probes.map(async ({ name, url }) => {
+    const t0 = Date.now();
+    try {
+      // HEAD where supported, otherwise small GET — we only care if the host answers.
+      const r = await fetch(url, { method: 'GET', headers: { Authorization: 'Bearer probe' } });
+      return { name, url, status: r.status, ms: Date.now() - t0 };
+    } catch (err) {
+      return { name, url, error: `${err.name}: ${err.message}`, ms: Date.now() - t0 };
+    }
+  }));
+  res.json({ time: new Date().toISOString(), probes: out });
 });
 
 // Odyssey token endpoint — mints short-lived client credentials server-side (API key never leaves the server)
@@ -1199,18 +1233,56 @@ app.post('/api/vision-describe', visionLimiter, visionUpload.single('image'), as
 });
 
 // ─── Voice cloning ────────────────────────────────────────────────────────────
+//
+// Smallest exposes two parallel hosts for add_voice:
+//   - newer: https://waves-api.smallest.ai/api/v1/lightning-large/add_voice
+//   - older: https://api.smallest.ai/waves/v1/lightning-large/add_voice
+// The older path has been observed to return 404/410 in some regions, surfacing
+// to the browser as a `TypeError: Failed to fetch` once Vercel times out. We
+// try the newer host first and fall back, then surface the real upstream error
+// to the client so the UI can show something actionable instead of "Failed to
+// fetch". See scripts/stress-test-providers.js for the verification rig.
+const SMALLEST_ADD_VOICE_HOSTS = [
+  'https://waves-api.smallest.ai/api/v1/lightning-large/add_voice',
+  'https://api.smallest.ai/waves/v1/lightning-large/add_voice',
+];
+const SMALLEST_TIMEOUT_MS = 55000; // < Vercel's 60s function ceiling
+
+async function smallestAddVoice(url, bodyBuffer, boundary, apiKey) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SMALLEST_TIMEOUT_MS);
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': String(bodyBuffer.length),
+      },
+      body: bodyBuffer,
+      signal: controller.signal,
+    });
+    return r;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 app.post('/api/voice-clone', uploadVoiceClone.single('audio'), async (req, res) => {
+  const startedAt = Date.now();
   try {
     const smallestApiKey = runtimeConfig.smallestApiKey;
-    if (!smallestApiKey) return res.status(503).json({ error: 'TTS service not configured.' });
+    if (!smallestApiKey) {
+      return res.status(503).json({ error: 'TTS service not configured.', details: 'SMALLEST_API_KEY env var is missing on the server.' });
+    }
     if (!req.file) return res.status(400).json({ error: 'No audio file provided.' });
 
-    const name = String(req.body?.name ?? `clone-${Date.now()}`).trim().slice(0, 64) || `clone-${Date.now()}`;
+    const name = String(req.body?.display_name ?? req.body?.name ?? `clone-${Date.now()}`).trim().slice(0, 64) || `clone-${Date.now()}`;
     const mime = req.file.mimetype || 'audio/webm';
-    const filename = req.file.originalname || `voice_sample.webm`;
-    console.log('[voice-clone] size:', req.file.size, 'bytes | name:', name, '| mime:', mime, '| filename:', filename);
+    const filename = req.file.originalname || 'voice_sample.webm';
+    console.log('[voice-clone] in:', req.file.size, 'bytes |', mime, '|', filename, '| name:', name);
 
-    // Build multipart body manually to avoid Node.js Blob/FormData issues on Windows
+    // Build multipart body manually — avoids Node Blob/FormData quirks on Windows
     const boundary = `----FormBoundary${Date.now().toString(16)}`;
     const CRLF = '\r\n';
     const bodyParts = [
@@ -1228,55 +1300,73 @@ app.post('/api/voice-clone', uploadVoiceClone.single('audio'), async (req, res) 
       Buffer.from(bodyEnd),
     ]);
 
-    console.log('[voice-clone] POSTing to Smallest AI... body size:', bodyBuffer.length);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => {
-      console.error('[voice-clone] Request timed out after 60s, aborting.');
-      controller.abort();
-    }, 60000);
-    let response;
-    try {
-      response = await fetch('https://api.smallest.ai/waves/v1/lightning-large/add_voice', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${smallestApiKey}`,
-          'Content-Type': `multipart/form-data; boundary=${boundary}`,
-          'Content-Length': String(bodyBuffer.length),
-        },
-        body: bodyBuffer,
-        signal: controller.signal,
-      });
-    } catch (fetchErr) {
-      console.error('[voice-clone] fetch error name:', fetchErr.name, '| message:', fetchErr.message, '| cause:', fetchErr.cause);
-      throw fetchErr;
-    } finally {
-      clearTimeout(timeout);
+    // Try each host. Fall through on 404/410/5xx; bail on 2xx or hard auth errors.
+    let response = null;
+    let lastError = null;
+    let triedHosts = [];
+    for (const url of SMALLEST_ADD_VOICE_HOSTS) {
+      triedHosts.push(url);
+      console.log('[voice-clone] POST', url, '| body:', bodyBuffer.length, 'bytes');
+      try {
+        response = await smallestAddVoice(url, bodyBuffer, boundary, smallestApiKey);
+      } catch (fetchErr) {
+        const msg = `${fetchErr.name}: ${fetchErr.message}${fetchErr.cause ? ` (${fetchErr.cause})` : ''}`;
+        console.error('[voice-clone] fetch threw on', url, '—', msg);
+        lastError = { stage: 'fetch', host: url, message: msg };
+        response = null;
+        continue;
+      }
+      console.log('[voice-clone]', url, '→', response.status, response.statusText, `(${Date.now() - startedAt}ms)`);
+      // 404/410 = wrong host, retry. 401/403 = auth, no point retrying.
+      if (response.ok || response.status === 401 || response.status === 403) break;
+      if (response.status !== 404 && response.status !== 410) break;
+      lastError = { stage: 'http', host: url, status: response.status };
+      response = null;
     }
 
-    console.log('[voice-clone] Smallest AI status:', response.status, response.statusText);
+    if (!response) {
+      return res.status(502).json({
+        error: 'Voice cloning provider unreachable.',
+        details: lastError ? `${lastError.stage}: ${lastError.message ?? `HTTP ${lastError.status}`}` : 'all hosts failed',
+        triedHosts,
+        elapsedMs: Date.now() - startedAt,
+      });
+    }
 
     if (!response.ok) {
-      const message = await response.text();
-      console.error('[voice-clone] error body:', message);
-      let userMessage = 'Voice cloning failed.';
-      try {
-        const parsed = JSON.parse(message);
-        if (parsed.error_code === 'voice_clone_timeout') userMessage = 'Voice cloning timed out on the server. Please try again.';
-        else if (parsed.error) userMessage = parsed.error;
-      } catch {}
-      return res.status(500).json({ error: userMessage, details: message });
+      const body = await response.text().catch(() => '');
+      console.error('[voice-clone] upstream', response.status, body.slice(0, 400));
+      let userMessage = `Voice cloning failed (HTTP ${response.status}).`;
+      let parsed;
+      try { parsed = JSON.parse(body); } catch { /* not JSON */ }
+      if (parsed?.error_code === 'voice_clone_timeout') userMessage = 'Voice cloning timed out on the provider. Try a shorter clip.';
+      else if (parsed?.error) userMessage = parsed.error;
+      else if (parsed?.message) userMessage = parsed.message;
+      return res.status(response.status >= 400 && response.status < 500 ? response.status : 502).json({
+        error: userMessage,
+        details: body.slice(0, 400) || response.statusText,
+        upstreamStatus: response.status,
+        elapsedMs: Date.now() - startedAt,
+      });
     }
 
     const data = await response.json();
-    console.log('[voice-clone] response:', JSON.stringify(data));
+    console.log('[voice-clone] OK', JSON.stringify(data).slice(0, 200));
     const voiceId = data.id ?? data.voice_id ?? data.voiceId ?? data.data?.voiceId ?? data.data?.id ?? data.data?.voice_id;
     if (!voiceId) {
-      return res.status(500).json({ error: 'Voice cloning response missing voice ID.', raw: data });
+      return res.status(502).json({
+        error: 'Voice cloning succeeded but no voice ID was returned.',
+        raw: data,
+        elapsedMs: Date.now() - startedAt,
+      });
     }
-    return res.json({ voiceId, name });
+    return res.json({ voiceId, name, elapsedMs: Date.now() - startedAt });
   } catch (err) {
     console.error('[voice-clone] exception:', err);
-    return res.status(500).json({ error: 'Voice cloning failed.' });
+    const msg = err && err.name === 'AbortError'
+      ? `Voice cloning timed out after ${SMALLEST_TIMEOUT_MS / 1000}s.`
+      : `Voice cloning failed: ${err?.message ?? 'unknown error'}`;
+    return res.status(500).json({ error: msg, details: String(err?.stack ?? err).slice(0, 400), elapsedMs: Date.now() - startedAt });
   }
 });
 
