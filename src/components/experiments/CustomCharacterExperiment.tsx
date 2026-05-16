@@ -34,6 +34,55 @@ function formatSeconds(n: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+function formatMB(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/**
+ * Downscale + recompress a photo so it fits under `maxBytes`. Returns the
+ * original file unchanged if it's already small enough. Walks resolution and
+ * JPEG quality down in steps until it fits, so iPhone HEIC exports and
+ * 50-megapixel originals end up as something Gemini can actually ingest.
+ */
+async function compressImage(file: File, maxBytes: number): Promise<File> {
+  if (file.size <= maxBytes) return file;
+
+  const url = URL.createObjectURL(file);
+  let img: HTMLImageElement;
+  try {
+    img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error('Could not decode image — try a different file.'));
+      i.src = url;
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+
+  const longest = Math.max(img.naturalWidth, img.naturalHeight);
+  for (const maxDim of [1536, 1280, 1024, 768]) {
+    const scale = Math.min(1, maxDim / longest);
+    const w = Math.round(img.naturalWidth * scale);
+    const h = Math.round(img.naturalHeight * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Browser cannot resize images here.');
+    ctx.drawImage(img, 0, 0, w, h);
+
+    for (const quality of [0.85, 0.7, 0.55, 0.4]) {
+      const blob: Blob | null = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', quality));
+      if (blob && blob.size <= maxBytes) {
+        const baseName = file.name.replace(/\.[^.]+$/, '') || 'photo';
+        return new File([blob], `${baseName}.jpg`, { type: 'image/jpeg' });
+      }
+    }
+  }
+  throw new Error('Photo is too large to compress automatically. Resize it to under 4 MB and try again.');
+}
+
 export default function CustomCharacterExperiment() {
   const navigate = useNavigate();
   const { status, error, videoRef, startStream, interact, disconnect, connect } = useOdysseyStream({ autoConnect: false });
@@ -72,6 +121,8 @@ export default function CustomCharacterExperiment() {
       : voiceMode === 'preset-female' ? PRESET_VOICES['preset-female'].id
         : PRESET_VOICES['preset-male'].id;
 
+  const [imageInfo, setImageInfo] = useState<string | null>(null);
+
   const [building, setBuilding] = useState(false);
   const [buildError, setBuildError] = useState<string | null>(null);
 
@@ -81,17 +132,32 @@ export default function CustomCharacterExperiment() {
   const voiceInputRef = useRef<HTMLInputElement | null>(null);
 
   // ── Image / character ──────────────────────────────────────────────────────
-  const handleImagePick = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const handleImagePick = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.target;
+    const file = input.files?.[0];
     if (!file) return;
-    setOriginalImageFile(file);
-    setImageFile(file);
-    setImagePreview(URL.createObjectURL(file));
+    if (!file.type.startsWith('image/')) {
+      setCloneStatus('error');
+      setCloneError('That file is not an image. Pick a JPG, PNG, or HEIC photo.');
+      input.value = '';
+      return;
+    }
+    setCloneError(null);
     setCloneStatus('idle');
-    // Warn ahead of time if the photo will be rejected by the server's body limit.
-    setCloneError(file.size > IMAGE_MAX_BYTES
-      ? `That photo is ${(file.size / 1024 / 1024).toFixed(1)} MB. Resize to under ${IMAGE_MAX_BYTES / 1024 / 1024} MB before generating — try a smaller export or a JPEG.`
-      : null);
+    setImageInfo(null);
+    try {
+      const processed = await compressImage(file, IMAGE_MAX_BYTES);
+      setOriginalImageFile(processed);
+      setImageFile(processed);
+      setImagePreview(URL.createObjectURL(processed));
+      if (processed !== file) {
+        setImageInfo(`Auto-resized your ${formatMB(file.size)} photo to ${formatMB(processed.size)} so it fits the upload limit.`);
+      }
+    } catch (err) {
+      setCloneStatus('error');
+      setCloneError(err instanceof Error ? err.message : 'Could not process that photo.');
+      input.value = '';
+    }
   }, []);
 
   const cloneCharacter = useCallback(async () => {
@@ -101,9 +167,12 @@ export default function CustomCharacterExperiment() {
       setCloneStatus('error');
       return;
     }
+    // Defensive: should never trigger because handleImagePick already
+    // compresses, but keep the guard so we never send something we know
+    // the server cannot accept.
     if (source.size > IMAGE_MAX_BYTES) {
       setCloneStatus('error');
-      setCloneError(`That photo is ${(source.size / 1024 / 1024).toFixed(1)} MB. Resize to under ${IMAGE_MAX_BYTES / 1024 / 1024} MB before generating.`);
+      setCloneError(`That photo is ${formatMB(source.size)} — over the ${IMAGE_MAX_BYTES / 1024 / 1024} MB upload limit. Pick a smaller file.`);
       return;
     }
     setCloneStatus('cloning');
@@ -117,9 +186,12 @@ export default function CustomCharacterExperiment() {
       let data: { imageBase64?: string; mimeType?: string; error?: string; details?: string; upstreamStatus?: number; aborted?: boolean } = {};
       try { data = await res.json(); } catch { /* non-JSON */ }
       if (!res.ok || !data.imageBase64) {
+        // Surface the server's actual message — it now includes upstreamStatus,
+        // aborted, and elapsedMs so the user knows whether to retry, wait, or
+        // pick a different photo.
         const detail = data.details ? ` — ${data.details.slice(0, 160)}` : '';
-        const sizeMsg = res.status === 413 ? ' (file too large for the server)' : '';
-        throw new Error((data.error ?? `Character generation failed (HTTP ${res.status})${sizeMsg}`) + detail);
+        const sizeMsg = res.status === 413 ? ' Your photo was rejected by the server as too large.' : '';
+        throw new Error((data.error ?? `Character generation failed (HTTP ${res.status}).`) + sizeMsg + detail);
       }
       const mime = data.mimeType || 'image/png';
       const byteString = atob(data.imageBase64);
@@ -133,10 +205,19 @@ export default function CustomCharacterExperiment() {
       console.log('[character-clone] success in', Date.now() - t0, 'ms');
     } catch (err) {
       setCloneStatus('error');
+      const elapsedSec = Math.round((Date.now() - t0) / 1000);
       if (err instanceof TypeError) {
-        // Most likely Vercel killed the function past 60s, or the request body
-        // was rejected at the platform edge. Tell the user what to actually try.
-        setCloneError(`The image service didn't respond in time (took >${Math.round((Date.now() - t0) / 1000)}s). Try again with a smaller photo, or wait a moment — Gemini may be overloaded.`);
+        // fetch threw — no HTTP response at all. We DON'T know that the server
+        // timed out, so don't say "took too long" unless it actually did.
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+          setCloneError("You're offline. Reconnect to Wi-Fi or cellular and try again.");
+        } else if (elapsedSec >= 55) {
+          setCloneError(`The image service didn't respond before the request timed out (${elapsedSec}s). Wait a moment and try again — Gemini may be overloaded.`);
+        } else if (elapsedSec <= 5) {
+          setCloneError(`The request was dropped before reaching the server (${elapsedSec}s). This usually means a network blip — try again.`);
+        } else {
+          setCloneError(`The connection dropped while sending your photo (${elapsedSec}s). Try again, or check your network.`);
+        }
       } else {
         setCloneError(err instanceof Error ? err.message : 'Character generation failed.');
       }
@@ -145,14 +226,29 @@ export default function CustomCharacterExperiment() {
 
   // ── Voice: file upload ─────────────────────────────────────────────────────
   const handleVoicePick = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const input = e.target;
+    const file = input.files?.[0];
     if (!file) return;
+    // Hard reject anything over the limit — don't let the user proceed thinking
+    // they have a valid file when the upload will fail at the network edge.
+    if (file.size > VOICE_MAX_BYTES) {
+      setVoiceFile(null);
+      setVoiceStatus('error');
+      setVoiceError(`That file is ${formatMB(file.size)}. Audio uploads must be under ${VOICE_MAX_BYTES / 1024 / 1024} MB — try a shorter clip, or record one live below.`);
+      input.value = '';
+      return;
+    }
+    if (!file.type.startsWith('audio/')) {
+      setVoiceFile(null);
+      setVoiceStatus('error');
+      setVoiceError('That file is not audio. Pick an MP3, WAV, M4A, or WebM clip.');
+      input.value = '';
+      return;
+    }
     setVoiceFile(file);
     setVoiceCloneId(null);
     setVoiceStatus('idle');
-    setVoiceError(file.size > VOICE_MAX_BYTES
-      ? `That file is ${(file.size / 1024 / 1024).toFixed(1)} MB. Pick a clip under ${VOICE_MAX_BYTES / 1024 / 1024} MB or record one.`
-      : null);
+    setVoiceError(null);
   }, []);
 
   // ── Voice: live recording ─────────────────────────────────────────────────
@@ -398,6 +494,10 @@ export default function CustomCharacterExperiment() {
                 {!imagePreview && <span>Click to upload a photo</span>}
               </div>
               <input ref={imageInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImagePick} />
+              {imageInfo && <p className="acb-hint">{imageInfo}</p>}
+              {cloneError && cloneStatus === 'error' && !originalImageFile && (
+                <p className="acb-note acb-note--error">{cloneError}</p>
+              )}
             </div>
 
             {/* Name */}
