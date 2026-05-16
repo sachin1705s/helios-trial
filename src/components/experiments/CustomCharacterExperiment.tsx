@@ -1,7 +1,11 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useOdysseyStream } from '../../hooks/useOdysseyStream';
 import { supabase } from '../../lib/supabase';
+import { AtriumNav, AtriumFooter } from '../../demo/atrium/Layout';
+import '../../demo/shared/tokens.css';
+import '../../demo/atrium/Atrium.css';
+import './CustomCharacterExperiment.css';
 
 type Step = 'setup' | 'live';
 
@@ -12,6 +16,10 @@ export default function CustomCharacterExperiment() {
   const [step, setStep] = useState<Step>('setup');
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [originalImageFile, setOriginalImageFile] = useState<File | null>(null);
+  const [framing, setFraming] = useState<'full' | 'headshot'>('headshot');
+  const [cloneStatus, setCloneStatus] = useState<'idle' | 'cloning' | 'done' | 'error'>('idle');
+  const [cloneError, setCloneError] = useState<string | null>(null);
   const [characterName, setCharacterName] = useState('');
   const [characterDesc, setCharacterDesc] = useState('');
 
@@ -32,9 +40,39 @@ export default function CustomCharacterExperiment() {
   const handleImagePick = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setOriginalImageFile(file);
     setImageFile(file);
     setImagePreview(URL.createObjectURL(file));
+    setCloneStatus('idle');
+    setCloneError(null);
   }, []);
+
+  const cloneCharacter = useCallback(async () => {
+    const source = originalImageFile ?? imageFile;
+    if (!source) return;
+    setCloneStatus('cloning');
+    setCloneError(null);
+    try {
+      const fd = new FormData();
+      fd.append('image', source);
+      fd.append('framing', framing);
+      const res = await fetch('/api/character-clone', { method: 'POST', body: fd });
+      const data = await res.json() as { imageBase64?: string; mimeType?: string; error?: string };
+      if (!res.ok || !data.imageBase64) throw new Error(data.error ?? 'Character generation failed.');
+      const mime = data.mimeType || 'image/png';
+      const byteString = atob(data.imageBase64);
+      const bytes = new Uint8Array(byteString.length);
+      for (let i = 0; i < byteString.length; i++) bytes[i] = byteString.charCodeAt(i);
+      const blob = new Blob([bytes], { type: mime });
+      const cloned = new File([blob], `character-clone.${mime.includes('jpeg') ? 'jpg' : 'png'}`, { type: mime });
+      setImageFile(cloned);
+      setImagePreview(URL.createObjectURL(cloned));
+      setCloneStatus('done');
+    } catch (err) {
+      setCloneStatus('error');
+      setCloneError(err instanceof Error ? err.message : 'Character generation failed.');
+    }
+  }, [originalImageFile, imageFile, framing]);
 
   const handleVoicePick = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -106,144 +144,265 @@ export default function CustomCharacterExperiment() {
     navigate('/characters');
   }, [disconnect, navigate]);
 
+  const handleStartOver = useCallback(() => {
+    hasStartedRef.current = false;
+    setStep('setup');
+  }, []);
+
+  // ----- Setup screen ------------------------------------------------------
   if (step === 'setup') {
+    const previewReady = cloneStatus === 'done' && Boolean(imageFile) && characterName.trim().length > 0;
+    const previewDisabled = !previewReady || building;
+    const previewTitle = characterName.trim() || 'Your character';
+    const previewBody = characterDesc.trim()
+      || (cloneStatus === 'done'
+        ? 'Stylized and ready. Click the card to step inside.'
+        : 'A new face joins the cast.');
+    const previewCta = building
+      ? 'Building…'
+      : previewReady
+        ? `Talk to ${previewTitle} →`
+        : cloneStatus === 'done'
+          ? 'Give them a name to continue →'
+          : 'Stylize a photo to continue →';
+
+    const onPreviewKey = (e: KeyboardEvent<HTMLDivElement>) => {
+      if (previewDisabled) return;
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        void buildCharacter();
+      }
+    };
+
     return (
-      <div className="experiment-shell">
-        <header className="experiment-topbar">
-          <button className="btn ghost" onClick={() => navigate('/characters')}>← Back</button>
-          <h1>Custom Characters</h1>
-          <span className="exp-badge">Experiment 4</span>
-        </header>
+      <div className="atrium atrium-character-builder">
+        <AtriumNav />
 
-        <div style={{ maxWidth: 520, margin: '48px auto', padding: '0 24px' }}>
-          <h2 style={{ marginBottom: 8 }}>Build your character</h2>
-          <p style={{ color: 'rgba(231,237,246,0.5)', marginBottom: 32 }}>
-            Upload a photo, give it a name and personality, and optionally clone a voice.
-          </p>
-
-          {/* Image upload */}
-          <div className="setup-field">
-            <label className="setup-label">Character photo *</label>
-            <div
-              className="image-drop-zone"
-              onClick={() => imageInputRef.current?.click()}
-              style={{ backgroundImage: imagePreview ? `url(${imagePreview})` : undefined }}
-            >
-              {!imagePreview && <span>Click to upload photo</span>}
-            </div>
-            <input ref={imageInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImagePick} />
-          </div>
-
-          {/* Name */}
-          <div className="setup-field">
-            <label className="setup-label">Character name *</label>
-            <input
-              type="text"
-              className="exp-text-input"
-              placeholder="e.g. Alex, Mentor, Mom"
-              value={characterName}
-              onChange={(e) => setCharacterName(e.target.value)}
-              maxLength={60}
-            />
-          </div>
-
-          {/* Personality */}
-          <div className="setup-field">
-            <label className="setup-label">Personality / description</label>
-            <textarea
-              className="exp-text-input"
-              placeholder="e.g. A wise mentor who speaks in short, direct sentences. Loves asking questions back."
-              value={characterDesc}
-              onChange={(e) => setCharacterDesc(e.target.value)}
-              rows={3}
-              maxLength={400}
-              style={{ resize: 'vertical' }}
-            />
-          </div>
-
-          {/* Voice clone (optional) */}
-          <div className="setup-field">
-            <label className="setup-label">Clone a voice <span style={{ color: 'rgba(231,237,246,0.4)', fontWeight: 400 }}>(optional)</span></label>
-            <p style={{ fontSize: '0.78rem', color: 'rgba(231,237,246,0.4)', margin: '0 0 8px' }}>
-              Upload a 10–30 second audio clip. The character will speak in that voice.
+        <main className="acb-page">
+          <header className="acb-hero">
+            <span className="eyebrow">
+              <span className="eyebrow__dot" /> Wear the character
+            </span>
+            <h1>
+              Become someone <em>new.</em>
+            </h1>
+            <p className="lede">
+              Upload a photo, give them a name and personality, optionally clone a voice.
+              We'll meet them on the other side.
             </p>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <button className="exp-btn ghost" style={{ flex: 1 }} onClick={() => voiceInputRef.current?.click()}>
-                {voiceFile ? voiceFile.name : 'Choose audio file'}
-              </button>
-              <button
-                className="exp-btn primary"
-                style={{ flexShrink: 0 }}
-                disabled={!voiceFile || voiceStatus === 'cloning' || voiceStatus === 'done'}
-                onClick={cloneVoice}
-              >
-                {voiceStatus === 'cloning' ? 'Cloning…' : voiceStatus === 'done' ? '✓ Done' : 'Clone'}
-              </button>
-            </div>
-            <input ref={voiceInputRef} type="file" accept="audio/*" style={{ display: 'none' }} onChange={handleVoicePick} />
-            {voiceStatus === 'done' && <p style={{ color: '#6fcf97', fontSize: '0.8rem', margin: '6px 0 0' }}>Voice cloned successfully.</p>}
-            {voiceError && <p style={{ color: '#ff6b6b', fontSize: '0.8rem', margin: '6px 0 0' }}>{voiceError}</p>}
-            {voiceStatus !== 'done' && !voiceCloneId && (
-              <p style={{ fontSize: '0.75rem', color: 'rgba(231,237,246,0.3)', margin: '6px 0 0' }}>
-                Sign in to save this voice for future sessions.
-              </p>
-            )}
-          </div>
+          </header>
 
-          {buildError && <p style={{ color: '#ff6b6b', marginBottom: 12 }}>{buildError}</p>}
-          <button
-            className="exp-btn primary"
-            style={{ marginTop: 8, width: '100%' }}
-            disabled={!imageFile || !characterName.trim() || building}
-            onClick={buildCharacter}
-          >
-            {building ? 'Building…' : 'Create Character ✨'}
-          </button>
-        </div>
+          <div className="acb-form">
+            {/* Photo upload */}
+            <div className="acb-field">
+              <label className="acb-label">Character photo *</label>
+              <div
+                className={`acb-drop-zone${imagePreview ? ' acb-drop-zone--filled' : ''}`}
+                onClick={() => imageInputRef.current?.click()}
+                style={{ backgroundImage: imagePreview ? `url(${imagePreview})` : undefined }}
+              >
+                {!imagePreview && <span>Click to upload a photo</span>}
+              </div>
+              <input ref={imageInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImagePick} />
+            </div>
+
+            {/* Character clone (Pixar-style via Gemini) */}
+            {originalImageFile && (
+              <div className="acb-field">
+                <label className="acb-label">Stylize as 3D character</label>
+                <p className="acb-hint">Turn your photo into a Pixar-style 3D character before going live.</p>
+                <div className="acb-toggle-row">
+                  <button
+                    type="button"
+                    className={`btn btn--ghost btn--sm${framing === 'headshot' ? ' is-on' : ''}`}
+                    onClick={() => setFraming('headshot')}
+                    disabled={cloneStatus === 'cloning'}
+                  >
+                    Headshot
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn--ghost btn--sm${framing === 'full' ? ' is-on' : ''}`}
+                    onClick={() => setFraming('full')}
+                    disabled={cloneStatus === 'cloning'}
+                  >
+                    Full body
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn--primary btn--block"
+                  disabled={cloneStatus === 'cloning'}
+                  onClick={cloneCharacter}
+                >
+                  {cloneStatus === 'cloning' ? 'Generating…' : cloneStatus === 'done' ? 'Regenerate character' : 'Generate character ✨'}
+                </button>
+                {cloneStatus === 'done' && <p className="acb-note acb-note--success">Character generated. Preview updated above.</p>}
+                {cloneError && <p className="acb-note acb-note--error">{cloneError}</p>}
+              </div>
+            )}
+
+            {/* Name */}
+            <div className="acb-field">
+              <label className="acb-label">Character name *</label>
+              <input
+                type="text"
+                className="acb-input"
+                placeholder="e.g. Alex, Mentor, Mom"
+                value={characterName}
+                onChange={(e) => setCharacterName(e.target.value)}
+                maxLength={60}
+              />
+            </div>
+
+            {/* Personality */}
+            <div className="acb-field">
+              <label className="acb-label">Personality / description</label>
+              <textarea
+                className="acb-input"
+                placeholder="e.g. A wise mentor who speaks in short, direct sentences. Loves asking questions back."
+                value={characterDesc}
+                onChange={(e) => setCharacterDesc(e.target.value)}
+                rows={3}
+                maxLength={400}
+                style={{ resize: 'vertical' }}
+              />
+            </div>
+
+            {/* Voice clone (optional) */}
+            <div className="acb-field">
+              <label className="acb-label">
+                Clone a voice <span className="acb-label__optional">(optional)</span>
+              </label>
+              <p className="acb-hint">Upload a 10–30 second audio clip. The character will speak in that voice.</p>
+              <div className="acb-actions">
+                <button
+                  type="button"
+                  className="btn btn--ghost"
+                  onClick={() => voiceInputRef.current?.click()}
+                >
+                  {voiceFile ? voiceFile.name : 'Choose audio file'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--primary acb-action--fixed"
+                  disabled={!voiceFile || voiceStatus === 'cloning' || voiceStatus === 'done'}
+                  onClick={cloneVoice}
+                >
+                  {voiceStatus === 'cloning' ? 'Cloning…' : voiceStatus === 'done' ? '✓ Done' : 'Clone'}
+                </button>
+              </div>
+              <input ref={voiceInputRef} type="file" accept="audio/*" style={{ display: 'none' }} onChange={handleVoicePick} />
+              {voiceStatus === 'done' && <p className="acb-note acb-note--success">Voice cloned successfully.</p>}
+              {voiceError && <p className="acb-note acb-note--error">{voiceError}</p>}
+              {voiceStatus !== 'done' && !voiceCloneId && (
+                <p className="acb-hint">Sign in to save this voice for future sessions.</p>
+              )}
+            </div>
+
+            {/* Generated character preview — cast-card style, acts as the primary CTA */}
+            <div className="acb-preview-wrap">
+              <div
+                className="acb-preview"
+                role="button"
+                tabIndex={previewDisabled ? -1 : 0}
+                aria-disabled={previewDisabled}
+                onClick={() => { if (!previewDisabled) void buildCharacter(); }}
+                onKeyDown={onPreviewKey}
+              >
+                <div className={`acb-preview__photo${imagePreview ? '' : ' acb-preview__photo--empty'}`}>
+                  {imagePreview ? (
+                    <img src={imagePreview} alt={previewTitle} />
+                  ) : (
+                    <span>Your character preview appears here</span>
+                  )}
+                </div>
+                <div className="acb-preview__meta">
+                  <h3>{previewTitle}</h3>
+                  <p>{previewBody}</p>
+                </div>
+                <span className="acb-preview__cta">{previewCta}</span>
+              </div>
+              {buildError && <p className="acb-note acb-note--error">{buildError}</p>}
+            </div>
+          </div>
+        </main>
+
+        <AtriumFooter />
       </div>
     );
   }
 
-  // Live character view
+  // ----- Live screen -------------------------------------------------------
+  const statusVariant =
+    status === 'streaming' ? 'live'
+      : status === 'error' ? 'error'
+        : 'connecting';
+  const statusText =
+    status === 'idle' || status === 'connecting' ? `Bringing ${characterName} to life…`
+      : status === 'ready' ? 'Stream ready — starting…'
+        : status === 'streaming' ? `${characterName} is live.`
+          : status === 'error' ? `Error: ${error}`
+            : status;
+
   return (
-    <div className="experiment-shell">
-      <header className="experiment-topbar">
-        <button className="btn ghost" onClick={handleBack}>← Back</button>
-        <h1>{characterName}</h1>
-        <span className="exp-badge">Experiment 4</span>
-      </header>
+    <div className="atrium atrium-character-live">
+      <AtriumNav />
 
-      <div className="experiment-body">
-        <div className="experiment-video-panel">
-          <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-        </div>
+      <div className="acb-live-header">
+        <button type="button" className="btn btn--ghost btn--sm" onClick={handleBack}>
+          ← Back to the cast
+        </button>
+        <span className="eyebrow">
+          <span className="eyebrow__dot" /> Live
+        </span>
+      </div>
 
-        <aside className="experiment-side-panel">
-          <div className="experiment-status">
-            {status === 'idle' || status === 'connecting' ? `Bringing ${characterName} to life…` :
-             status === 'ready'     ? 'Stream ready — starting…' :
-             status === 'streaming' ? `${characterName} is live.` :
-             status === 'error'     ? `Error: ${error}` : status}
+      <main className="acb-stage">
+        <section>
+          <div className="acb-stage__video">
+            <video ref={videoRef} autoPlay playsInline muted />
+          </div>
+          <h2 className="acb-stage__title">{characterName}</h2>
+        </section>
+
+        <aside className="acb-panel">
+          <div className={`acb-status acb-status--${statusVariant}`}>
+            <span className="acb-status__dot" />
+            <span>{statusText}</span>
           </div>
 
-          <div className="exp-prompt-row">
+          <div className="acb-prompt-row">
             <input
               type="text"
-              className="exp-text-input"
+              className="acb-input"
               placeholder={`Say something to ${characterName}…`}
               value={promptText}
               onChange={(e) => setPromptText(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') void handleSend(); }}
               disabled={status !== 'streaming'}
             />
-            <button className="exp-btn primary" onClick={handleSend} disabled={status !== 'streaming'}>Send</button>
+            <button
+              type="button"
+              className="btn btn--primary btn--sm"
+              onClick={handleSend}
+              disabled={status !== 'streaming'}
+            >
+              Send
+            </button>
           </div>
 
-          <button className="exp-btn ghost" onClick={() => { hasStartedRef.current = false; setStep('setup'); }}>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm btn--block"
+            onClick={handleStartOver}
+          >
             Start over
           </button>
         </aside>
-      </div>
+      </main>
+
+      <AtriumFooter />
     </div>
   );
 }

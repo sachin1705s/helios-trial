@@ -2296,8 +2296,8 @@ textarea.exp-text-input { font-family: inherit; }
 .image-drop-zone {
   width: 100%;
   aspect-ratio: 1;
-  max-height: 200px;
-  background: rgba(255, 255, 255, 0.04);
+  max-height: 420px;
+  background-color: rgba(255, 255, 255, 0.04);
   border: 2px dashed rgba(255, 255, 255, 0.12);
   border-radius: 12px;
   display: flex;
@@ -2306,7 +2306,8 @@ textarea.exp-text-input { font-family: inherit; }
   cursor: pointer;
   color: rgba(231, 237, 246, 0.35);
   font-size: 0.85rem;
-  background-size: cover;
+  background-size: contain;
+  background-repeat: no-repeat;
   background-position: center;
   overflow: hidden;
   transition: border-color 0.15s;

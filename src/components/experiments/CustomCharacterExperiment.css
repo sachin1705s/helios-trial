@@ -1,0 +1,385 @@
+/* ========================================================================
+   Custom Character builder + live screen
+   Atrium-scoped — paper/ink/moss/clay palette, Fraunces display + Inter body.
+   All rules nested under .atrium .atrium-character-builder
+   or .atrium .atrium-character-live so they never leak.
+   ======================================================================== */
+
+/* ----- shared page layout ------------------------------------------------ */
+
+.atrium .acb-page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 32px 24px 96px;
+}
+.atrium-character-builder .acb-hero {
+  padding: clamp(40px, 6vw, 80px) 0 32px;
+}
+.atrium-character-builder .acb-hero h1 {
+  font-size: clamp(48px, 6vw, 88px);
+  line-height: 0.96;
+  margin: 16px 0;
+}
+.atrium-character-builder .acb-hero .lede {
+  max-width: 56ch;
+}
+
+/* ----- form card --------------------------------------------------------- */
+
+.atrium-character-builder .acb-form {
+  background: var(--paper);
+  border: 1px solid rgba(20, 40, 38, 0.08);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.atrium-character-builder .acb-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.atrium-character-builder .acb-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--moss);
+}
+.atrium-character-builder .acb-label__optional {
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  color: var(--ink-mute);
+  text-transform: none;
+  font-size: 12px;
+}
+.atrium-character-builder .acb-hint {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-mute);
+  margin: 0;
+}
+.atrium-character-builder .acb-note {
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+}
+.atrium-character-builder .acb-note--success { color: var(--moss); }
+.atrium-character-builder .acb-note--error   { color: var(--clay); }
+
+/* ----- drop zone --------------------------------------------------------- */
+
+.atrium-character-builder .acb-drop-zone {
+  aspect-ratio: 16 / 11;
+  background-color: var(--paper-edge);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  border: 2px dashed rgba(47, 94, 72, 0.32);
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-mute);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.3s var(--ease), background-color 0.3s var(--ease);
+}
+.atrium-character-builder .acb-drop-zone:hover {
+  border-color: var(--moss);
+  background-color: var(--mist);
+}
+.atrium-character-builder .acb-drop-zone--filled {
+  border-style: solid;
+  border-color: rgba(20, 40, 38, 0.12);
+}
+
+/* ----- inputs ------------------------------------------------------------ */
+
+.atrium-character-builder .acb-input {
+  width: 100%;
+  background: var(--paper-edge);
+  border: 1px solid rgba(20, 40, 38, 0.18);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  font-family: var(--body);
+  font-size: 15px;
+  color: var(--ink);
+  transition: border-color 0.25s var(--ease), box-shadow 0.25s var(--ease);
+}
+.atrium-character-builder .acb-input::placeholder {
+  color: var(--ink-mute);
+}
+.atrium-character-builder .acb-input:focus {
+  outline: none;
+  border-color: var(--moss);
+  box-shadow: 0 0 0 3px rgba(47, 94, 72, 0.12);
+}
+.atrium-character-builder .acb-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* ----- framing toggle ---------------------------------------------------- */
+
+.atrium-character-builder .acb-toggle-row {
+  display: flex;
+  gap: 10px;
+}
+.atrium-character-builder .acb-toggle-row > .btn {
+  flex: 1;
+  justify-content: center;
+}
+.atrium-character-builder .btn--ghost.is-on {
+  background: rgba(47, 94, 72, 0.08);
+  border-color: var(--moss);
+  color: var(--moss-deep);
+}
+
+.atrium-character-builder .acb-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.atrium-character-builder .acb-actions > .btn { flex: 1; justify-content: center; }
+.atrium-character-builder .acb-actions > .btn.acb-action--fixed { flex: 0 0 auto; }
+
+.atrium-character-builder .btn--block {
+  width: 100%;
+  justify-content: center;
+}
+
+/* ----- generated character preview (mirrors .cast__card) ----------------- */
+
+.atrium-character-builder .acb-preview-wrap {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.atrium-character-builder .acb-preview {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  border: 1px solid rgba(20, 40, 38, 0.08);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  text-align: left;
+  font-family: var(--body);
+  cursor: pointer;
+  transition: transform 0.5s var(--ease), border-color 0.5s, box-shadow 0.5s;
+}
+.atrium-character-builder .acb-preview:hover,
+.atrium-character-builder .acb-preview:focus-visible {
+  transform: translateY(-4px);
+  border-color: rgba(47, 94, 72, 0.32);
+  box-shadow: var(--shadow-md);
+  outline: none;
+}
+.atrium-character-builder .acb-preview[aria-disabled='true'] {
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: var(--shadow-sm);
+  border-style: dashed;
+  border-color: rgba(20, 40, 38, 0.14);
+  background: var(--paper-edge);
+}
+.atrium-character-builder .acb-preview[aria-disabled='true']:hover {
+  transform: none;
+  border-color: rgba(20, 40, 38, 0.14);
+  box-shadow: var(--shadow-sm);
+}
+
+.atrium-character-builder .acb-preview__photo {
+  aspect-ratio: 16 / 11;
+  overflow: hidden;
+  background: var(--night-soft);
+}
+.atrium-character-builder .acb-preview__photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 1.2s var(--ease);
+}
+.atrium-character-builder .acb-preview:hover .acb-preview__photo img {
+  transform: scale(1.04);
+}
+.atrium-character-builder .acb-preview__photo--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-mute);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.atrium-character-builder .acb-preview__meta {
+  padding: 22px 24px 6px;
+}
+.atrium-character-builder .acb-preview__meta h3 {
+  font-family: var(--display);
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 1.1;
+  margin: 6px 0 10px;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.atrium-character-builder .acb-preview__meta p {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+  margin: 0;
+}
+
+.atrium-character-builder .acb-preview__cta {
+  margin: 18px 24px 22px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--clay);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: gap 0.3s var(--ease);
+}
+.atrium-character-builder .acb-preview:hover .acb-preview__cta { gap: 10px; }
+.atrium-character-builder .acb-preview[aria-disabled='true'] .acb-preview__cta {
+  color: var(--ink-mute);
+}
+
+/* ========================================================================
+   Live screen
+   ======================================================================== */
+
+.atrium-character-live .acb-live-header {
+  max-width: 1080px;
+  margin: 16px auto 0;
+  padding: 0 clamp(20px, 5vw, 64px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.atrium-character-live .acb-live-header .eyebrow {
+  margin-left: auto;
+}
+
+.atrium-character-live .acb-stage {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 24px clamp(20px, 5vw, 64px) 96px;
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  gap: 24px;
+  align-items: start;
+}
+@media (max-width: 1024px) {
+  .atrium-character-live .acb-stage { grid-template-columns: 1fr; }
+}
+
+.atrium-character-live .acb-stage__video {
+  position: relative;
+  aspect-ratio: 16 / 11;
+  background: var(--paper-edge);
+  border: 1px solid rgba(20, 40, 38, 0.08);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-md);
+}
+.atrium-character-live .acb-stage__video video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  background: var(--night-soft);
+}
+.atrium-character-live .acb-stage__title {
+  font-family: var(--display);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  font-size: clamp(28px, 3.2vw, 40px);
+  line-height: 1.05;
+  margin: 18px 0 0;
+  color: var(--ink);
+}
+
+.atrium-character-live .acb-panel {
+  background: var(--paper);
+  border: 1px solid rgba(20, 40, 38, 0.08);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.atrium-character-live .acb-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  font-weight: 500;
+}
+.atrium-character-live .acb-status__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--moss);
+  box-shadow: 0 0 0 4px rgba(47, 94, 72, 0.16);
+}
+.atrium-character-live .acb-status--connecting .acb-status__dot {
+  background: var(--sun);
+  box-shadow: 0 0 0 4px rgba(240, 181, 70, 0.18);
+  animation: acb-pulse 1.6s var(--ease) infinite;
+}
+.atrium-character-live .acb-status--error .acb-status__dot {
+  background: var(--clay);
+  box-shadow: 0 0 0 4px rgba(217, 73, 43, 0.18);
+}
+.atrium-character-live .acb-status--error {
+  color: var(--clay);
+}
+@keyframes acb-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(240, 181, 70, 0.18); }
+  50%      { box-shadow: 0 0 0 8px rgba(240, 181, 70, 0.06); }
+}
+
+.atrium-character-live .acb-prompt-row {
+  display: flex;
+  gap: 8px;
+}
+.atrium-character-live .acb-prompt-row .acb-input {
+  flex: 1;
+  width: auto;
+  background: var(--paper-edge);
+  border: 1px solid rgba(20, 40, 38, 0.18);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  font-family: var(--body);
+  font-size: 14px;
+  color: var(--ink);
+  transition: border-color 0.25s var(--ease), box-shadow 0.25s var(--ease);
+}
+.atrium-character-live .acb-prompt-row .acb-input::placeholder { color: var(--ink-mute); }
+.atrium-character-live .acb-prompt-row .acb-input:focus {
+  outline: none;
+  border-color: var(--moss);
+  box-shadow: 0 0 0 3px rgba(47, 94, 72, 0.12);
+}
+.atrium-character-live .acb-prompt-row .acb-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.atrium-character-live .btn.btn--block { width: 100%; justify-content: center; }

@@ -603,6 +603,65 @@ app.post('/api/animate-drawings/stylize', imageGenLimiter, aiLimiter, imageUploa
   }
 });
 
+// ─── Character Clone — Pixar-style portrait via Gemini 2.5 Flash Image ──────
+
+const CHARACTER_CLONE_BASE_STYLE =
+  'rendered as a high-end 3D stylized character, Disney-Pixar animation style, large expressive eyes, exaggerated friendly features, caricature proportions with a slightly oversized head, hyper-detailed hair grooming, realistic fabric textures on clothes, sub-surface scattering on skin for a soft glow, Octane Render, 8k, volumetric studio lighting, clean solid neutral background, masterpiece, 3D clay-sculpted aesthetic';
+
+const buildCharacterClonePrompt = (framing) => {
+  const subject = '[Description of person and clothing from photo]';
+  if (framing === 'headshot') {
+    return `${subject}, facing straight with a relaxed friendly expression, ${CHARACTER_CLONE_BASE_STYLE}, headshot portrait framing, head and shoulders only, centered face, no body below the chest visible.`;
+  }
+  return `${subject}, standing straight with a normal, facing straight, relaxed body posture and both hands clearly out of their pockets, ${CHARACTER_CLONE_BASE_STYLE}, full body shot, entire figure visible from head to toe.`;
+};
+
+app.post('/api/character-clone', imageGenLimiter, aiLimiter, imageUpload.single('image'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Missing image file.' });
+  const ai = getAiClient();
+  if (!ai) return res.status(503).json({ error: 'AI service unavailable.' });
+
+  const mimeType = req.file.mimetype || 'image/jpeg';
+  const base64 = req.file.buffer.toString('base64');
+  const framing = String(req.body?.framing || '').trim().toLowerCase() === 'headshot' ? 'headshot' : 'full';
+  const prompt = buildCharacterClonePrompt(framing);
+
+  const MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-2.5-flash-image';
+  const MAX_RETRIES = 2;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model: MODEL,
+        contents: [{ role: 'user', parts: [{ inlineData: { mimeType, data: base64 } }, { text: prompt }] }],
+      });
+
+      const parts = response?.candidates?.[0]?.content?.parts || [];
+      const imagePart = parts.find((p) => p.inlineData?.data);
+      if (!imagePart?.inlineData?.data) {
+        return res.status(500).json({ error: 'No image returned from AI.' });
+      }
+      return res.json({
+        imageBase64: imagePart.inlineData.data,
+        mimeType: imagePart.inlineData.mimeType || 'image/png',
+        framing,
+      });
+    } catch (err) {
+      const status = err?.status ?? err?.response?.status;
+      const isRetryable = status === 503 || status === 429;
+      if (isRetryable && attempt < MAX_RETRIES) {
+        await new Promise((r) => setTimeout(r, (attempt + 1) * 3000));
+        continue;
+      }
+      console.error('[character-clone] error:', err?.message || err);
+      const message = isRetryable
+        ? 'The image service is busy right now. Please try again in a moment.'
+        : 'Character generation failed. Please try again.';
+      return res.status(500).json({ error: message });
+    }
+  }
+});
+
 app.get('/api/config', (_req, res) => {
   if (isProduction) {
     return res.status(404).json({ error: 'Not found.' });
