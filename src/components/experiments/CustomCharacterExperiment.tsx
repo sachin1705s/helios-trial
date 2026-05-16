@@ -21,6 +21,7 @@ const PRESET_VOICES: Record<Exclude<VoiceMode, 'clone'>, { id: string; label: st
 // Vercel serverless functions cap request bodies around 4.5 MB. Reject anything
 // bigger client-side so users get a clear message instead of a network failure.
 const VOICE_MAX_BYTES = 4 * 1024 * 1024;
+const IMAGE_MAX_BYTES = 4 * 1024 * 1024;
 
 // Voice clones with under ~15s of audio are unreliable — Smallest itself recommends
 // 15–30s. Enforce that as a hard floor for live recordings.
@@ -87,7 +88,10 @@ export default function CustomCharacterExperiment() {
     setImageFile(file);
     setImagePreview(URL.createObjectURL(file));
     setCloneStatus('idle');
-    setCloneError(null);
+    // Warn ahead of time if the photo will be rejected by the server's body limit.
+    setCloneError(file.size > IMAGE_MAX_BYTES
+      ? `That photo is ${(file.size / 1024 / 1024).toFixed(1)} MB. Resize to under ${IMAGE_MAX_BYTES / 1024 / 1024} MB before generating — try a smaller export or a JPEG.`
+      : null);
   }, []);
 
   const cloneCharacter = useCallback(async () => {
@@ -97,17 +101,25 @@ export default function CustomCharacterExperiment() {
       setCloneStatus('error');
       return;
     }
+    if (source.size > IMAGE_MAX_BYTES) {
+      setCloneStatus('error');
+      setCloneError(`That photo is ${(source.size / 1024 / 1024).toFixed(1)} MB. Resize to under ${IMAGE_MAX_BYTES / 1024 / 1024} MB before generating.`);
+      return;
+    }
     setCloneStatus('cloning');
     setCloneError(null);
+    const t0 = Date.now();
     try {
       const fd = new FormData();
       fd.append('image', source);
       fd.append('framing', framing);
       const res = await fetch('/api/character-clone', { method: 'POST', body: fd });
-      let data: { imageBase64?: string; mimeType?: string; error?: string; details?: string } = {};
+      let data: { imageBase64?: string; mimeType?: string; error?: string; details?: string; upstreamStatus?: number; aborted?: boolean } = {};
       try { data = await res.json(); } catch { /* non-JSON */ }
       if (!res.ok || !data.imageBase64) {
-        throw new Error(data.error ?? `Character generation failed (HTTP ${res.status})`);
+        const detail = data.details ? ` — ${data.details.slice(0, 160)}` : '';
+        const sizeMsg = res.status === 413 ? ' (file too large for the server)' : '';
+        throw new Error((data.error ?? `Character generation failed (HTTP ${res.status})${sizeMsg}`) + detail);
       }
       const mime = data.mimeType || 'image/png';
       const byteString = atob(data.imageBase64);
@@ -118,10 +130,13 @@ export default function CustomCharacterExperiment() {
       setImageFile(cloned);
       setImagePreview(URL.createObjectURL(cloned));
       setCloneStatus('done');
+      console.log('[character-clone] success in', Date.now() - t0, 'ms');
     } catch (err) {
       setCloneStatus('error');
       if (err instanceof TypeError) {
-        setCloneError("Couldn't reach the image service. Check your connection and try again.");
+        // Most likely Vercel killed the function past 60s, or the request body
+        // was rejected at the platform edge. Tell the user what to actually try.
+        setCloneError(`The image service didn't respond in time (took >${Math.round((Date.now() - t0) / 1000)}s). Try again with a smaller photo, or wait a moment — Gemini may be overloaded.`);
       } else {
         setCloneError(err instanceof Error ? err.message : 'Character generation failed.');
       }

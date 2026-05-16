@@ -650,7 +650,15 @@ const buildCharacterClonePrompt = (framing) => {
   return `${subject}, standing straight with a normal, facing straight, relaxed body posture and both hands clearly out of their pockets, ${CHARACTER_CLONE_BASE_STYLE}, full body shot, entire figure visible from head to toe.`;
 };
 
+// Hard ceiling for character-clone. Each Gemini image generation takes 15–30s,
+// so one retry pushes the worst case past Vercel's 60s function ceiling. When
+// that happens Vercel kills the function silently — the browser sees the
+// dropped connection as `TypeError: Failed to fetch` with no upstream detail.
+// We bound the total wall clock here so we always return a real response.
+const CHARACTER_CLONE_BUDGET_MS = 50000;
+
 app.post('/api/character-clone', imageGenLimiter, aiLimiter, imageUpload.single('image'), async (req, res) => {
+  const startedAt = Date.now();
   if (!req.file) return res.status(400).json({ error: 'Missing image file.' });
   const ai = getAiClient();
   if (!ai) return res.status(503).json({ error: 'AI service unavailable.' });
@@ -661,39 +669,85 @@ app.post('/api/character-clone', imageGenLimiter, aiLimiter, imageUpload.single(
   const prompt = buildCharacterClonePrompt(framing);
 
   const MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-2.5-flash-image';
+  console.log('[character-clone] in:', req.file.size, 'bytes |', mimeType, '|', framing, '| model:', MODEL);
+
+  // Only retry on 503 (transient overload). 429 means we're rate-limited —
+  // retrying just burns budget and still returns the same error. Tighten the
+  // backoff so two attempts fit comfortably under the budget.
   const MAX_RETRIES = 2;
+  const BACKOFF_MS = [0, 2000, 4000]; // attempt 0 immediate, 1 after 2s, 2 after 4s
+  let lastError = null;
+  let lastStatus = null;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (BACKOFF_MS[attempt]) await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt]));
+    const remaining = CHARACTER_CLONE_BUDGET_MS - (Date.now() - startedAt);
+    if (remaining < 6000) {
+      console.warn('[character-clone] giving up — only', remaining, 'ms left in budget');
+      break;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), remaining - 1500);
     try {
       const response = await ai.models.generateContent({
         model: MODEL,
         contents: [{ role: 'user', parts: [{ inlineData: { mimeType, data: base64 } }, { text: prompt }] }],
+        config: { abortSignal: controller.signal },
       });
 
       const parts = response?.candidates?.[0]?.content?.parts || [];
       const imagePart = parts.find((p) => p.inlineData?.data);
       if (!imagePart?.inlineData?.data) {
-        return res.status(500).json({ error: 'No image returned from AI.' });
+        return res.status(502).json({
+          error: 'No image returned from the model.',
+          details: 'Gemini responded but no image part was present. The prompt may have been refused.',
+          elapsedMs: Date.now() - startedAt,
+        });
       }
+      console.log('[character-clone] OK in', Date.now() - startedAt, 'ms');
       return res.json({
         imageBase64: imagePart.inlineData.data,
         mimeType: imagePart.inlineData.mimeType || 'image/png',
         framing,
+        elapsedMs: Date.now() - startedAt,
       });
     } catch (err) {
-      const status = err?.status ?? err?.response?.status;
-      const isRetryable = status === 503 || status === 429;
-      if (isRetryable && attempt < MAX_RETRIES) {
-        await new Promise((r) => setTimeout(r, (attempt + 1) * 3000));
-        continue;
-      }
-      console.error('[character-clone] error:', err?.message || err);
-      const message = isRetryable
-        ? 'The image service is busy right now. Please try again in a moment.'
-        : 'Character generation failed. Please try again.';
-      return res.status(500).json({ error: message });
+      const status = err?.status ?? err?.response?.status ?? null;
+      const aborted = err?.name === 'AbortError' || controller.signal.aborted;
+      lastError = err;
+      lastStatus = status;
+      console.error('[character-clone] attempt', attempt, '→', aborted ? 'ABORT' : (status ?? 'NET'), '—', err?.message || err);
+
+      if (aborted) break;                    // No point retrying once we've blown the budget
+      if (status === 429) break;             // Rate limited — retry just returns 429 again
+      if (status && status >= 400 && status < 500 && status !== 503) break; // Other 4xx — not retryable
+      if (attempt >= MAX_RETRIES) break;
+    } finally {
+      clearTimeout(timer);
     }
   }
+
+  // Translate the last error into a user-actionable message + machine-readable details.
+  const aborted = lastError?.name === 'AbortError';
+  let userMessage = 'Character generation failed.';
+  if (aborted) {
+    userMessage = 'Character generation took too long. Try a smaller photo, or try again in a moment.';
+  } else if (lastStatus === 429) {
+    userMessage = lastError?.message || "You've used your free generations for today. Come back tomorrow.";
+  } else if (lastStatus === 503) {
+    userMessage = 'The image service is busy right now. Please try again in a moment.';
+  } else if (lastError?.message) {
+    userMessage = lastError.message;
+  }
+
+  return res.status(lastStatus === 429 ? 429 : 502).json({
+    error: userMessage,
+    details: String(lastError?.message ?? lastError ?? 'unknown').slice(0, 400),
+    upstreamStatus: lastStatus,
+    aborted,
+    elapsedMs: Date.now() - startedAt,
+  });
 });
 
 app.get('/api/config', (_req, res) => {
