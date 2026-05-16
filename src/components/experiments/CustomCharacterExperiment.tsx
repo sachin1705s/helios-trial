@@ -206,18 +206,23 @@ export default function CustomCharacterExperiment() {
     } catch (err) {
       setCloneStatus('error');
       const elapsedSec = Math.round((Date.now() - t0) / 1000);
+      const sizeMB = source.size / 1024 / 1024;
+      const sizeNote = sizeMB >= 3
+        ? ` Your photo is ${sizeMB.toFixed(1)} MB — Vercel may have rejected it at the edge (cap is ~4.5 MB). Try a smaller file.`
+        : '';
       if (err instanceof TypeError) {
-        // fetch threw — no HTTP response at all. We DON'T know that the server
-        // timed out, so don't say "took too long" unless it actually did.
+        // fetch threw — no HTTP response at all. We DON'T know what killed it
+        // so we report what we do know (elapsed, online state, file size).
         if (typeof navigator !== 'undefined' && navigator.onLine === false) {
           setCloneError("You're offline. Reconnect to Wi-Fi or cellular and try again.");
         } else if (elapsedSec >= 55) {
-          setCloneError(`The image service didn't respond before the request timed out (${elapsedSec}s). Wait a moment and try again — Gemini may be overloaded.`);
+          setCloneError(`The image service didn't respond before the request timed out (${elapsedSec}s). Wait a moment and try again — Gemini may be overloaded.${sizeNote}`);
         } else if (elapsedSec <= 5) {
-          setCloneError(`The request was dropped before reaching the server (${elapsedSec}s). This usually means a network blip — try again.`);
+          setCloneError(`The request was dropped before reaching the server (${elapsedSec}s, photo ${sizeMB.toFixed(1)} MB). Likely a network blip — try again.${sizeNote}`);
         } else {
-          setCloneError(`The connection dropped while sending your photo (${elapsedSec}s). Try again, or check your network.`);
+          setCloneError(`The connection dropped while sending your ${sizeMB.toFixed(1)} MB photo (${elapsedSec}s). Try again, or check your network.${sizeNote}`);
         }
+        console.warn('[character-clone] fetch failed:', { elapsedSec, sizeMB, online: typeof navigator !== 'undefined' ? navigator.onLine : null, err });
       } else {
         setCloneError(err instanceof Error ? err.message : 'Character generation failed.');
       }

@@ -2587,17 +2587,38 @@ ${turnsText}`;
 });
 
 // ─── Global error handler ─────────────────────────────────────────────────────
+// Every error that reaches this handler is a bug in our code or a misbehaving
+// middleware. We log it with the request path so it's findable in Vercel logs,
+// and we ALWAYS surface `details` + `code` to the client. The previous version
+// returned bare {error:'Internal server error.'} which left users staring at
+// "HTTP 500" with no signal whether to retry, file a bug, or just wait.
 app.use((err, req, res, _next) => {
+  const code = err?.code || err?.name || 'UNKNOWN';
+  const path = req.originalUrl || req.url || '?';
+  console.error('[server] error on', req.method, path, '|', code, '|', err?.message || err);
+
   if (err?.code === 'LIMIT_FILE_SIZE') {
-    return res.status(413).json({ error: 'File too large. Maximum size is 20 MB.' });
+    return res.status(413).json({
+      error: 'File too large.',
+      details: `Multer rejected the upload. limit=${err.limit ?? '?'} field=${err.field ?? '?'}`,
+      code,
+    });
   }
-  if (err?.code?.startsWith('LIMIT_')) {
-    return res.status(400).json({ error: 'Upload rejected: ' + err.message });
+  if (err?.code?.startsWith?.('LIMIT_')) {
+    return res.status(400).json({
+      error: 'Upload rejected.',
+      details: err.message || code,
+      code,
+    });
   }
-  console.error('[server] unhandled error:', err?.message || err);
-  if (!res.headersSent) {
-    res.status(500).json({ error: 'Internal server error.' });
-  }
+  if (res.headersSent) return; // can't recover — response already in flight
+
+  res.status(500).json({
+    error: 'Server error.',
+    details: (err?.message ?? String(err) ?? 'unknown').slice(0, 400),
+    code,
+    path,
+  });
 });
 
 // ─── Process-level crash guards ───────────────────────────────────────────────
