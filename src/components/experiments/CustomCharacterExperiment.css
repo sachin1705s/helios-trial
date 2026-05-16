@@ -132,10 +132,16 @@
 .atrium-character-builder .acb-toggle-row {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
 }
 .atrium-character-builder .acb-toggle-row > .btn {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
   justify-content: center;
+}
+.atrium-character-builder .acb-toggle-row--three > .btn {
+  flex: 1 1 calc(33.333% - 7px);
+  min-width: 130px;
 }
 .atrium-character-builder .btn--ghost.is-on {
   background: rgba(47, 94, 72, 0.08);

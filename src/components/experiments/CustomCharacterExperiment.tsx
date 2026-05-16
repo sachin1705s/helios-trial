@@ -8,6 +8,18 @@ import '../../demo/atrium/Atrium.css';
 import './CustomCharacterExperiment.css';
 
 type Step = 'setup' | 'live';
+type VoiceMode = 'preset-male' | 'preset-female' | 'clone';
+
+// Smallest.ai preset voice IDs — same provider used by every other character on the site.
+// `magnus` is the platform default fallback (see server/api/character/tts).
+const PRESET_VOICES: Record<Exclude<VoiceMode, 'clone'>, { id: string; label: string }> = {
+  'preset-male':   { id: 'magnus', label: 'Male voice' },
+  'preset-female': { id: 'aanya',  label: 'Female voice' },
+};
+
+// Vercel serverless functions cap request bodies around 4.5 MB. Reject anything
+// bigger client-side so users get a clear message instead of a network failure.
+const VOICE_MAX_BYTES = 4 * 1024 * 1024;
 
 export default function CustomCharacterExperiment() {
   const navigate = useNavigate();
@@ -23,11 +35,18 @@ export default function CustomCharacterExperiment() {
   const [characterName, setCharacterName] = useState('');
   const [characterDesc, setCharacterDesc] = useState('');
 
-  // Voice clone state
+  // Voice selection — default to the male preset so users aren't blocked if cloning fails.
+  const [voiceMode, setVoiceMode] = useState<VoiceMode>('preset-male');
   const [voiceFile, setVoiceFile] = useState<File | null>(null);
   const [voiceCloneId, setVoiceCloneId] = useState<string | null>(null);
   const [voiceStatus, setVoiceStatus] = useState<'idle' | 'cloning' | 'done' | 'error'>('idle');
   const [voiceError, setVoiceError] = useState<string | null>(null);
+
+  // Resolved voice id that will speak as the character — cloned (if successful) or a preset.
+  const resolvedVoiceId =
+    voiceMode === 'clone' && voiceCloneId ? voiceCloneId
+      : voiceMode === 'preset-female' ? PRESET_VOICES['preset-female'].id
+        : PRESET_VOICES['preset-male'].id;
 
   const [building, setBuilding] = useState(false);
   const [buildError, setBuildError] = useState<string | null>(null);
@@ -77,11 +96,22 @@ export default function CustomCharacterExperiment() {
   const handleVoicePick = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    // Reset prior clone results when a new file is chosen.
     setVoiceFile(file);
+    setVoiceCloneId(null);
+    setVoiceStatus('idle');
+    setVoiceError(file.size > VOICE_MAX_BYTES
+      ? `That file is ${(file.size / 1024 / 1024).toFixed(1)} MB. Pick a clip under ${VOICE_MAX_BYTES / 1024 / 1024} MB or use a preset voice.`
+      : null);
   }, []);
 
   const cloneVoice = useCallback(async () => {
     if (!voiceFile) return;
+    if (voiceFile.size > VOICE_MAX_BYTES) {
+      setVoiceStatus('error');
+      setVoiceError(`That file is ${(voiceFile.size / 1024 / 1024).toFixed(1)} MB. Pick a clip under ${VOICE_MAX_BYTES / 1024 / 1024} MB or use a preset voice.`);
+      return;
+    }
     setVoiceStatus('cloning');
     setVoiceError(null);
     try {
@@ -94,16 +124,46 @@ export default function CustomCharacterExperiment() {
       const token = sessionResult?.data.session?.access_token;
       const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
 
-      const res = await fetch('/api/voice-clone', { method: 'POST', headers, body: fd });
-      const data = await res.json() as { voiceId?: string; error?: string };
-      if (!res.ok || !data.voiceId) throw new Error(data.error ?? 'Voice clone failed.');
+      let res: Response;
+      try {
+        res = await fetch('/api/voice-clone', { method: 'POST', headers, body: fd });
+      } catch (networkErr) {
+        // TypeError from fetch — network failure, CORS block, or server didn't respond.
+        // Fall back to the preset voice silently so the user is never blocked.
+        setVoiceStatus('error');
+        setVoiceError("Couldn't reach the voice service. Pick a preset voice above, or try again in a moment.");
+        if (voiceMode === 'clone') setVoiceMode('preset-male');
+        console.warn('[voice-clone] network error:', networkErr);
+        return;
+      }
+
+      let data: { voiceId?: string; error?: string } = {};
+      try {
+        data = await res.json() as { voiceId?: string; error?: string };
+      } catch {
+        // Non-JSON response (e.g. Vercel 413, gateway timeout HTML).
+      }
+
+      if (!res.ok || !data.voiceId) {
+        const sizeMsg = res.status === 413 ? ' (file too large)' : '';
+        throw new Error((data.error ?? `Voice clone failed (HTTP ${res.status})${sizeMsg}`));
+      }
       setVoiceCloneId(data.voiceId);
       setVoiceStatus('done');
     } catch (err) {
       setVoiceStatus('error');
       setVoiceError(err instanceof Error ? err.message : 'Voice clone failed.');
     }
-  }, [voiceFile, characterName]);
+  }, [voiceFile, characterName, voiceMode]);
+
+  const selectVoicePreset = useCallback((mode: VoiceMode) => {
+    setVoiceMode(mode);
+    if (mode !== 'clone') {
+      // Switching to a preset clears any in-flight clone error — the user is unblocked.
+      setVoiceError(null);
+      if (voiceStatus === 'error') setVoiceStatus('idle');
+    }
+  }, [voiceStatus]);
 
   const buildCharacter = useCallback(async () => {
     if (!imageFile || !characterName.trim()) { setBuildError('Image and name are required.'); return; }
@@ -125,8 +185,11 @@ export default function CustomCharacterExperiment() {
       characterDesc ? `Personality: ${characterDesc}` : '',
       'Keep every reply under 30 words. Stay in character.',
     ].filter(Boolean).join(' ');
+    // Voice id is resolved here so it's ready to plumb into the TTS leg when
+    // the team wires the cloned voice path. Logging now keeps it visible in dev.
+    console.log('[wear-the-character] voice id selected:', resolvedVoiceId, '(mode:', voiceMode, ')');
     await startStream({ image: imageFile, prompt: systemPrompt, portrait: true });
-  }, [status, imageFile, characterName, characterDesc, startStream]);
+  }, [status, imageFile, characterName, characterDesc, startStream, resolvedVoiceId, voiceMode]);
 
   // Trigger startLiveStream when conditions are met
   const startLiveRef = useRef(startLiveStream);
@@ -235,7 +298,7 @@ export default function CustomCharacterExperiment() {
                   disabled={cloneStatus === 'cloning'}
                   onClick={cloneCharacter}
                 >
-                  {cloneStatus === 'cloning' ? 'Generating…' : cloneStatus === 'done' ? 'Regenerate character' : 'Generate character ✨'}
+                  {cloneStatus === 'cloning' ? 'Generating…' : cloneStatus === 'done' ? 'Regenerate character' : 'Generate character'}
                 </button>
                 {cloneStatus === 'done' && <p className="acb-note acb-note--success">Character generated. Preview updated above.</p>}
                 {cloneError && <p className="acb-note acb-note--error">{cloneError}</p>}
@@ -269,34 +332,64 @@ export default function CustomCharacterExperiment() {
               />
             </div>
 
-            {/* Voice clone (optional) */}
+            {/* Voice — pick a preset or clone your own */}
             <div className="acb-field">
-              <label className="acb-label">
-                Clone a voice <span className="acb-label__optional">(optional)</span>
-              </label>
-              <p className="acb-hint">Upload a 10–30 second audio clip. The character will speak in that voice.</p>
-              <div className="acb-actions">
+              <label className="acb-label">Voice</label>
+              <p className="acb-hint">Pick a preset voice, or clone your own from a short audio clip.</p>
+              <div className="acb-toggle-row acb-toggle-row--three">
                 <button
                   type="button"
-                  className="btn btn--ghost"
-                  onClick={() => voiceInputRef.current?.click()}
+                  className={`btn btn--ghost btn--sm${voiceMode === 'preset-male' ? ' is-on' : ''}`}
+                  onClick={() => selectVoicePreset('preset-male')}
+                  disabled={voiceStatus === 'cloning'}
                 >
-                  {voiceFile ? voiceFile.name : 'Choose audio file'}
+                  {PRESET_VOICES['preset-male'].label}
                 </button>
                 <button
                   type="button"
-                  className="btn btn--primary acb-action--fixed"
-                  disabled={!voiceFile || voiceStatus === 'cloning' || voiceStatus === 'done'}
-                  onClick={cloneVoice}
+                  className={`btn btn--ghost btn--sm${voiceMode === 'preset-female' ? ' is-on' : ''}`}
+                  onClick={() => selectVoicePreset('preset-female')}
+                  disabled={voiceStatus === 'cloning'}
                 >
-                  {voiceStatus === 'cloning' ? 'Cloning…' : voiceStatus === 'done' ? '✓ Done' : 'Clone'}
+                  {PRESET_VOICES['preset-female'].label}
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn--ghost btn--sm${voiceMode === 'clone' ? ' is-on' : ''}`}
+                  onClick={() => selectVoicePreset('clone')}
+                  disabled={voiceStatus === 'cloning'}
+                >
+                  Clone my voice
                 </button>
               </div>
-              <input ref={voiceInputRef} type="file" accept="audio/*" style={{ display: 'none' }} onChange={handleVoicePick} />
-              {voiceStatus === 'done' && <p className="acb-note acb-note--success">Voice cloned successfully.</p>}
-              {voiceError && <p className="acb-note acb-note--error">{voiceError}</p>}
-              {voiceStatus !== 'done' && !voiceCloneId && (
-                <p className="acb-hint">Sign in to save this voice for future sessions.</p>
+
+              {voiceMode === 'clone' && (
+                <>
+                  <p className="acb-hint">Upload a 10–30 second clip (under {VOICE_MAX_BYTES / 1024 / 1024} MB). The character will speak in that voice.</p>
+                  <div className="acb-actions">
+                    <button
+                      type="button"
+                      className="btn btn--ghost"
+                      onClick={() => voiceInputRef.current?.click()}
+                    >
+                      {voiceFile ? voiceFile.name : 'Choose audio file'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--primary acb-action--fixed"
+                      disabled={!voiceFile || voiceStatus === 'cloning' || voiceStatus === 'done' || (voiceFile?.size ?? 0) > VOICE_MAX_BYTES}
+                      onClick={cloneVoice}
+                    >
+                      {voiceStatus === 'cloning' ? 'Cloning…' : voiceStatus === 'done' ? '✓ Done' : 'Clone'}
+                    </button>
+                  </div>
+                  <input ref={voiceInputRef} type="file" accept="audio/*" style={{ display: 'none' }} onChange={handleVoicePick} />
+                  {voiceStatus === 'done' && <p className="acb-note acb-note--success">Voice cloned successfully.</p>}
+                  {voiceError && <p className="acb-note acb-note--error">{voiceError}</p>}
+                  {voiceStatus !== 'done' && !voiceCloneId && !voiceError && (
+                    <p className="acb-hint">Sign in to save this voice for future sessions.</p>
+                  )}
+                </>
               )}
             </div>
 
@@ -310,11 +403,11 @@ export default function CustomCharacterExperiment() {
                 onClick={() => { if (!previewDisabled) void buildCharacter(); }}
                 onKeyDown={onPreviewKey}
               >
-                <div className={`acb-preview__photo${imagePreview ? '' : ' acb-preview__photo--empty'}`}>
-                  {imagePreview ? (
+                <div className={`acb-preview__photo${cloneStatus === 'done' && imagePreview ? '' : ' acb-preview__photo--empty'}`}>
+                  {cloneStatus === 'done' && imagePreview ? (
                     <img src={imagePreview} alt={previewTitle} />
                   ) : (
-                    <span>Your character preview appears here</span>
+                    <span>{cloneStatus === 'cloning' ? 'Stylizing your character…' : 'Your stylized character will appear here'}</span>
                   )}
                 </div>
                 <div className="acb-preview__meta">
