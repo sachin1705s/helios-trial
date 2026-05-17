@@ -541,17 +541,32 @@ export default function CustomCharacterExperiment() {
         let detail = ''; try { const j = await chatRes.json(); detail = j?.details || j?.error || ''; } catch { /* non-JSON */ }
         throw new Error(`Chat HTTP ${chatRes.status}${detail ? ` — ${detail.slice(0, 160)}` : ''}`);
       }
-      const data = await chatRes.json() as { reply?: string; error?: string };
+      const data = await chatRes.json() as { reply?: string; action?: string; objects?: string[]; error?: string };
       const reply = (data.reply || '').trim();
       if (!reply) throw new Error('No reply from the model.');
       setHistory((h) => [...h, { role: 'assistant', content: reply }]);
+
+      // Drive the Odyssey visual in parallel with TTS — Odyssey is purely
+      // visual (no audio, no lip-sync), so `interact()` just tells the
+      // character what to physically *do*. Smallest handles the voice.
+      // Same split the main /character/:id page uses in App.tsx
+      // (search "runCharacterInteraction" / "handleInteractRef").
+      const action  = (data.action || '').trim() || 'nod thoughtfully and gesture gently';
+      const objects = Array.isArray(data.objects) ? data.objects.filter(Boolean).slice(0, 3) : [];
+      const streamPrompt = `${action}${objects.length ? `. Include ${objects.join(', ')} in the scene.` : ''}`.trim();
+      // Fire and forget — visual is decoupled from audio. Wrap in catch so an
+      // Odyssey hiccup never blocks the conversation from continuing.
+      interact(streamPrompt).catch((err) => {
+        console.warn('[odyssey:interact] rejected — character will keep idling.', err);
+      });
+
       await speakReply(reply, gen);
     } catch (err) {
       if (gen !== voiceLoopGenRef.current) return;
       setVoiceLoopError(err instanceof Error ? err.message : 'Chat failed.');
       setVoiceLoop('idle');
     }
-  }, [characterName, characterDesc, history, speakReply, stopAllSpeech]);
+  }, [characterName, characterDesc, history, speakReply, stopAllSpeech, interact]);
 
   const stopRecordingTracksVoice = useCallback(() => {
     voiceMediaStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -647,10 +662,7 @@ export default function CustomCharacterExperiment() {
     if (!txt) return;
     setPromptText('');
     await runTurn(txt);
-    // `interact` is intentionally unused here — Odyssey owns its own voice; we
-    // drive replies through Smallest so the user's selected/cloned voice is used.
-    void interact;
-  }, [promptText, runTurn, interact]);
+  }, [promptText, runTurn]);
 
   const handleBack = useCallback(async () => {
     stopAllSpeech();
@@ -968,9 +980,11 @@ export default function CustomCharacterExperiment() {
   // floating .chat-pill at the bottom — same global classes from src/App.css,
   // so visual parity is structural, not skin-deep.
   //
-  // Voice loop is wired through Smallest STT → LLM (Gemini text) → Smallest
-  // TTS so the user's chosen / cloned voice is used end-to-end. Odyssey is
-  // kept for the idle visual; it never sees the conversation audio.
+  // Voice loop is Smallest STT → Gemini text → Smallest TTS so the user's
+  // chosen / cloned voice is used end-to-end. Odyssey is purely visual
+  // (no audio, no lip-sync) — we drive it via interact() with the chat
+  // response's `action` field so the character physically reacts while
+  // Smallest speaks the reply.
   const poster = imagePreview;
   const placeholderClass = `stream-placeholder ${status === 'streaming' ? 'hidden' : ''} ${status !== 'streaming' && status !== 'error' ? 'is-loading' : ''}`;
   const isRecordingVoice = voiceLoop === 'listening';
