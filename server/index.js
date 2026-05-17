@@ -1118,80 +1118,6 @@ app.post('/api/character/chat', aiLimiter, async (req, res) => {
   }
 });
 
-// ─── Visual prompt for Odyssey (two-step pipeline) ───────────────────────────
-//
-// Purpose: take a character's reply text and write a *dedicated* visual stage
-// direction for the Odyssey avatar, separately from the dialogue generation.
-//
-// The legacy /api/character/chat squeezes reply + action + objects into a
-// single Gemini call. That's efficient for built-in characters but it
-// constrains the action field to a few "SCENE_ACTION tags" because the same
-// response also has to carry the spoken reply and a JSON envelope. For the
-// custom-character flow we want a richer, cinematic visual prompt so Odyssey
-// can drive the avatar more expressively. So: first call /api/character/chat
-// for the reply, then call this endpoint with that reply to get a prompt
-// shaped for Odyssey alone.
-app.post('/api/character/visual-prompt', aiLimiter, async (req, res) => {
-  try {
-    const ai = getAiClient();
-    if (!ai) return res.status(503).json({ error: 'AI service not configured.' });
-
-    const userText  = String(req.body?.userText  ?? '').trim().slice(0, 800);
-    const replyText = String(req.body?.replyText ?? '').trim().slice(0, 800);
-    const character = String(req.body?.character ?? 'Character').trim().slice(0, 80);
-    const personality = String(req.body?.personality ?? '').trim().slice(0, 600);
-    if (!replyText) return res.status(400).json({ error: 'Missing replyText.' });
-
-    const systemPrompt = [
-      `You are a film director writing a one-line stage direction for an AI avatar named ${character}.`,
-      personality ? `Personality: ${personality}` : '',
-      'The avatar can move, gesture, change expression, look in a direction, lean, and have small props appear in the scene.',
-      'Write ONE sentence (max 25 words) describing what the avatar should physically do while delivering the reply.',
-      'Be specific and visual — name gestures, body language, gaze, expression. Mention 0–2 concrete props only if the reply clearly references them.',
-      'Do NOT write the spoken words. Do NOT use quotes. Do NOT use JSON. Output the bare stage direction only.',
-      'Examples of good output:',
-      '  - leans forward with elbows on the table, eyes lighting up as a small notebook appears in hand',
-      '  - tilts head and gestures gently with an open palm, soft thoughtful smile',
-      '  - raises both hands wide in mock surprise, eyebrows up',
-    ].filter(Boolean).join('\n');
-
-    const userPrompt = [
-      `User said: "${userText || '(no transcript)'}"`,
-      `${character} is about to say: "${replyText}"`,
-      `Write the stage direction now.`,
-    ].join('\n');
-
-    const startedAt = Date.now();
-    const response = await ai.models.generateContent({
-      model: process.env.VISUAL_PROMPT_MODEL || model,
-      generationConfig: { maxOutputTokens: 80 },
-      contents: [{ role: 'user', parts: [{ text: systemPrompt }, { text: userPrompt }] }],
-    });
-
-    let prompt = (response.text || '').trim();
-    // Tidy: strip quotes, leading "Stage direction:" labels, trailing periods on single-line output.
-    prompt = prompt
-      .replace(/^["'`]+|["'`]+$/g, '')
-      .replace(/^(stage direction|direction|action)\s*[:\-—]\s*/i, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (!prompt) {
-      prompt = 'nods thoughtfully and gestures with an open hand';
-    }
-    console.log('[character/visual-prompt]', character, '→', prompt, `(${Date.now() - startedAt}ms)`);
-    return res.json({ prompt, elapsedMs: Date.now() - startedAt });
-  } catch (err) {
-    const message = err?.message || String(err);
-    console.error('[character/visual-prompt] error:', message);
-    if (/resource.?exhausted|429/i.test(message)) {
-      // Soft fallback so the client never sees a hard failure on the visual leg —
-      // audio + character idle is still better than a blocked turn.
-      return res.json({ prompt: 'nods thoughtfully and gestures with an open hand', fallback: true });
-    }
-    return res.status(502).json({ error: 'Visual prompt generation failed.', details: message.slice(0, 200) });
-  }
-});
-
 // ─── Object extraction fallback (Gemini Live voice path) ──────────────────────
 //
 // WHAT THIS DOES:
@@ -2458,17 +2384,35 @@ app.get('/api/logs/summary', async (req, res) => {
 });
 
 // ─── Broadcast rooms ──────────────────────────────────────────────────────────
-// Host creates a room → gets a code → starts Odyssey broadcast → posts webrtcUrl + spectatorToken.
+// Host creates a room → gets a code + hostToken → starts Odyssey broadcast → posts webrtcUrl + spectatorToken.
 // Audience joins with code → gets webrtcUrl + spectatorToken → Odyssey.connectToStream().
 // Audience submits prompts → host polls and fires them via interact().
+// Host pings /heartbeat every ~15s; rooms with no recent heartbeat are reported as 'ended'.
 
-const BROADCAST_ROOM_TTL_S = 3 * 60 * 60; // 3 h
+const BROADCAST_ROOM_TTL_S       = 3 * 60 * 60; // 3 h
+const BROADCAST_HEARTBEAT_STALE_MS = 45 * 1000;  // 45 s without a host ping → room is stale
 
 // In-memory store for local dev (Redis in production)
-const _broadcastRooms = new Map();   // code → { status, webrtcUrl, spectatorToken, hlsUrl, prompts[] }
+const _broadcastRooms = new Map();   // code → { status, hostToken, webrtcUrl, spectatorToken, hlsUrl, lastHeartbeat, prompts[] }
 
 const bcRoomKey    = (code) => `broadcast:room:${code}`;
 const bcPromptsKey = (code) => `broadcast:prompts:${code}`;
+
+const broadcastLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many room actions, please try again later.' },
+});
+
+const broadcastPromptLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many prompts, slow down.' },
+});
 
 const generateRoomCode = () => {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -2478,8 +2422,15 @@ const generateRoomCode = () => {
   return code;
 };
 
-// POST /api/broadcast/room — create a room, returns { code }
-app.post('/api/broadcast/room', async (_req, res) => {
+const isRoomStale = (room) => {
+  if (!room || room.status !== 'live') return false;
+  const last = Number(room.lastHeartbeat ?? 0);
+  if (!last) return false;
+  return (Date.now() - last) > BROADCAST_HEARTBEAT_STALE_MS;
+};
+
+// POST /api/broadcast/room — create a room, returns { code, hostToken }
+app.post('/api/broadcast/room', broadcastLimiter, async (_req, res) => {
   let code;
   for (let attempt = 0; attempt < 5; attempt++) {
     const candidate = generateRoomCode();
@@ -2492,30 +2443,59 @@ app.post('/api/broadcast/room', async (_req, res) => {
   }
   if (!code) return res.status(500).json({ error: 'Could not generate unique room code.' });
 
+  const hostToken = randomUUID();
+  const createdAt = Date.now();
+
   if (useRedis) {
-    await redis.hset(bcRoomKey(code), { status: 'waiting', createdAt: Date.now() });
+    await redis.hset(bcRoomKey(code), { status: 'waiting', hostToken, createdAt, lastHeartbeat: createdAt });
     await redis.expire(bcRoomKey(code), BROADCAST_ROOM_TTL_S);
   } else {
-    _broadcastRooms.set(code, { status: 'waiting', createdAt: Date.now(), prompts: [] });
+    _broadcastRooms.set(code, { status: 'waiting', hostToken, createdAt, lastHeartbeat: createdAt, prompts: [] });
   }
-  return res.json({ code });
+  console.log(`[broadcast] room ${code} created`);
+  return res.json({ code, hostToken });
 });
 
 // POST /api/broadcast/room/:code/ready — host posts webrtcUrl + spectatorToken after onBroadcastReady
-app.post('/api/broadcast/room/:code/ready', async (req, res) => {
+app.post('/api/broadcast/room/:code/ready', broadcastLimiter, async (req, res) => {
   const code = String(req.params.code ?? '').toUpperCase().trim();
-  const { webrtcUrl, spectatorToken, hlsUrl } = req.body ?? {};
+  const { webrtcUrl, spectatorToken, hlsUrl, hostToken } = req.body ?? {};
   if (!webrtcUrl || !spectatorToken) return res.status(400).json({ error: 'Missing webrtcUrl or spectatorToken.' });
+  if (!hostToken) return res.status(403).json({ error: 'Missing host token.' });
 
   if (useRedis) {
-    const exists = await redis.exists(bcRoomKey(code));
-    if (!exists) return res.status(404).json({ error: 'Room not found.' });
-    await redis.hset(bcRoomKey(code), { status: 'live', webrtcUrl, spectatorToken, hlsUrl: hlsUrl || '' });
+    const room = await redis.hgetall(bcRoomKey(code));
+    if (!room || !room.status) return res.status(404).json({ error: 'Room not found.' });
+    if (room.hostToken !== hostToken) return res.status(403).json({ error: 'Invalid host token.' });
+    await redis.hset(bcRoomKey(code), { status: 'live', webrtcUrl, spectatorToken, hlsUrl: hlsUrl || '', lastHeartbeat: Date.now() });
     await redis.expire(bcRoomKey(code), BROADCAST_ROOM_TTL_S);
   } else {
     const room = _broadcastRooms.get(code);
     if (!room) return res.status(404).json({ error: 'Room not found.' });
-    Object.assign(room, { status: 'live', webrtcUrl, spectatorToken, hlsUrl: hlsUrl || '' });
+    if (room.hostToken !== hostToken) return res.status(403).json({ error: 'Invalid host token.' });
+    Object.assign(room, { status: 'live', webrtcUrl, spectatorToken, hlsUrl: hlsUrl || '', lastHeartbeat: Date.now() });
+  }
+  console.log(`[broadcast] room ${code} live`);
+  return res.json({ ok: true });
+});
+
+// POST /api/broadcast/room/:code/heartbeat — host pings every ~15s to keep room alive
+app.post('/api/broadcast/room/:code/heartbeat', async (req, res) => {
+  const code = String(req.params.code ?? '').toUpperCase().trim();
+  const { hostToken } = req.body ?? {};
+  if (!hostToken) return res.status(403).json({ error: 'Missing host token.' });
+
+  if (useRedis) {
+    const room = await redis.hgetall(bcRoomKey(code));
+    if (!room || !room.status) return res.status(404).json({ error: 'Room not found.' });
+    if (room.hostToken !== hostToken) return res.status(403).json({ error: 'Invalid host token.' });
+    await redis.hset(bcRoomKey(code), { lastHeartbeat: Date.now() });
+    await redis.expire(bcRoomKey(code), BROADCAST_ROOM_TTL_S);
+  } else {
+    const room = _broadcastRooms.get(code);
+    if (!room) return res.status(404).json({ error: 'Room not found.' });
+    if (room.hostToken !== hostToken) return res.status(403).json({ error: 'Invalid host token.' });
+    room.lastHeartbeat = Date.now();
   }
   return res.json({ ok: true });
 });
@@ -2523,24 +2503,25 @@ app.post('/api/broadcast/room/:code/ready', async (req, res) => {
 // GET /api/broadcast/room/:code — audience fetches webrtcUrl + spectatorToken
 app.get('/api/broadcast/room/:code', async (req, res) => {
   const code = String(req.params.code ?? '').toUpperCase().trim();
+  let room;
   if (useRedis) {
-    const room = await redis.hgetall(bcRoomKey(code));
+    room = await redis.hgetall(bcRoomKey(code));
     if (!room || !room.status) return res.status(404).json({ error: 'Room not found.' });
-    if (room.status !== 'live') return res.status(202).json({ status: room.status });
-    return res.json({ status: 'live', webrtcUrl: room.webrtcUrl, spectatorToken: room.spectatorToken });
   } else {
-    const room = _broadcastRooms.get(code);
+    room = _broadcastRooms.get(code);
     if (!room) return res.status(404).json({ error: 'Room not found.' });
-    if (room.status !== 'live') return res.status(202).json({ status: room.status });
-    return res.json({ status: 'live', webrtcUrl: room.webrtcUrl, spectatorToken: room.spectatorToken });
   }
+  if (isRoomStale(room)) return res.status(410).json({ status: 'ended', error: 'Host ended the broadcast.' });
+  if (room.status !== 'live') return res.status(202).json({ status: room.status });
+  if (!room.webrtcUrl || !room.spectatorToken) return res.status(202).json({ status: 'waiting' });
+  return res.json({ status: 'live', webrtcUrl: room.webrtcUrl, spectatorToken: room.spectatorToken });
 });
 
 // POST /api/broadcast/room/:code/prompt — audience submits a prompt
-app.post('/api/broadcast/room/:code/prompt', async (req, res) => {
+app.post('/api/broadcast/room/:code/prompt', broadcastPromptLimiter, async (req, res) => {
   const code     = String(req.params.code ?? '').toUpperCase().trim();
-  const text     = String(req.body?.text ?? '').trim().slice(0, 200);
-  const username = String(req.body?.username ?? 'Guest').trim().slice(0, 32) || 'Guest';
+  const text     = String(req.body?.text ?? '').replace(/[ -]/g, '').trim().slice(0, 200);
+  const username = String(req.body?.username ?? 'Guest').replace(/[ -]/g, '').trim().slice(0, 32) || 'Guest';
   if (!text) return res.status(400).json({ error: 'Missing prompt text.' });
 
   const promptId  = randomUUID();
@@ -2548,13 +2529,15 @@ app.post('/api/broadcast/room/:code/prompt', async (req, res) => {
   const prompt    = { id: promptId, text, username, timestamp };
 
   if (useRedis) {
-    const exists = await redis.exists(bcRoomKey(code));
-    if (!exists) return res.status(404).json({ error: 'Room not found.' });
+    const room = await redis.hgetall(bcRoomKey(code));
+    if (!room || !room.status) return res.status(404).json({ error: 'Room not found.' });
+    if (isRoomStale(room)) return res.status(410).json({ error: 'Host ended the broadcast.' });
     await redis.zadd(bcPromptsKey(code), { score: timestamp, member: JSON.stringify(prompt) });
     await redis.expire(bcPromptsKey(code), BROADCAST_ROOM_TTL_S);
   } else {
     const room = _broadcastRooms.get(code);
     if (!room) return res.status(404).json({ error: 'Room not found.' });
+    if (isRoomStale(room)) return res.status(410).json({ error: 'Host ended the broadcast.' });
     room.prompts.push(prompt);
   }
   return res.json({ ok: true, promptId });
@@ -2577,14 +2560,22 @@ app.get('/api/broadcast/room/:code/prompts', async (req, res) => {
   return res.json({ prompts, serverTime: Date.now() });
 });
 
-// DELETE /api/broadcast/room/:code — host closes the room
+// DELETE /api/broadcast/room/:code — host closes the room (requires hostToken)
 app.delete('/api/broadcast/room/:code', async (req, res) => {
   const code = String(req.params.code ?? '').toUpperCase().trim();
+  const hostToken = req.body?.hostToken ?? req.query?.hostToken;
+
   if (useRedis) {
+    const room = await redis.hgetall(bcRoomKey(code));
+    if (!room || !room.status) return res.json({ ok: true });
+    if (room.hostToken && room.hostToken !== hostToken) return res.status(403).json({ error: 'Invalid host token.' });
     await Promise.all([redis.del(bcRoomKey(code)), redis.del(bcPromptsKey(code))]);
   } else {
+    const room = _broadcastRooms.get(code);
+    if (room && room.hostToken && room.hostToken !== hostToken) return res.status(403).json({ error: 'Invalid host token.' });
     _broadcastRooms.delete(code);
   }
+  console.log(`[broadcast] room ${code} ended`);
   return res.json({ ok: true });
 });
 
