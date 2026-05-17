@@ -1118,6 +1118,80 @@ app.post('/api/character/chat', aiLimiter, async (req, res) => {
   }
 });
 
+// ─── Visual prompt for Odyssey (two-step pipeline) ───────────────────────────
+//
+// Purpose: take a character's reply text and write a *dedicated* visual stage
+// direction for the Odyssey avatar, separately from the dialogue generation.
+//
+// The legacy /api/character/chat squeezes reply + action + objects into a
+// single Gemini call. That's efficient for built-in characters but it
+// constrains the action field to a few "SCENE_ACTION tags" because the same
+// response also has to carry the spoken reply and a JSON envelope. For the
+// custom-character flow we want a richer, cinematic visual prompt so Odyssey
+// can drive the avatar more expressively. So: first call /api/character/chat
+// for the reply, then call this endpoint with that reply to get a prompt
+// shaped for Odyssey alone.
+app.post('/api/character/visual-prompt', aiLimiter, async (req, res) => {
+  try {
+    const ai = getAiClient();
+    if (!ai) return res.status(503).json({ error: 'AI service not configured.' });
+
+    const userText  = String(req.body?.userText  ?? '').trim().slice(0, 800);
+    const replyText = String(req.body?.replyText ?? '').trim().slice(0, 800);
+    const character = String(req.body?.character ?? 'Character').trim().slice(0, 80);
+    const personality = String(req.body?.personality ?? '').trim().slice(0, 600);
+    if (!replyText) return res.status(400).json({ error: 'Missing replyText.' });
+
+    const systemPrompt = [
+      `You are a film director writing a one-line stage direction for an AI avatar named ${character}.`,
+      personality ? `Personality: ${personality}` : '',
+      'The avatar can move, gesture, change expression, look in a direction, lean, and have small props appear in the scene.',
+      'Write ONE sentence (max 25 words) describing what the avatar should physically do while delivering the reply.',
+      'Be specific and visual — name gestures, body language, gaze, expression. Mention 0–2 concrete props only if the reply clearly references them.',
+      'Do NOT write the spoken words. Do NOT use quotes. Do NOT use JSON. Output the bare stage direction only.',
+      'Examples of good output:',
+      '  - leans forward with elbows on the table, eyes lighting up as a small notebook appears in hand',
+      '  - tilts head and gestures gently with an open palm, soft thoughtful smile',
+      '  - raises both hands wide in mock surprise, eyebrows up',
+    ].filter(Boolean).join('\n');
+
+    const userPrompt = [
+      `User said: "${userText || '(no transcript)'}"`,
+      `${character} is about to say: "${replyText}"`,
+      `Write the stage direction now.`,
+    ].join('\n');
+
+    const startedAt = Date.now();
+    const response = await ai.models.generateContent({
+      model: process.env.VISUAL_PROMPT_MODEL || model,
+      generationConfig: { maxOutputTokens: 80 },
+      contents: [{ role: 'user', parts: [{ text: systemPrompt }, { text: userPrompt }] }],
+    });
+
+    let prompt = (response.text || '').trim();
+    // Tidy: strip quotes, leading "Stage direction:" labels, trailing periods on single-line output.
+    prompt = prompt
+      .replace(/^["'`]+|["'`]+$/g, '')
+      .replace(/^(stage direction|direction|action)\s*[:\-—]\s*/i, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!prompt) {
+      prompt = 'nods thoughtfully and gestures with an open hand';
+    }
+    console.log('[character/visual-prompt]', character, '→', prompt, `(${Date.now() - startedAt}ms)`);
+    return res.json({ prompt, elapsedMs: Date.now() - startedAt });
+  } catch (err) {
+    const message = err?.message || String(err);
+    console.error('[character/visual-prompt] error:', message);
+    if (/resource.?exhausted|429/i.test(message)) {
+      // Soft fallback so the client never sees a hard failure on the visual leg —
+      // audio + character idle is still better than a blocked turn.
+      return res.json({ prompt: 'nods thoughtfully and gestures with an open hand', fallback: true });
+    }
+    return res.status(502).json({ error: 'Visual prompt generation failed.', details: message.slice(0, 200) });
+  }
+});
+
 // ─── Object extraction fallback (Gemini Live voice path) ──────────────────────
 //
 // WHAT THIS DOES:

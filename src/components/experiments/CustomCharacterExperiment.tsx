@@ -524,14 +524,16 @@ export default function CustomCharacterExperiment() {
     setVoiceLoop('thinking');
     setHistory((h) => [...h, { role: 'user', content: text }]);
     try {
+      // ── Step 1: dialogue Gemini call — get the reply text.
+      // We ignore the action/objects fields in the response: a dedicated
+      // visual-prompt call (Step 2) writes a richer Odyssey stage direction
+      // because that's a different problem from generating dialogue.
       const chatRes = await fetch('/api/character/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: text,
           character: characterName || 'Character',
-          // The chat endpoint appends `roleSlice` to the system prompt at the
-          // very end — perfect injection point for our custom personality.
           roleSlice: characterDesc.trim() ? `You are ${characterName || 'Character'}. Personality: ${characterDesc.trim()}` : '',
           history: history.slice(-10).map((h) => ({ role: h.role, content: h.content })),
         }),
@@ -541,24 +543,37 @@ export default function CustomCharacterExperiment() {
         let detail = ''; try { const j = await chatRes.json(); detail = j?.details || j?.error || ''; } catch { /* non-JSON */ }
         throw new Error(`Chat HTTP ${chatRes.status}${detail ? ` — ${detail.slice(0, 160)}` : ''}`);
       }
-      const data = await chatRes.json() as { reply?: string; action?: string; objects?: string[]; error?: string };
+      const data = await chatRes.json() as { reply?: string; error?: string };
       const reply = (data.reply || '').trim();
       if (!reply) throw new Error('No reply from the model.');
       setHistory((h) => [...h, { role: 'assistant', content: reply }]);
 
-      // Drive the Odyssey visual in parallel with TTS — Odyssey is purely
-      // visual (no audio, no lip-sync), so `interact()` just tells the
-      // character what to physically *do*. Smallest handles the voice.
-      // Same split the main /character/:id page uses in App.tsx
-      // (search "runCharacterInteraction" / "handleInteractRef").
-      const action  = (data.action || '').trim() || 'nod thoughtfully and gesture gently';
-      const objects = Array.isArray(data.objects) ? data.objects.filter(Boolean).slice(0, 3) : [];
-      const streamPrompt = `${action}${objects.length ? `. Include ${objects.join(', ')} in the scene.` : ''}`.trim();
-      // Fire and forget — visual is decoupled from audio. Wrap in catch so an
-      // Odyssey hiccup never blocks the conversation from continuing.
-      interact(streamPrompt).catch((err) => {
-        console.warn('[odyssey:interact] rejected — character will keep idling.', err);
-      });
+      // ── Step 2: visual-prompt Gemini call — derive Odyssey stage direction
+      // from the reply. Fire it in parallel with TTS so the avatar starts
+      // moving roughly when the voice starts. We don't await — if Odyssey is
+      // slow or the visual call fails, audio still plays and the character
+      // just stays on idle.
+      const visualPromise = fetch('/api/character/visual-prompt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userText: text,
+          replyText: reply,
+          character: characterName || 'Character',
+          personality: characterDesc.trim(),
+        }),
+      })
+        .then((r) => r.ok ? r.json() as Promise<{ prompt?: string }> : Promise.reject(new Error(`visual-prompt HTTP ${r.status}`)))
+        .then((vp) => {
+          if (gen !== voiceLoopGenRef.current) return;
+          const p = (vp.prompt || '').trim();
+          if (!p) return;
+          interact(p).catch((err) => console.warn('[odyssey:interact] rejected — character will keep idling.', err));
+        })
+        .catch((err) => console.warn('[visual-prompt] failed — skipping visual cue, audio continues.', err));
+      // Keep the promise alive so the cleanup logic in the cancel-path can
+      // tell it's outstanding, even though we never block on it.
+      void visualPromise;
 
       await speakReply(reply, gen);
     } catch (err) {
@@ -980,11 +995,13 @@ export default function CustomCharacterExperiment() {
   // floating .chat-pill at the bottom — same global classes from src/App.css,
   // so visual parity is structural, not skin-deep.
   //
-  // Voice loop is Smallest STT → Gemini text → Smallest TTS so the user's
-  // chosen / cloned voice is used end-to-end. Odyssey is purely visual
-  // (no audio, no lip-sync) — we drive it via interact() with the chat
-  // response's `action` field so the character physically reacts while
-  // Smallest speaks the reply.
+  // Voice loop is Smallest STT → Gemini (dialogue) → Smallest TTS so the
+  // user's chosen / cloned voice is used end-to-end. A SECOND Gemini call
+  // (/api/character/visual-prompt) takes the dialogue reply and writes a
+  // dedicated stage direction for Odyssey — keeps the dialogue model focused
+  // on conversation quality and the visual model focused on cinematography.
+  // Odyssey is purely visual (no audio, no lip-sync); we drive it via
+  // interact() with that derived prompt while Smallest speaks the reply.
   const poster = imagePreview;
   const placeholderClass = `stream-placeholder ${status === 'streaming' ? 'hidden' : ''} ${status !== 'streaming' && status !== 'error' ? 'is-loading' : ''}`;
   const isRecordingVoice = voiceLoop === 'listening';
