@@ -128,6 +128,23 @@ export default function CustomCharacterExperiment() {
 
   const [promptText, setPromptText] = useState('');
 
+  // ── Voice loop (STT → LLM → TTS via Smallest) ─────────────────────────────
+  // The whole point of the custom-character flow is to use Smallest's voice
+  // (preset or cloned) instead of Gemini Live's locked voices. Pipeline:
+  //   mic → /api/character/stt → /api/character/chat → /api/character/tts → AudioContext PCM playback
+  type VoiceLoopState = 'idle' | 'listening' | 'thinking' | 'speaking';
+  const [voiceLoop, setVoiceLoop] = useState<VoiceLoopState>('idle');
+  const [voiceLoopError, setVoiceLoopError] = useState<string | null>(null);
+  const [history, setHistory] = useState<{ role: 'user' | 'assistant'; content: string }[]>([]);
+
+  const ttsAudioCtxRef = useRef<AudioContext | null>(null);
+  const ttsAbortRef = useRef<AbortController | null>(null);
+  const ttsSourceNodesRef = useRef<AudioBufferSourceNode[]>([]);
+  const voiceLoopGenRef = useRef(0); // bumped on cancel/cleanup so in-flight steps bail
+  const voiceMediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const voiceMediaStreamRef = useRef<MediaStream | null>(null);
+  const voiceChunksRef = useRef<Blob[]>([]);
+
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const voiceInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -419,16 +436,228 @@ export default function CustomCharacterExperiment() {
   startLiveRef.current = startLiveStream;
   if (step === 'live' && status === 'ready') void startLiveRef.current();
 
+  // ── Voice loop helpers ────────────────────────────────────────────────────
+  const stopAllSpeech = useCallback(() => {
+    voiceLoopGenRef.current += 1; // invalidate any in-flight TTS / chat / STT
+    ttsAbortRef.current?.abort();
+    ttsAbortRef.current = null;
+    ttsSourceNodesRef.current.forEach((n) => { try { n.stop(); } catch { /* already stopped */ } });
+    ttsSourceNodesRef.current = [];
+  }, []);
+
+  const playPcmStream = useCallback(async (ttsRes: Response, gen: number): Promise<void> => {
+    if (!ttsAudioCtxRef.current) ttsAudioCtxRef.current = new AudioContext();
+    const ctx = ttsAudioCtxRef.current;
+    await ctx.resume().catch(() => undefined);
+    if (gen !== voiceLoopGenRef.current) return;
+    const sampleRate = parseInt(ttsRes.headers.get('x-sample-rate') ?? '24000', 10);
+    if (!ttsRes.body) throw new Error('TTS returned no audio body');
+    const reader = ttsRes.body.getReader();
+    let playbackTime = ctx.currentTime + 0.05;
+    let leftover = new Uint8Array(0);
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (gen !== voiceLoopGenRef.current) return;
+      let data: Uint8Array;
+      if (leftover.length > 0) {
+        data = new Uint8Array(leftover.length + value.length);
+        data.set(leftover);
+        data.set(value, leftover.length);
+      } else {
+        data = value;
+      }
+      const usable = data.length - (data.length % 2);
+      leftover = data.slice(usable);
+      if (!usable) continue;
+      const int16 = new Int16Array(data.buffer, data.byteOffset, usable / 2);
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+      const buf = ctx.createBuffer(1, float32.length, sampleRate);
+      buf.copyToChannel(float32, 0);
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(ctx.destination);
+      ttsSourceNodesRef.current.push(src);
+      src.onended = () => { ttsSourceNodesRef.current = ttsSourceNodesRef.current.filter((n) => n !== src); };
+      src.start(playbackTime);
+      playbackTime += buf.duration;
+    }
+    // Wait for the scheduled tail to actually finish playing.
+    const tailMs = Math.max(0, (playbackTime - ctx.currentTime) * 1000);
+    await new Promise((r) => setTimeout(r, tailMs));
+  }, []);
+
+  const speakReply = useCallback(async (text: string, gen: number) => {
+    if (!text || gen !== voiceLoopGenRef.current) return;
+    setVoiceLoop('speaking');
+    ttsAbortRef.current?.abort();
+    const abort = new AbortController();
+    ttsAbortRef.current = abort;
+    try {
+      const ttsRes = await fetch('/api/character/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, voiceId: resolvedVoiceId, character: characterName || 'Character' }),
+        signal: abort.signal,
+      });
+      if (!ttsRes.ok) {
+        let detail = ''; try { const j = await ttsRes.json(); detail = j?.details || j?.error || ''; } catch { /* non-JSON */ }
+        throw new Error(`TTS HTTP ${ttsRes.status}${detail ? ` — ${detail.slice(0, 160)}` : ''}`);
+      }
+      await playPcmStream(ttsRes, gen);
+    } catch (err) {
+      if ((err as Error)?.name === 'AbortError') return;
+      console.error('[character/tts] failed:', err);
+      setVoiceLoopError(err instanceof Error ? err.message : 'Voice playback failed.');
+    } finally {
+      if (gen === voiceLoopGenRef.current) setVoiceLoop('idle');
+    }
+  }, [resolvedVoiceId, characterName, playPcmStream]);
+
+  const runTurn = useCallback(async (userText: string) => {
+    const text = userText.trim();
+    if (!text) return;
+    stopAllSpeech();
+    const gen = voiceLoopGenRef.current;
+    setVoiceLoopError(null);
+    setVoiceLoop('thinking');
+    setHistory((h) => [...h, { role: 'user', content: text }]);
+    try {
+      const chatRes = await fetch('/api/character/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: text,
+          character: characterName || 'Character',
+          // The chat endpoint appends `roleSlice` to the system prompt at the
+          // very end — perfect injection point for our custom personality.
+          roleSlice: characterDesc.trim() ? `You are ${characterName || 'Character'}. Personality: ${characterDesc.trim()}` : '',
+          history: history.slice(-10).map((h) => ({ role: h.role, content: h.content })),
+        }),
+      });
+      if (gen !== voiceLoopGenRef.current) return;
+      if (!chatRes.ok) {
+        let detail = ''; try { const j = await chatRes.json(); detail = j?.details || j?.error || ''; } catch { /* non-JSON */ }
+        throw new Error(`Chat HTTP ${chatRes.status}${detail ? ` — ${detail.slice(0, 160)}` : ''}`);
+      }
+      const data = await chatRes.json() as { reply?: string; error?: string };
+      const reply = (data.reply || '').trim();
+      if (!reply) throw new Error('No reply from the model.');
+      setHistory((h) => [...h, { role: 'assistant', content: reply }]);
+      await speakReply(reply, gen);
+    } catch (err) {
+      if (gen !== voiceLoopGenRef.current) return;
+      setVoiceLoopError(err instanceof Error ? err.message : 'Chat failed.');
+      setVoiceLoop('idle');
+    }
+  }, [characterName, characterDesc, history, speakReply, stopAllSpeech]);
+
+  const stopRecordingTracksVoice = useCallback(() => {
+    voiceMediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+    voiceMediaStreamRef.current = null;
+  }, []);
+
+  const startMic = useCallback(async () => {
+    if (voiceLoop === 'listening') return;
+    setVoiceLoopError(null);
+    stopAllSpeech();
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setVoiceLoopError('Voice input is not supported in this browser. Type your message instead.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      voiceMediaStreamRef.current = stream;
+      const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4;codecs=mp4a.40.2', 'audio/mp4', 'audio/ogg;codecs=opus'];
+      const mime = candidates.find((m) => MediaRecorder.isTypeSupported(m)) || '';
+      const mr = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      voiceMediaRecorderRef.current = mr;
+      voiceChunksRef.current = [];
+      mr.ondataavailable = (e) => { if (e.data.size > 0) voiceChunksRef.current.push(e.data); };
+      mr.onstop = async () => {
+        stopRecordingTracksVoice();
+        const effectiveMime = mr.mimeType || mime || 'audio/webm';
+        const blob = new Blob(voiceChunksRef.current, { type: effectiveMime });
+        if (blob.size < 1500) {
+          // Less than ~50ms of audio — almost certainly an accidental tap.
+          setVoiceLoop('idle');
+          return;
+        }
+        const gen = voiceLoopGenRef.current;
+        setVoiceLoop('thinking');
+        try {
+          const fd = new FormData();
+          fd.append('audio', blob, `recording.${effectiveMime.includes('mp4') ? 'mp4' : effectiveMime.includes('ogg') ? 'ogg' : 'webm'}`);
+          const sttRes = await fetch('/api/character/stt', { method: 'POST', body: fd });
+          if (gen !== voiceLoopGenRef.current) return;
+          if (!sttRes.ok) {
+            let detail = ''; try { const j = await sttRes.json(); detail = j?.details || j?.error || ''; } catch { /* non-JSON */ }
+            throw new Error(`STT HTTP ${sttRes.status}${detail ? ` — ${detail.slice(0, 160)}` : ''}`);
+          }
+          const { text } = (await sttRes.json()) as { text?: string };
+          const transcribed = (text || '').trim();
+          if (!transcribed) {
+            setVoiceLoop('idle');
+            setVoiceLoopError("Didn't catch that. Try again — speak a bit louder or closer to the mic.");
+            return;
+          }
+          await runTurn(transcribed);
+        } catch (err) {
+          if (gen !== voiceLoopGenRef.current) return;
+          setVoiceLoopError(err instanceof Error ? err.message : 'Transcription failed.');
+          setVoiceLoop('idle');
+        }
+      };
+      mr.start();
+      setVoiceLoop('listening');
+    } catch (err) {
+      stopRecordingTracksVoice();
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/Permission|denied|NotAllowed/i.test(msg)) {
+        setVoiceLoopError('Microphone permission was denied. Allow it in your browser settings.');
+      } else if (/NotFound|DevicesNotFound/i.test(msg)) {
+        setVoiceLoopError('No microphone found. Plug one in or type your message.');
+      } else {
+        setVoiceLoopError(`Recording failed: ${msg}`);
+      }
+      setVoiceLoop('idle');
+    }
+  }, [voiceLoop, stopAllSpeech, runTurn, stopRecordingTracksVoice]);
+
+  const stopMic = useCallback(() => {
+    if (voiceMediaRecorderRef.current?.state === 'recording') {
+      voiceMediaRecorderRef.current.stop();
+    } else {
+      stopRecordingTracksVoice();
+      setVoiceLoop('idle');
+    }
+  }, [stopRecordingTracksVoice]);
+
+  // Cleanup on unmount
+  useEffect(() => () => {
+    stopAllSpeech();
+    stopRecordingTracksVoice();
+    ttsAudioCtxRef.current?.close().catch(() => undefined);
+    ttsAudioCtxRef.current = null;
+  }, [stopAllSpeech, stopRecordingTracksVoice]);
+
   const handleSend = useCallback(async () => {
-    if (!promptText.trim()) return;
-    await interact(promptText.trim());
+    const txt = promptText.trim();
+    if (!txt) return;
     setPromptText('');
-  }, [promptText, interact]);
+    await runTurn(txt);
+    // `interact` is intentionally unused here — Odyssey owns its own voice; we
+    // drive replies through Smallest so the user's selected/cloned voice is used.
+    void interact;
+  }, [promptText, runTurn, interact]);
 
   const handleBack = useCallback(async () => {
+    stopAllSpeech();
+    stopRecordingTracksVoice();
     await disconnect();
     navigate('/characters');
-  }, [disconnect, navigate]);
+  }, [disconnect, navigate, stopAllSpeech, stopRecordingTracksVoice]);
 
   // ----- Setup screen ------------------------------------------------------
   if (step === 'setup') {
@@ -738,12 +967,28 @@ export default function CustomCharacterExperiment() {
   // the stylized poster as a fallback, a single "Back" pill top-left, and a
   // floating .chat-pill at the bottom — same global classes from src/App.css,
   // so visual parity is structural, not skin-deep.
+  //
+  // Voice loop is wired through Smallest STT → LLM (Gemini text) → Smallest
+  // TTS so the user's chosen / cloned voice is used end-to-end. Odyssey is
+  // kept for the idle visual; it never sees the conversation audio.
   const poster = imagePreview;
   const placeholderClass = `stream-placeholder ${status === 'streaming' ? 'hidden' : ''} ${status !== 'streaming' && status !== 'error' ? 'is-loading' : ''}`;
+  const isRecordingVoice = voiceLoop === 'listening';
+  const isCharacterThinking = voiceLoop === 'thinking';
+  const isCharacterSpeaking = voiceLoop === 'speaking';
+  const isCharacterBusy = isRecordingVoice || isCharacterThinking || isCharacterSpeaking;
+
   const placeholderText =
-    status === 'error' ? 'Reconnecting…'
-      : status !== 'streaming' ? `Waking up ${characterName || 'your character'}…`
-        : `Say something to ${characterName}…`;
+    voiceLoopError ? voiceLoopError
+      : status === 'error' ? 'Reconnecting…'
+        : isRecordingVoice ? 'Listening… tap to send'
+          : isCharacterThinking ? `${characterName || 'Character'} is thinking…`
+            : isCharacterSpeaking ? `${characterName || 'Character'} is speaking…`
+              : status !== 'streaming' ? `Waking up ${characterName || 'your character'}…`
+                : `Talk to ${characterName || 'your character'}, or type…`;
+
+  const isPillBusy = status !== 'streaming' && status !== 'idle';
+  const isInputDisabled = isCharacterBusy || (status !== 'streaming' && status !== 'idle');
 
   return (
     <div className="app">
@@ -777,7 +1022,7 @@ export default function CustomCharacterExperiment() {
 
         <div className="story-bar-wrap">
           <footer className="story-bar story-bar--compact">
-            <div className={`chat-pill ${status !== 'streaming' ? 'chat-pill--waking' : ''}`}>
+            <div className={`chat-pill ${isPillBusy ? 'chat-pill--waking' : ''}`}>
               <input
                 className="chat-pill__input"
                 type="text"
@@ -785,16 +1030,28 @@ export default function CustomCharacterExperiment() {
                 onChange={(e) => setPromptText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') void handleSend(); }}
                 placeholder={placeholderText}
-                disabled={status !== 'streaming'}
+                disabled={isInputDisabled}
                 aria-label={`Message ${characterName || 'your character'}`}
-                aria-busy={status !== 'streaming'}
+                aria-busy={isCharacterBusy}
               />
-              {promptText.trim().length > 0 ? (
+              {/* WhatsApp-style toggle: recording > send (when text) > mic.
+                  Mic now drives the STT→LLM→TTS pipeline through Smallest. */}
+              {isRecordingVoice ? (
+                <button
+                  type="button"
+                  className="chat-pill__action chat-pill__mic chat-pill__mic--recording chat-pill__mic--listening"
+                  onClick={stopMic}
+                  aria-label="Stop recording and send"
+                  title="Stop and send"
+                >
+                  <span className="chat-pill__mic-pulse" aria-hidden />
+                </button>
+              ) : promptText.trim().length > 0 ? (
                 <button
                   type="button"
                   className="chat-pill__action chat-pill__send"
                   onClick={handleSend}
-                  disabled={status !== 'streaming'}
+                  disabled={isCharacterBusy}
                   aria-label="Send message"
                 >
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -805,10 +1062,23 @@ export default function CustomCharacterExperiment() {
               ) : (
                 <button
                   type="button"
-                  className="chat-pill__action chat-pill__mic"
-                  disabled
-                  aria-label="Voice input is not yet wired for custom characters — type a message instead"
-                  title="Voice input coming soon — type a message for now"
+                  className={`chat-pill__action chat-pill__mic ${isCharacterThinking ? 'chat-pill__mic--thinking' : ''} ${isCharacterSpeaking ? 'chat-pill__mic--speaking' : ''}`}
+                  onClick={isCharacterSpeaking ? stopAllSpeech : startMic}
+                  disabled={isCharacterThinking}
+                  aria-label={
+                    isCharacterSpeaking
+                      ? `${characterName || 'Character'} is speaking — tap to stop`
+                      : isCharacterThinking
+                        ? 'Thinking…'
+                        : `Talk to ${characterName || 'your character'}`
+                  }
+                  title={
+                    isCharacterSpeaking
+                      ? 'Tap to stop'
+                      : isCharacterThinking
+                        ? 'Thinking…'
+                        : `Tap to talk`
+                  }
                 >
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <rect x="9" y="3" width="6" height="12" rx="3" />
