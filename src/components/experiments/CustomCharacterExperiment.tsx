@@ -85,7 +85,7 @@ async function compressImage(file: File, maxBytes: number): Promise<File> {
 
 export default function CustomCharacterExperiment() {
   const navigate = useNavigate();
-  const { status, error, videoRef, startStream, interact, disconnect, connect } = useOdysseyStream({ autoConnect: false });
+  const { status, videoRef, startStream, interact, disconnect, connect } = useOdysseyStream({ autoConnect: false });
 
   const [step, setStep] = useState<Step>('setup');
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -430,11 +430,6 @@ export default function CustomCharacterExperiment() {
     navigate('/characters');
   }, [disconnect, navigate]);
 
-  const handleStartOver = useCallback(() => {
-    hasStartedRef.current = false;
-    setStep('setup');
-  }, []);
-
   // ----- Setup screen ------------------------------------------------------
   if (step === 'setup') {
     const previewReady = cloneStatus === 'done' && Boolean(imageFile) && characterName.trim().length > 0;
@@ -739,75 +734,92 @@ export default function CustomCharacterExperiment() {
   }
 
   // ----- Live screen -------------------------------------------------------
-  const statusVariant =
-    status === 'streaming' ? 'live'
-      : status === 'error' ? 'error'
-        : 'connecting';
-  const statusText =
-    status === 'idle' || status === 'connecting' ? `Bringing ${characterName} to life…`
-      : status === 'ready' ? 'Stream ready — starting…'
-        : status === 'streaming' ? `${characterName} is live.`
-          : status === 'error' ? `Error: ${error}`
-            : status;
+  // Mirrors the main character UI (src/App.tsx): full-bleed video layer with
+  // the stylized poster as a fallback, a single "Back" pill top-left, and a
+  // floating .chat-pill at the bottom — same global classes from src/App.css,
+  // so visual parity is structural, not skin-deep.
+  const poster = imagePreview;
+  const placeholderClass = `stream-placeholder ${status === 'streaming' ? 'hidden' : ''} ${status !== 'streaming' && status !== 'error' ? 'is-loading' : ''}`;
+  const placeholderText =
+    status === 'error' ? 'Reconnecting…'
+      : status !== 'streaming' ? `Waking up ${characterName || 'your character'}…`
+        : `Say something to ${characterName}…`;
 
   return (
-    <div className="atrium atrium-character-live">
-      <AtriumNav />
-
-      <div className="acb-live-header">
-        <button type="button" className="btn btn--ghost btn--sm" onClick={handleBack}>
-          ← Back to the cast
-        </button>
-        <span className="eyebrow">
-          <span className="eyebrow__dot" /> Live
-        </span>
+    <div className="app">
+      <div className="video-layer">
+        {poster && (
+          <div className="background-fallback" style={{ backgroundImage: `url("${poster}")` }} aria-hidden />
+        )}
+        <div
+          className={placeholderClass}
+          style={poster ? { backgroundImage: `url("${poster}")` } : undefined}
+          aria-hidden
+        />
+        <video
+          ref={videoRef}
+          className={`video-element ${status === 'streaming' ? '' : 'is-hidden'}`}
+          autoPlay
+          playsInline
+          muted
+        />
+        <div className="video-overlay" />
       </div>
 
-      <main className="acb-stage">
-        <section>
-          <div className="acb-stage__video">
-            <video ref={videoRef} autoPlay playsInline muted />
-          </div>
-          <h2 className="acb-stage__title">{characterName}</h2>
-        </section>
-
-        <aside className="acb-panel">
-          <div className={`acb-status acb-status--${statusVariant}`}>
-            <span className="acb-status__dot" />
-            <span>{statusText}</span>
-          </div>
-
-          <div className="acb-prompt-row">
-            <input
-              type="text"
-              className="acb-input"
-              placeholder={`Say something to ${characterName}…`}
-              value={promptText}
-              onChange={(e) => setPromptText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') void handleSend(); }}
-              disabled={status !== 'streaming'}
-            />
-            <button
-              type="button"
-              className="btn btn--primary btn--sm"
-              onClick={handleSend}
-              disabled={status !== 'streaming'}
-            >
-              Send
-            </button>
-          </div>
-
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm btn--block"
-            onClick={handleStartOver}
-          >
-            Start over
+      <div className="ui">
+        <header className="top-bar">
+          <button type="button" className="btn ghost back-to-landing" onClick={handleBack}>
+            Back
           </button>
-        </aside>
-      </main>
+        </header>
 
-      <AtriumFooter />
+        <main className="slide-shell" />
+
+        <div className="story-bar-wrap">
+          <footer className="story-bar story-bar--compact">
+            <div className={`chat-pill ${status !== 'streaming' ? 'chat-pill--waking' : ''}`}>
+              <input
+                className="chat-pill__input"
+                type="text"
+                value={promptText}
+                onChange={(e) => setPromptText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') void handleSend(); }}
+                placeholder={placeholderText}
+                disabled={status !== 'streaming'}
+                aria-label={`Message ${characterName || 'your character'}`}
+                aria-busy={status !== 'streaming'}
+              />
+              {promptText.trim().length > 0 ? (
+                <button
+                  type="button"
+                  className="chat-pill__action chat-pill__send"
+                  onClick={handleSend}
+                  disabled={status !== 'streaming'}
+                  aria-label="Send message"
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M22 2L11 13" />
+                    <path d="M22 2l-7 20-4-9-9-4 20-7z" />
+                  </svg>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="chat-pill__action chat-pill__mic"
+                  disabled
+                  aria-label="Voice input is not yet wired for custom characters — type a message instead"
+                  title="Voice input coming soon — type a message for now"
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <rect x="9" y="3" width="6" height="12" rx="3" />
+                    <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          </footer>
+        </div>
+      </div>
     </div>
   );
 }
