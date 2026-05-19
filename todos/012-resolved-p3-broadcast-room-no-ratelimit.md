@@ -2,9 +2,11 @@
 name: Broadcast room creation unauthenticated with no rate limit — Redis flooding risk
 description: POST /api/broadcast/room has no auth and no rate limiter; a loop can exhaust Redis memory
 type: p3
-status: pending
+status: resolved
 issue_id: "012"
 tags: [security, code-review]
+resolved_at: 2026-05-16
+resolved_in: server/index.js — broadcastLimiter (5/min/IP) on room creation + /ready, hostToken returned at creation and validated on /ready, /heartbeat, DELETE
 ---
 
 ## Problem Statement

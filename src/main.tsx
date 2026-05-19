@@ -53,6 +53,8 @@ function CharacterRoute() {
 }
 
 function ExperimentGuard({ expId, children }: { expId: string; children: ReactNode }) {
+  // Local dev bypass: import.meta.env.DEV is true only under `vite` dev, never in production builds.
+  if (import.meta.env.DEV) return <>{children}</>;
   const now = new Date();
   const allDone = EXPERIMENTS.every((e) => now > endOfDay(e.end));
   const idx = EXPERIMENTS.findIndex((e) => e.id === expId);

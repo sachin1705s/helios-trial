@@ -32,3 +32,6 @@ data.sqlite-wal
 
 # Local generated audio
 public/audio/
+
+# Local Claude Code harness state
+.claude/
