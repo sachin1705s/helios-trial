@@ -68,7 +68,6 @@ const MicIcon = () => (
 // ─── Host view ────────────────────────────────────────────────────────────────
 
 function HostView({ onBack }: { onBack: () => void }) {
-  const navigate = useNavigate();
   const [phase, setPhase] = useState<HostPhase>('setup');
   const [selectedCharacterId, setSelectedCharacterId] = useState<string>(DEFAULT_CHARACTER_ID);
   const [roomCode, setRoomCode] = useState<string | null>(null);
