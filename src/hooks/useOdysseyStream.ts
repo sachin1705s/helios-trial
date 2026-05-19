@@ -85,15 +85,21 @@ export function useOdysseyStream(options: UseOdysseyStreamOptions = {}) {
           setTimeout(() => {
             const pc = getFirstPeerConnection();
             if (pc) {
-              const collector = new WebRTCStatsCollector(pc);
+              const collector = new WebRTCStatsCollector(pc, 2000, {
+                sessionId: creds.sessionId,
+                route: typeof location !== 'undefined' ? location.pathname : undefined,
+              });
               collector.start();
               statsCollectorRef.current = collector;
-              console.log('[WebRTC-Diag] Stats collector started');
+              console.log(`[WebRTC-Diag] Stats collector started (session=${creds.sessionId})`);
             }
           }, 1000);
           setStatus('ready');
         },
-        onStreamStarted: () => setStatus('streaming'),
+        onStreamStarted: (streamId) => {
+          statsCollectorRef.current?.setContext({ streamId });
+          setStatus('streaming');
+        },
         onStreamEnded: () => { streamActiveRef.current = false; },
         onStreamError: (reason, msg) => {
           setError(msg ?? 'Stream error.');
