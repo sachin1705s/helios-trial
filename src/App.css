@@ -2314,73 +2314,540 @@ textarea.exp-text-input { font-family: inherit; }
 }
 .image-drop-zone:hover { border-color: rgba(121, 150, 255, 0.4); }
 
-/* ── Broadcast experiment ───────────────────────────────────────────────────── */
-.broadcast-role-card {
+/* ── Broadcast experiment (Atrium warm) ─────────────────────────────────────── */
+/* All screens are wrapped in `.atrium`, so paper/ink/moss/clay/sun tokens
+   cascade from tokens.css. Setup screens are paper-cream; the live screen
+   keeps the video full-bleed but uses paper-tinted glass for the chrome. */
+
+/* Setup screens (role chooser, character picker, audience join, waiting) ----- */
+.atrium.broadcast-setup-shell,
+.atrium.broadcast-live-shell {
+  padding-top: 0; /* override .atrium's default 16px top padding */
+}
+.atrium.broadcast-setup-shell {
+  background:
+    radial-gradient(circle at 18% 8%,  rgba(47, 94, 72, 0.10), transparent 55%),
+    radial-gradient(circle at 82% 92%, rgba(217, 73, 43, 0.06), transparent 60%),
+    var(--paper);
+  color: var(--ink);
+}
+.atrium.broadcast-setup-shell .ui {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 24px clamp(24px, 6vw, 80px) 0;
+  gap: 16px;
+  position: relative;
+  z-index: 1;
+}
+
+/* Top-bar borderless across the whole broadcast experience (setup + live). */
+.atrium .top-bar {
+  border-bottom: 0;
+}
+/* Setup screens only: paper-on-ink ghost button. */
+.atrium.broadcast-setup-shell .top-bar .btn.ghost {
+  background: rgba(20, 40, 38, 0.04);
+  border: 1px solid rgba(20, 40, 38, 0.10);
+  color: var(--ink);
+}
+.atrium.broadcast-setup-shell .top-bar .btn.ghost:hover {
+  background: rgba(20, 40, 38, 0.08);
+  border-color: rgba(20, 40, 38, 0.20);
+}
+/* Live screen: dark cinematic ghost that reads against the video. */
+.atrium.broadcast-live-shell .top-bar .btn.ghost {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #e7edf6;
+}
+.atrium.broadcast-live-shell .top-bar .btn.ghost:hover {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.32);
+}
+
+.broadcast-setup {
   flex: 1;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  padding: 28px 20px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 14px;
+  align-items: flex-start;
+  justify-content: flex-start;
+  max-width: 920px;
+  margin: 0 auto;
+  width: 100%;
+  padding: clamp(4px, 1.5vh, 20px) 4px 16px;
+}
+
+.broadcast-title {
+  font-family: var(--display);
+  font-weight: 500;
+  font-size: clamp(2rem, 4.2vw, 3.2rem);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  margin: 0 0 14px;
+  color: var(--ink);
+}
+
+.broadcast-lede {
+  font-family: var(--body);
+  font-size: 1rem;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  max-width: 540px;
+  margin: 0 0 24px;
+}
+
+.broadcast-error-msg {
+  font-size: 0.9rem;
+  color: var(--clay);
+  margin: 0 0 14px;
+}
+
+.atrium .broadcast-go-live {
+  align-self: flex-start;
+  padding: 12px 28px;
+  border-radius: var(--radius-pill);
+  background: var(--moss);
+  border: 1px solid var(--moss);
+  color: var(--paper);
+  font-family: var(--body);
+  font-size: 0.95rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
   cursor: pointer;
-  color: #e7edf6;
-  transition: border-color 0.15s, background 0.15s;
-  text-align: center;
+  transition: background 0.2s var(--ease), border-color 0.2s var(--ease), transform 0.15s var(--ease);
+  box-shadow: var(--shadow-sm);
 }
-.broadcast-role-card:hover {
-  background: rgba(121, 150, 255, 0.08);
-  border-color: rgba(121, 150, 255, 0.35);
+.atrium .broadcast-go-live:hover:not(:disabled) {
+  background: var(--moss-deep);
+  border-color: var(--moss-deep);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
 }
-.broadcast-role-card strong { font-size: 1rem; }
-.broadcast-role-card span { font-size: 0.8rem; color: rgba(231, 237, 246, 0.5); }
-
-.broadcast-room-code {
-  text-align: center;
-  padding: 12px;
-  background: rgba(121, 150, 255, 0.08);
-  border: 1px solid rgba(121, 150, 255, 0.2);
-  border-radius: 10px;
-}
-.room-code-display {
-  font-size: 2rem;
-  font-weight: 700;
-  letter-spacing: 0.25em;
-  color: #7996ff;
+.atrium .broadcast-go-live:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
-.broadcast-prompts-panel {
-  flex: 1;
-  overflow-y: auto;
+/* Character picker grid — compact so 8 portraits fit in a single row on
+   desktop (~920px container ÷ ~100px min-card ≈ 8 cols). Wraps to 2 rows
+   when the viewport is too narrow. */
+.broadcast-char-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 10px;
+  width: 100%;
+  margin: 0 0 20px;
+}
+.broadcast-char {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 6px 6px 8px;
+  background: var(--paper-edge);
+  border: 1px solid rgba(20, 40, 38, 0.08);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: center;
+  transition: transform 0.2s var(--ease), background 0.2s var(--ease), border-color 0.2s var(--ease), box-shadow 0.2s var(--ease);
+}
+.broadcast-char:hover {
+  transform: translateY(-2px);
+  background: var(--mist);
+  border-color: rgba(20, 40, 38, 0.18);
+  box-shadow: var(--shadow-sm);
+}
+.broadcast-char:focus-visible {
+  outline: 2px solid var(--moss);
+  outline-offset: 3px;
+}
+.broadcast-char.is-selected {
+  background: var(--paper);
+  border-color: var(--moss);
+  box-shadow: 0 0 0 1px var(--moss), var(--shadow-md);
+}
+.broadcast-char__portrait {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: var(--radius-sm);
+  background-size: cover;
+  background-position: center top;
+  background-color: var(--mist);
+}
+.broadcast-char__name {
+  font-family: var(--display);
+  font-size: 0.82rem;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  color: var(--ink);
+}
+
+/* Role chooser ---------------------------------------------------------- */
+.broadcast-role-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  width: 100%;
+  margin: 0 0 28px;
+}
+@media (max-width: 640px) {
+  .broadcast-role-grid { grid-template-columns: 1fr; }
+}
+
+.broadcast-role {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  text-align: left;
+  padding: 24px 24px 26px;
+  background: var(--paper-edge);
+  border: 1px solid rgba(20, 40, 38, 0.08);
+  border-radius: var(--radius-lg);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  transition: transform 0.2s var(--ease), background 0.2s var(--ease), border-color 0.2s var(--ease), box-shadow 0.2s var(--ease);
+}
+.broadcast-role:hover {
+  transform: translateY(-2px);
+  background: var(--mist);
+  border-color: rgba(20, 40, 38, 0.20);
+  box-shadow: var(--shadow-md);
+}
+.broadcast-role:focus-visible {
+  outline: 2px solid var(--moss);
+  outline-offset: 3px;
+}
+/* Host card is the primary action — moss accent, the same green Labs uses for
+   "Open" buttons. Audience stays neutral on paper. */
+.broadcast-role.host {
+  background: var(--moss);
+  border-color: var(--moss-deep);
+  color: var(--paper);
+  box-shadow: var(--shadow-md);
+}
+.broadcast-role.host:hover {
+  background: var(--moss-deep);
+  border-color: var(--moss-deep);
+}
+
+.broadcast-role__kicker {
+  font-family: var(--body);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.broadcast-role.host .broadcast-role__kicker {
+  color: rgba(245, 241, 232, 0.78);
+}
+
+.broadcast-role__title {
+  font-family: var(--display);
+  font-size: 1.4rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: inherit;
+}
+.broadcast-role__desc {
+  font-family: var(--body);
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+.broadcast-role.host .broadcast-role__desc {
+  color: rgba(245, 241, 232, 0.82);
+}
+
+/* Audience join fields -------------------------------------------------- */
+.broadcast-join-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 440px;
+  margin: 0 0 22px;
+}
+.broadcast-field {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
-.broadcast-prompt-item {
+.broadcast-field__label {
+  font-family: var(--body);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.broadcast-field__hint {
+  text-transform: none;
+  letter-spacing: 0.02em;
+  font-weight: 400;
+  color: rgba(107, 123, 114, 0.7);
+}
+.broadcast-code-input,
+.broadcast-name-input {
+  width: 100%;
+  background: var(--paper-edge);
+  border: 1px solid rgba(20, 40, 38, 0.16);
+  border-radius: var(--radius-md);
+  padding: 14px 18px;
+  color: var(--ink);
+  font: inherit;
+  font-family: var(--body);
+  font-size: 1rem;
+  outline: none;
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease), box-shadow 0.15s var(--ease);
+  box-sizing: border-box;
+}
+.broadcast-code-input {
+  font-family: var(--display);
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  text-align: center;
+  font-size: 1.6rem;
+  font-weight: 500;
+}
+.broadcast-code-input:focus,
+.broadcast-name-input:focus {
+  border-color: var(--moss);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--moss);
+}
+.broadcast-code-input::placeholder,
+.broadcast-name-input::placeholder {
+  color: var(--ink-mute);
+  opacity: 0.5;
+}
+
+/* Waiting-for-host loading dot ------------------------------------------ */
+.broadcast-loading-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--clay);
+  box-shadow: 0 0 0 0 rgba(217, 73, 43, 0.45);
+  animation: bc-loading 1.6s var(--ease) infinite;
+  margin-top: 8px;
+}
+@keyframes bc-loading {
+  0%, 100% { box-shadow: 0 0 0 0   rgba(217, 73, 43, 0.45); transform: scale(1); }
+  50%       { box-shadow: 0 0 0 10px rgba(217, 73, 43, 0);    transform: scale(1.1); }
+}
+
+/* Mode picker (segmented control) --------------------------------------- */
+.broadcast-mode-picker {
+  border: 0;
+  padding: 0;
+  margin: 0 0 20px;
+  width: 100%;
+}
+.broadcast-mode-picker__legend {
+  font-family: var(--body);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  margin: 0 0 10px;
+  padding: 0;
+}
+.broadcast-mode-picker__options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+@media (max-width: 640px) {
+  .broadcast-mode-picker__options { grid-template-columns: 1fr; }
+}
+.broadcast-mode-option {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 12px 14px;
+  background: var(--paper-edge);
+  border: 1px solid rgba(20, 40, 38, 0.08);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: background 0.2s var(--ease), border-color 0.2s var(--ease), transform 0.2s var(--ease), box-shadow 0.2s var(--ease);
+}
+.broadcast-mode-option:hover {
+  transform: translateY(-1px);
+  background: var(--mist);
+  border-color: rgba(20, 40, 38, 0.18);
+}
+.broadcast-mode-option:focus-visible {
+  outline: 2px solid var(--moss);
+  outline-offset: 2px;
+}
+.broadcast-mode-option.is-selected {
+  background: var(--paper);
+  border-color: var(--moss);
+  box-shadow: 0 0 0 1px var(--moss), var(--shadow-sm);
+}
+.broadcast-mode-option.is-auto.is-selected {
+  border-color: var(--sun);
+  box-shadow: 0 0 0 1px var(--sun), var(--shadow-sm);
+}
+.broadcast-mode-option__kicker {
+  font-family: var(--body);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.broadcast-mode-option.is-selected .broadcast-mode-option__kicker {
+  color: var(--moss-deep);
+}
+.broadcast-mode-option.is-auto.is-selected .broadcast-mode-option__kicker {
+  color: var(--clay);
+}
+.broadcast-mode-option__desc {
+  font-family: var(--body);
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+.broadcast-mode-picker__lock {
+  font-family: var(--body);
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+  color: var(--ink-mute);
+  font-style: italic;
+  margin: 8px 0 0;
+}
+
+/* Live screen chrome (sits on top of the video) -------------------------- */
+/* The live screen keeps main's dark cinematic chrome — same as App.tsx's
+   character view. Only the SETUP screens get the warm Atrium paper treatment;
+   once a host is live, the surrounding UI matches the main character flow
+   exactly so it feels like the same product. */
+.broadcast-top-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Room-code chip — dark glass on the live video, same vocabulary as the chat
+   pill/history toggle so the chrome reads as a single system. */
+.broadcast-code-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(12, 16, 24, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(231, 237, 246, 0.92);
+  cursor: pointer;
+  font: inherit;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.broadcast-code-chip:hover {
+  background: rgba(12, 16, 24, 0.78);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+.broadcast-code-chip__label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(231, 237, 246, 0.48);
+}
+.broadcast-code-chip__code {
+  font-family: 'Fraunces', ui-serif, Georgia, serif;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  color: #f4efe6;
+}
+.broadcast-code-chip__hint {
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(121, 150, 255, 0.85);
+}
+
+/* Audience click-to-unmute overlay (dark video chrome) ----------------- */
+.broadcast-unmute-btn {
+  position: absolute;
+  top: 88px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: rgba(12, 16, 24, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #f4efe6;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  z-index: 2;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.broadcast-unmute-btn:hover {
+  background: rgba(12, 16, 24, 0.9);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+/* Audience question rows (host drawer) — dark cinematic to match main ---- */
+.broadcast-question {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   padding: 10px 12px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
+  border-radius: 12px;
   cursor: pointer;
-  transition: background 0.12s;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
 }
-.broadcast-prompt-item:hover {
-  background: rgba(121, 150, 255, 0.1);
-  border-color: rgba(121, 150, 255, 0.25);
+.broadcast-question:hover:not(:disabled) {
+  background: rgba(121, 150, 255, 0.10);
+  border-color: rgba(121, 150, 255, 0.30);
+  transform: translateX(2px);
 }
-.broadcast-prompt-user {
+.broadcast-question:disabled { cursor: default; }
+.broadcast-question--fired { opacity: 0.42; }
+.broadcast-question__who {
   font-size: 0.7rem;
-  color: rgba(121, 150, 255, 0.7);
   font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(121, 150, 255, 0.85);
 }
-.broadcast-prompt-text {
-  font-size: 0.85rem;
-  color: rgba(231, 237, 246, 0.85);
+.broadcast-question__check { color: rgba(231, 237, 246, 0.6); }
+.broadcast-question__text {
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: rgba(231, 237, 246, 0.92);
 }
 
 /* ========================================================================

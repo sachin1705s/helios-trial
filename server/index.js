@@ -197,6 +197,7 @@ const generalLimiter = rateLimit({
   max: 150,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: () => !isProduction,
   message: { error: 'Too many requests, please try again later.' },
 });
 
@@ -522,9 +523,10 @@ app.get('/api/odyssey/status', async (_req, res) => {
 
 const odysseyTokenLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 5,
+  max: isProduction ? 5 : 60,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: () => !isProduction,
   message: { error: 'Too many token requests, please try again later.' },
 });
 
@@ -2395,22 +2397,48 @@ const BROADCAST_HEARTBEAT_STALE_MS = 45 * 1000;  // 45 s without a host ping →
 // In-memory store for local dev (Redis in production)
 const _broadcastRooms = new Map();   // code → { status, hostToken, webrtcUrl, spectatorToken, hlsUrl, lastHeartbeat, prompts[] }
 
+// In-memory SSE subscribers for audio fanout: code → Set<res>. Always in-memory because
+// SSE responses are stateful Node objects; cannot be sharded across Redis. For multi-node
+// production this would need a pub/sub bus (e.g. Redis pubsub) — out of scope today.
+const _broadcastAudioSubs = new Map();
+let _broadcastUtteranceCounter = 0;
+
 const bcRoomKey    = (code) => `broadcast:room:${code}`;
 const bcPromptsKey = (code) => `broadcast:prompts:${code}`;
 
+// Write an SSE event to every subscriber of this room. `event` is the SSE event name;
+// `data` is JSON-stringified into the data field. Safely no-ops if nobody is listening.
+const broadcastAudioEvent = (code, event, data) => {
+  const subs = _broadcastAudioSubs.get(code);
+  if (!subs || subs.size === 0) return;
+  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const res of subs) {
+    try { res.write(payload); } catch { /* writes after close — ignore */ }
+  }
+};
+
+const closeAudioSubscribers = (code) => {
+  const subs = _broadcastAudioSubs.get(code);
+  if (!subs) return;
+  for (const res of subs) { try { res.end(); } catch { /* ignore */ } }
+  _broadcastAudioSubs.delete(code);
+};
+
 const broadcastLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 5,
+  max: isProduction ? 10 : 200,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: () => !isProduction,
   message: { error: 'Too many room actions, please try again later.' },
 });
 
 const broadcastPromptLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 20,
+  max: isProduction ? 20 : 200,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: () => !isProduction,
   message: { error: 'Too many prompts, slow down.' },
 });
 
@@ -2575,8 +2603,133 @@ app.delete('/api/broadcast/room/:code', async (req, res) => {
     if (room && room.hostToken && room.hostToken !== hostToken) return res.status(403).json({ error: 'Invalid host token.' });
     _broadcastRooms.delete(code);
   }
+  closeAudioSubscribers(code);
   console.log(`[broadcast] room ${code} ended`);
   return res.json({ ok: true });
+});
+
+// GET /api/broadcast/room/:code/audio/stream — SSE feed of character voice chunks.
+// Both host and audience subscribe here; the host calls /speak, the server fans out
+// PCM chunks to every subscriber so everybody hears the same audio at the same time
+// (within ~10ms of network jitter).
+app.get('/api/broadcast/room/:code/audio/stream', async (req, res) => {
+  const code = String(req.params.code ?? '').toUpperCase().trim();
+
+  // Confirm the room exists before opening the SSE connection.
+  let exists = false;
+  if (useRedis) {
+    exists = !!(await redis.exists(bcRoomKey(code)));
+  } else {
+    exists = _broadcastRooms.has(code);
+  }
+  if (!exists) return res.status(404).json({ error: 'Room not found.' });
+
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no', // disable nginx proxy buffering
+  });
+  res.flushHeaders?.();
+  res.write(`event: hello\ndata: ${JSON.stringify({ code })}\n\n`);
+
+  let subs = _broadcastAudioSubs.get(code);
+  if (!subs) { subs = new Set(); _broadcastAudioSubs.set(code, subs); }
+  subs.add(res);
+
+  // Keepalive comment every 25s so proxies don't time out the connection.
+  const keepalive = setInterval(() => {
+    try { res.write(': keepalive\n\n'); } catch { /* ignore */ }
+  }, 25000);
+
+  const cleanup = () => {
+    clearInterval(keepalive);
+    const s = _broadcastAudioSubs.get(code);
+    if (s) { s.delete(res); if (s.size === 0) _broadcastAudioSubs.delete(code); }
+  };
+  req.on('close', cleanup);
+  req.on('error', cleanup);
+});
+
+// POST /api/broadcast/room/:code/speak — host asks the character to speak about something.
+// Server-side: runs the chat pipeline to get reply + action, streams TTS PCM, and fans
+// every chunk out to all SSE subscribers. Returns { reply, action } to the host so it can
+// drive Odyssey animation via interact(action).
+app.post('/api/broadcast/room/:code/speak', async (req, res) => {
+  const code = String(req.params.code ?? '').toUpperCase().trim();
+  const { text, hostToken, character, history } = req.body ?? {};
+  if (!text || typeof text !== 'string') return res.status(400).json({ error: 'Missing prompt text.' });
+  if (!hostToken) return res.status(403).json({ error: 'Missing host token.' });
+  if (!character) return res.status(400).json({ error: 'Missing character.' });
+
+  // Auth: hostToken must match.
+  let room;
+  if (useRedis) {
+    room = await redis.hgetall(bcRoomKey(code));
+    if (!room || !room.status) return res.status(404).json({ error: 'Room not found.' });
+  } else {
+    room = _broadcastRooms.get(code);
+    if (!room) return res.status(404).json({ error: 'Room not found.' });
+  }
+  if (room.hostToken !== hostToken) return res.status(403).json({ error: 'Invalid host token.' });
+
+  // 1) Run chat → reply + action. Reuse the same logic by calling our own /api/character/chat
+  // via HTTP. Cheap because it's a localhost loopback (local dev only — on Vercel, lambdas
+  // are isolated; this whole broadcast feature requires a long-running Node process anyway).
+  const selfBase = `http://127.0.0.1:${process.env.PORT || 8787}`;
+  let chatData;
+  try {
+    const chatRes = await fetch(`${selfBase}/api/character/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text, history: Array.isArray(history) ? history.slice(-6) : [], character, enableSearch: false }),
+    });
+    if (!chatRes.ok) {
+      const err = await chatRes.text().catch(() => '');
+      return res.status(502).json({ error: 'Chat upstream failed.', detail: err.slice(0, 200) });
+    }
+    chatData = await chatRes.json();
+  } catch (err) {
+    return res.status(502).json({ error: 'Chat upstream unreachable.', detail: String(err).slice(0, 200) });
+  }
+  const reply = String(chatData?.reply ?? '').trim() || 'Hmm, fascinating.';
+  const action = String(chatData?.action ?? '').trim() || 'nod thoughtfully and gesture gently';
+
+  // 2) Tell the host the reply + action so it can drive Odyssey animation in parallel.
+  res.json({ reply, action });
+
+  // 3) Stream TTS and fan out the PCM chunks via SSE. Do this async — host already
+  // got the metadata; audio arrives over the SSE channel.
+  const utteranceId = ++_broadcastUtteranceCounter;
+  broadcastAudioEvent(code, 'utterance-start', { id: utteranceId, reply, action });
+
+  try {
+    const ttsRes = await fetch(`${selfBase}/api/character/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: reply, character }),
+    });
+    if (!ttsRes.ok || !ttsRes.body) {
+      broadcastAudioEvent(code, 'utterance-end', { id: utteranceId, ok: false });
+      return;
+    }
+    const sampleRate = parseInt(ttsRes.headers.get('x-sample-rate') ?? '24000', 10);
+    let seq = 0;
+    for await (const chunk of ttsRes.body) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      // PCM bytes → base64 envelope. We do NOT split into smaller frames here; whatever
+      // the upstream emits we forward as-is. Client decodes pair-aligned.
+      broadcastAudioEvent(code, 'audio', {
+        id: utteranceId,
+        seq: seq++,
+        sampleRate,
+        pcm: buf.toString('base64'),
+      });
+    }
+    broadcastAudioEvent(code, 'utterance-end', { id: utteranceId, ok: true });
+  } catch (err) {
+    broadcastAudioEvent(code, 'utterance-end', { id: utteranceId, ok: false, error: String(err).slice(0, 120) });
+  }
 });
 
 // ─── Keyword expansion ────────────────────────────────────────────────────────
