@@ -100,8 +100,9 @@ export function useOdysseyStream(options: UseOdysseyStreamOptions = {}) {
           statsCollectorRef.current?.setContext({ streamId });
           setStatus('streaming');
         },
-        onStreamEnded: () => { streamActiveRef.current = false; },
+        onStreamEnded: () => { streamActiveRef.current = false; setStatus('ready'); },
         onStreamError: (reason, msg) => {
+          setStatus('error');
           setError(msg ?? 'Stream error.');
           trackEvent('odyssey_stream_error', { reason, message: msg });
         },

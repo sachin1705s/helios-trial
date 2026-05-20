@@ -2577,13 +2577,18 @@ app.get('/api/broadcast/room/:code/prompts', async (req, res) => {
   const since = Number(req.query.since ?? 0) || 0;
 
   let prompts = [];
-  if (useRedis) {
-    const members = await redis.zrangebyscore(bcPromptsKey(code), since + 1, '+inf');
-    prompts = members.map((m) => { try { return JSON.parse(m); } catch { return null; } }).filter(Boolean);
-  } else {
-    const room = _broadcastRooms.get(code);
-    if (!room) return res.status(404).json({ error: 'Room not found.' });
-    prompts = room.prompts.filter((p) => p.timestamp > since);
+  try {
+    if (useRedis) {
+      const members = await redis.zrange(bcPromptsKey(code), since + 1, '+inf', { byScore: true });
+      prompts = members.map((m) => { try { return JSON.parse(m); } catch { return null; } }).filter(Boolean);
+    } else {
+      const room = _broadcastRooms.get(code);
+      if (!room) return res.status(404).json({ error: 'Room not found.' });
+      prompts = room.prompts.filter((p) => p.timestamp > since);
+    }
+  } catch (err) {
+    console.warn('[broadcast/prompts] fetch failed:', err?.message);
+    return res.json({ prompts: [], serverTime: Date.now() });
   }
   return res.json({ prompts, serverTime: Date.now() });
 });
