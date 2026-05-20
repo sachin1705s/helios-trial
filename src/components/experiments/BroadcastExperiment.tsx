@@ -545,7 +545,6 @@ function HostView({ onBack }: { onBack: () => void }) {
 // ─── Audience view ────────────────────────────────────────────────────────────
 
 function AudienceView({ onBack }: { onBack: () => void }) {
-  const navigate = useNavigate();
   const [codeInput, setCodeInput] = useState('');
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
@@ -695,10 +694,9 @@ function AudienceView({ onBack }: { onBack: () => void }) {
       <div className="atrium app broadcast-setup-shell">
         <div className="ui">
           <header className="top-bar">
-            <button className="btn ghost" onClick={() => navigate('/labs')}>← Back</button>
+            <button className="btn ghost" onClick={handleBack}>← Back</button>
           </header>
           <main className="broadcast-setup">
-            <p className="broadcast-eyebrow">Experiment 5 · Watch</p>
             <h1 className="broadcast-title">Join a broadcast.</h1>
             <p className="broadcast-lede">Drop in with a room code. Watch live — and ask anything.</p>
 
