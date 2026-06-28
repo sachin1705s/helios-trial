@@ -90,6 +90,11 @@
   object-fit: cover;
   object-position: center top;
   transition: opacity 0.35s ease;
+  /* GPU compositing layer — lets the browser composite the video without
+     re-rasterising surrounding DOM on every frame. */
+  will-change: transform;
+  transform: translateZ(0);
+  image-rendering: high-quality;
 }
 
 .video-element.is-hidden {
@@ -1006,10 +1011,108 @@
 .landing-actions {
   display: flex;
   gap: 10px;
+  align-items: center;
 }
 
 .landing-actions .btn {
   text-decoration: none;
+}
+
+.stream-meter-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.stream-meter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 13px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.82);
+  white-space: nowrap;
+}
+
+.stream-meter-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.4);
+  flex: none;
+}
+
+.stream-meter-dot.idle { background: rgba(255, 255, 255, 0.35); }
+.stream-meter-dot.active {
+  background: #34d399;
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.8);
+}
+.stream-meter-dot.full {
+  background: #f87171;
+  box-shadow: 0 0 8px rgba(248, 113, 113, 0.85);
+}
+
+.stream-meter-label {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+.stream-meter-bar {
+  width: 48px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+  flex: none;
+}
+
+.stream-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #34d399, #f87171);
+  transition: width 0.4s ease;
+}
+
+@media (max-width: 720px) {
+  .stream-meter-bar { display: none; }
+}
+
+/* Model toggle (Helios / LingBot) */
+.model-toggle {
+  display: flex;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 2px;
+}
+
+.model-toggle__btn {
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 0.74rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  white-space: nowrap;
+}
+
+.model-toggle__btn:hover {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.model-toggle__btn--active {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
 }
 
 .about-section {

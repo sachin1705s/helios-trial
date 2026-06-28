@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { BroadcastInfo } from '@odysseyml/odyssey';
-import { OdysseyService, credentialsFromDict, loadImageFile } from '../lib/odyssey';
+import { HeliosService, credentialsFromDict, loadImageFile, type BroadcastInfo } from '../lib/helios';
 import { trackEvent } from '../lib/analytics';
 import { getFirstPeerConnection } from '../lib/webrtc-diagnostics';
 import { WebRTCStatsCollector } from '../lib/webrtc-stats-collector';
@@ -23,7 +22,7 @@ export function useOdysseyStream(options: UseOdysseyStreamOptions = {}) {
   const [error, setError] = useState<string | null>(null);
   const [reply, setReply] = useState<string | null>(null);
 
-  const serviceRef  = useRef<OdysseyService | null>(null);
+  const serviceRef  = useRef<HeliosService | null>(null);
   const videoRef    = useRef<HTMLVideoElement | null>(null);
   const leaseIdRef  = useRef<string | null>(null);
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -37,7 +36,7 @@ export function useOdysseyStream(options: UseOdysseyStreamOptions = {}) {
   const startHeartbeat = useCallback((leaseId: string) => {
     stopHeartbeat();
     heartbeatRef.current = setInterval(async () => {
-      await fetch('/api/odyssey/heartbeat', {
+      await fetch('/api/reactor/heartbeat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ leaseId }),
@@ -48,7 +47,7 @@ export function useOdysseyStream(options: UseOdysseyStreamOptions = {}) {
   const releaseLease = useCallback(async () => {
     stopHeartbeat();
     if (leaseIdRef.current) {
-      await fetch('/api/odyssey/release', {
+      await fetch('/api/reactor/release', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ leaseId: leaseIdRef.current }),
@@ -61,7 +60,7 @@ export function useOdysseyStream(options: UseOdysseyStreamOptions = {}) {
     setStatus('connecting');
     setError(null);
     try {
-      const res = await fetch('/api/odyssey/token');
+      const res = await fetch('/api/reactor/token');
       if (!res.ok) {
         const d = await res.json().catch(() => null);
         throw new Error(d?.error ?? 'Could not get Odyssey token.');
@@ -72,7 +71,7 @@ export function useOdysseyStream(options: UseOdysseyStreamOptions = {}) {
       const creds = credentialsFromDict(data.credentials);
       if (data.leaseId) { leaseIdRef.current = data.leaseId; startHeartbeat(data.leaseId); }
 
-      const svc = new OdysseyService(creds);
+      const svc = new HeliosService(creds);
       serviceRef.current = svc;
 
       await svc.connect({
@@ -104,7 +103,7 @@ export function useOdysseyStream(options: UseOdysseyStreamOptions = {}) {
         onStreamError: (reason, msg) => {
           setStatus('error');
           setError(msg ?? 'Stream error.');
-          trackEvent('odyssey_stream_error', { reason, message: msg });
+          trackEvent('helios_stream_error', { reason, message: msg });
         },
         onBroadcastReady: (info) => { onBroadcastReadyRef.current?.(info); },
       });
@@ -150,8 +149,8 @@ export function useOdysseyStream(options: UseOdysseyStreamOptions = {}) {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // Log content-policy / NSFW rejections for later review
-      console.warn(`[odyssey:interact] rejected prompt="${prompt}" error="${msg}"`);
-      trackEvent('odyssey_interact_rejected', { prompt, error: msg });
+      console.warn(`[helios:interact] rejected prompt="${prompt}" error="${msg}"`);
+      trackEvent('helios_interact_rejected', { prompt, error: msg });
       throw err;
     }
   }, []);

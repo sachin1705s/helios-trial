@@ -1,13 +1,12 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Analytics } from '@vercel/analytics/react';
 import { SpeedInsights } from '@vercel/speed-insights/react';
 import DripCheckOverlay from './components/experiments/DripCheckOverlay';
-import type { ConnectionStatus } from '@odysseyml/odyssey';
 import type { User } from '@supabase/supabase-js';
 import charactersData from './data/characters.json';
 import { trackEvent } from './lib/analytics';
-import { OdysseyService, credentialsFromDict, loadImageFile, type ClientCredentials, type StreamState } from './lib/odyssey';
+import { HeliosService, credentialsFromDict, loadImageFile, type ClientCredentials, type ConnectionStatus, type ReactorModel, type StreamState } from './lib/helios';
 import { SEO_PAGES, applySeo } from './lib/seo';
 import { supabase } from './lib/supabase';
 import { AuthModal } from './components/AuthModal';
@@ -112,6 +111,9 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
   const [isStreamingReady, setIsStreamingReady] = useState(false);
   const [sessionSecondsLeft, setSessionSecondsLeft] = useState(300);
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [streamCapacity, setStreamCapacity] = useState<{ used: number; total: number }>({ used: 0, total: 0 });
+  const [isDisconnectingAll, setIsDisconnectingAll] = useState(false);
+  const [modelMode, setModelMode] = useState<ReactorModel>('helios');
   const [, setSpeechError] = useState<string | null>(null);
   const [textPrompt, setTextPrompt] = useState('');
   const [isCharacterRecording, setIsCharacterRecording] = useState(false);
@@ -135,7 +137,7 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const backgroundAudioRef = useRef<HTMLAudioElement | null>(null);
-  const serviceRef = useRef<OdysseyService | null>(null);
+  const serviceRef = useRef<HeliosService | null>(null);
   const odysseyLeaseIdRef = useRef<string | null>(null);
   const odysseyHeartbeatRef = useRef<number | null>(null);
   const requestIdRef = useRef(0);
@@ -143,7 +145,8 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
   const retryStreamRef = useRef<(() => Promise<void>) | null>(null);
   const moderationRetryCountRef = useRef(0);
   const isStreamingReadyRef = useRef(false);
-  const streamActiveRef = useRef(false); // Set directly in Odyssey callbacks — no React cycle
+  const lingbotDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const streamActiveRef = useRef(false); // Set directly in Helios callbacks — no React cycle
   const dataChannelReadyRef = useRef(false); // true only after onConnected fires; false when reconnecting
   const pendingStartRef = useRef<(() => Promise<void>) | null>(null); // startStream fn waiting for onConnected
   const startStreamInFlightRef = useRef(false); // true while startStream is awaited — blocks re-entrant calls
@@ -186,11 +189,11 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
   // length when computing the next message's index — without doing the
   // antipattern of calling setState inside another setState's updater.
   const characterHistoryRef = useRef<Record<string, Array<{ role: 'user' | 'assistant'; content: string }>>>({});
-  // Two-phase Odyssey transcript buffers — reset each turn
+  // Two-phase Helios transcript buffers — reset each turn
   const glCurrentUserTextRef = useRef('');
   const glOutputTranscriptBufferRef = useRef('');
   const glPhase2FiredRef = useRef(false); // prevents duplicate Phase 2 calls per turn
-  // Odyssey context tracking — for V8/V9/V10 strategies
+  // Helios context tracking — for V8/V9/V10 strategies
   const glLastAckPromptRef = useRef<string>(''); // populated by SDK's onInteractAcknowledged callback
 
   const logEvent = (event: string, data: Record<string, unknown>, transport: 'fetch' | 'beacon' = 'fetch') => {
@@ -234,7 +237,7 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
   const startOdysseyHeartbeat = (leaseId: string) => {
     stopOdysseyHeartbeat();
     odysseyHeartbeatRef.current = window.setInterval(() => {
-      fetch('/api/odyssey/heartbeat', {
+      fetch('/api/reactor/heartbeat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ leaseId }),
@@ -249,9 +252,9 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
     const payload = JSON.stringify({ leaseId });
     if (navigator.sendBeacon) {
       const blob = new Blob([payload], { type: 'application/json' });
-      navigator.sendBeacon('/api/odyssey/release', blob);
+      navigator.sendBeacon('/api/reactor/release', blob);
     } else {
-      fetch('/api/odyssey/release', {
+      fetch('/api/reactor/release', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: payload,
@@ -482,15 +485,87 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
     };
   }, [showLanding, isMusicEnabled]);
 
+  // Poll how many Helios streams are currently active (for the landing-page meter).
+  const refreshStreamCapacity = useCallback(async () => {
+    try {
+      const res = await fetch('/api/reactor/status');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (typeof data?.used === 'number' && typeof data?.total === 'number') {
+        setStreamCapacity({ used: data.used, total: data.total });
+      }
+    } catch {
+      // ignore — meter just keeps its last value
+    }
+  }, []);
+
+  useEffect(() => {
+    // Poll the meter everywhere (landing AND in-character) so the count stays
+    // live while a stream is running.
+    refreshStreamCapacity();
+    const id = window.setInterval(refreshStreamCapacity, 5000);
+    return () => window.clearInterval(id);
+  }, [refreshStreamCapacity]);
+
+  const disconnectAllStreams = useCallback(async () => {
+    setIsDisconnectingAll(true);
+    try {
+      const res = await fetch('/api/reactor/reset', { method: 'POST' });
+      const data = await res.json().catch(() => null);
+      if (data && typeof data.used === 'number' && typeof data.total === 'number') {
+        setStreamCapacity({ used: data.used, total: data.total });
+      } else {
+        await refreshStreamCapacity();
+      }
+    } catch {
+      await refreshStreamCapacity();
+    } finally {
+      setIsDisconnectingAll(false);
+    }
+  }, [refreshStreamCapacity]);
+
+  // Reusable "X/N streams active" meter + "Disconnect all" button.
+  const streamMeterControls = (
+    <div className="stream-meter-controls">
+      <div
+        className="stream-meter"
+        title={`${streamCapacity.used} of ${streamCapacity.total} avatar streams active`}
+      >
+        <span
+          className={`stream-meter-dot ${streamCapacity.used >= streamCapacity.total && streamCapacity.total > 0 ? 'full' : streamCapacity.used > 0 ? 'active' : 'idle'}`}
+          aria-hidden
+        />
+        <span className="stream-meter-label">
+          {streamCapacity.used}/{streamCapacity.total || 5} streams
+        </span>
+        <span className="stream-meter-bar" aria-hidden>
+          <span
+            className="stream-meter-fill"
+            style={{ width: `${streamCapacity.total ? Math.min(100, (streamCapacity.used / streamCapacity.total) * 100) : 0}%` }}
+          />
+        </span>
+      </div>
+      <button
+        type="button"
+        className="btn ghost"
+        onClick={disconnectAllStreams}
+        disabled={isDisconnectingAll || streamCapacity.used === 0}
+        title="Force-disconnect every active avatar stream"
+      >
+        {isDisconnectingAll ? 'Disconnecting…' : 'Disconnect all'}
+      </button>
+    </div>
+  );
+
   useEffect(() => {
     if (showLanding) return; // Wait until user has selected a character before connecting
     let cancelled = false;
     const requestToken = async () => {
       try {
-        const response = await fetch('/api/odyssey/token');
+        const response = await fetch('/api/reactor/token');
         if (!response.ok) {
           const data = await response.json().catch(() => null);
-          const message = data?.error || 'Odyssey not available right now.';
+          const message = data?.error || 'Helios not available right now.';
           if (!cancelled) setError(message);
           return;
         }
@@ -499,14 +574,14 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
         if (data?.credentials) {
           setCredentials(credentialsFromDict(data.credentials));
         } else {
-          setError('Missing Odyssey credentials. Set ODYSSEY_API_KEYS in your server environment.');
+          setError('Missing Reactor credentials. Set REACTOR_API_KEY in your server environment.');
         }
         if (data?.leaseId) {
           odysseyLeaseIdRef.current = data.leaseId;
           startOdysseyHeartbeat(data.leaseId);
         }
       } catch {
-        if (!cancelled) setError('Failed to reach Odyssey. Please try again.');
+        if (!cancelled) setError('Failed to reach Helios. Please try again.');
       }
     };
     requestToken();
@@ -516,13 +591,24 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
   }, [showLanding]);
 
   useEffect(() => {
-    const handleBeforeUnload = () => {
+    let released = false;
+    const handleExit = () => {
+      if (released) return; // pagehide + beforeunload may both fire — release once
+      released = true;
       closeActiveCharacter('page_exit');
-      releaseOdysseyLease();
+      releaseOdysseyLease();              // sendBeacon frees the server-side lease
+      serviceRef.current?.disconnect().catch(() => undefined); // tear down the Helios session
     };
-    window.addEventListener('beforeunload', handleBeforeUnload);
+    // `pagehide` is the reliable teardown signal for refresh / close / navigation
+    // (it also fires for the bfcache); `beforeunload` is a fallback. Both use
+    // sendBeacon so the release survives the page going away. We deliberately do
+    // NOT release on `visibilitychange`/tab-switch — that would kill a live
+    // session just because the user looked at another tab.
+    window.addEventListener('pagehide', handleExit);
+    window.addEventListener('beforeunload', handleExit);
     return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handleExit);
+      window.removeEventListener('beforeunload', handleExit);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // mount/unmount only — cleanup on character switch is handled by handleSelectCharacter
@@ -559,7 +645,7 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
     playGreetingTTS(greeting, charId).catch(() => undefined);
   }, [isStreamingReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
+useEffect(() => {
     isVoiceAgentSlideRef.current = isVoiceAgentSlide;
     if (!isVoiceAgentSlide && voiceStatus === 'connected') {
       setVoiceStatus('idle');
@@ -633,13 +719,33 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
   useEffect(() => {
     if (!credentials) return; // Credentials not yet fetched — wait for character selection
 
-    const service = new OdysseyService(credentials);
+    // Reset stream state when the model changes so stale 'connected' doesn't skip startStream.
+    setConnectionStatus('disconnected');
+    setStreamState('idle');
+    setIsStreamingReady(false);
+
+    const service = new HeliosService(credentials, modelMode);
     serviceRef.current = service;
 
     service
       .connect({
+        onStream: (stream) => {
+          // Video track arrived (during "waiting") — show the live feed early.
+          // Does NOT mean the session can accept commands; startStream waits for ready.
+          debug('[helios] onStream — attaching early');
+          odysseyStreamRef.current = stream;
+          const attachEarly = () => {
+            if (videoRef.current) {
+              videoRef.current.srcObject = stream;
+              videoRef.current.play().catch(() => undefined);
+            } else {
+              setTimeout(attachEarly, 100);
+            }
+          };
+          attachEarly();
+        },
         onConnected: (stream) => {
-          debug('[odyssey] onConnected — stream:', stream);
+          debug('[helios] onConnected — stream:', stream);
           // Set 'connected' here (not in onStatusChange) so startStream is only
           // called after the data channel is open and ready.
           dataChannelReadyRef.current = true;
@@ -656,7 +762,7 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
             if (videoRef.current) {
               videoRef.current.srcObject = stream;
               videoRef.current.play().catch((e: unknown) => {
-                console.warn('[odyssey] video.play failed:', e);
+                console.warn('[helios] video.play failed:', e);
                 // AbortError means play() was interrupted (e.g. mid-render) — retry once
                 if ((e as { name?: string })?.name === 'AbortError') {
                   setTimeout(() => { videoRef.current?.play().catch(() => undefined); }, 150);
@@ -669,7 +775,7 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
           attach();
         },
         onStatusChange: (status) => {
-          debug('[odyssey] status:', status);
+          debug('[helios] status:', status);
           // 'connected' is set in onConnected instead, which fires only after
           // both the video track and data channel are ready.
           if (status !== 'connected') {
@@ -678,7 +784,7 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
           }
         },
         onStreamStarted: () => {
-          debug('[odyssey] onStreamStarted');
+          debug('[helios] onStreamStarted');
           // User navigated back before the stream finished starting — end it and ignore.
           if (showLandingRef.current) {
             serviceRef.current?.endStream().catch(() => undefined);
@@ -688,7 +794,7 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
           // requestIdRef holds the latest request; streamRequestIdRef holds which request
           // called startStream. A mismatch means this onStreamStarted is for an old character.
           if (streamRequestIdRef.current !== requestIdRef.current) {
-            debug('[odyssey] onStreamStarted — stale stream (requestId mismatch), discarding');
+            debug('[helios] onStreamStarted — stale stream (requestId mismatch), discarding');
             serviceRef.current?.endStream().catch(() => undefined);
             return;
           }
@@ -698,7 +804,7 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
           setModerationError(null);
         },
         onStreamEnded: () => {
-          debug('[odyssey] onStreamEnded');
+          debug('[helios] onStreamEnded');
           streamActiveRef.current = false;
           setStreamState('ended');
           setIsStreamingReady(false);
@@ -712,7 +818,7 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
           }
           // Auto-restart the stream so interact() keeps working
           if (retryStreamRef.current) {
-            debug('[odyssey] auto-restarting stream after end');
+            debug('[helios] auto-restarting stream after end');
             setStreamState('starting');
             retryStreamRef.current().catch(() => {
               setStreamState('error');
@@ -721,7 +827,7 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
           }
         },
         onStreamError: (reason, message) => {
-          console.error('[odyssey] onStreamError:', reason, message);
+          console.error('[helios] onStreamError:', reason, message);
           streamActiveRef.current = false;
           const r = typeof reason === 'string' ? reason : JSON.stringify(reason);
           const m = typeof message === 'string' ? message : JSON.stringify(message);
@@ -744,7 +850,7 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
             setIsStreamingReady(false);
             if (moderationRetryCountRef.current < 3 && retryStreamRef.current) {
               moderationRetryCountRef.current++;
-              debug(`[odyssey] moderation_failed — retrying (attempt ${moderationRetryCountRef.current})`);
+              debug(`[helios] moderation_failed — retrying (attempt ${moderationRetryCountRef.current})`);
               setStreamState('starting');
               const retry = retryStreamRef.current;
               setTimeout(() => {
@@ -773,7 +879,7 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
           glLastAckPromptRef.current = prompt;
         },
         onError: (err) => {
-          console.error('[odyssey] onError:', err);
+          console.error('[helios] onError:', err);
           streamActiveRef.current = false;
           setStreamState('error');
           setIsStreamingReady(false);
@@ -810,7 +916,7 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
           service.disconnect().catch(() => undefined);
         });
     };
-  }, [credentials]);
+  }, [credentials, modelMode]);
 
   useEffect(() => {
     const service = serviceRef.current;
@@ -831,7 +937,7 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
       retryStreamRef.current = null;
 
       // Read and immediately clear streamActiveRef atomically.
-      // This ref is set directly in Odyssey callbacks (not via useEffect), so it
+      // This ref is set directly in Helios callbacks (not via useEffect), so it
       // accurately reflects whether a stream is live right now — no React cycle lag.
       const hadActiveStream = streamActiveRef.current;
       streamActiveRef.current = false;
@@ -859,7 +965,8 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
         return;
       }
 
-      const streamOptions = { prompt: slide.prompt, image: file, portrait: slide.id === 'characters-sudharshan' };
+      const lingbotPrompt = 'the character is completely frozen in place like a mannequin — zero movement, zero sway, zero breathing motion, zero blinking, zero expression change. the character is a perfectly still statue. body rigid, feet locked to the floor, arms fixed, face expressionless and unmoving. no walking, no stepping, no locomotion of any kind, feet never leave the ground. the camera is locked and does not move or change angle. the background may shift and evolve freely.';
+      const streamOptions = { prompt: modelMode === 'lingbot' ? lingbotPrompt : slide.prompt, image: file, portrait: slide.id === 'characters-sudharshan' };
       // retryStreamRef is set AFTER startStream resolves — prevents onStreamEnded (macrotask from
       // previous endStream) from racing with the initial call and triggering a double startStream → deadlock.
 
@@ -868,10 +975,10 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
       // This avoids the connectionEpoch feedback loop:
       // startStream → SDK reconnects → onConnected → epoch bump → second startStream → deadlock.
       if (!dataChannelReadyRef.current) {
-        debug('[odyssey] data channel not ready — queuing startStream for onConnected');
+        debug('[helios] data channel not ready — queuing startStream for onConnected');
         pendingStartRef.current = async () => {
           if (requestIdRef.current !== requestId) return;
-          debug('[odyssey] calling startStream (from pending) — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
+          debug('[helios] calling startStream (from pending) — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
           streamRequestIdRef.current = requestId;
           await service.startStream(streamOptions);
           if (requestIdRef.current === requestId) {
@@ -885,18 +992,18 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
       // Mutex: if a startStream is already awaiting (e.g. triggered by a stale effect re-run from
       // onConnected → setConnectionStatus), bail out — the in-flight call will resolve or retry.
       if (startStreamInFlightRef.current) {
-        debug('[odyssey] startStream already in flight — skipping duplicate call');
+        debug('[helios] startStream already in flight — skipping duplicate call');
         return;
       }
       startStreamInFlightRef.current = true;
       streamRequestIdRef.current = requestId;
-      debug('[odyssey] calling startStream — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
+      debug('[helios] calling startStream — slide:', slide.id, '| prompt:', slide.prompt?.slice(0, 60));
       try {
         await service.startStream(streamOptions);
       } finally {
         startStreamInFlightRef.current = false;
       }
-      debug('[odyssey] startStream resolved');
+      debug('[helios] startStream resolved');
       if (requestIdRef.current === requestId) {
         retryStreamRef.current = () => service.startStream(streamOptions).then(() => undefined);
       }
@@ -1001,7 +1108,7 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
     setShowVideoModal(false);
   };
 
-  // If the Odyssey stream connected while the landing page was showing (video element
+  // If the Helios stream connected while the landing page was showing (video element
   // didn't exist yet), attach the stream now that the story view is rendered.
   useEffect(() => {
     if (!showLanding && odysseyStreamRef.current && videoRef.current) {
@@ -1059,6 +1166,27 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
   useEffect(() => {
     handleInteractRef.current = handleInteract;
   }, [handleInteract]);
+
+  // Enhances raw user text via Gemini (server-side) into a guide-compliant
+  // Reactor prompt, then sends it mid-stream. Falls back to raw text on error.
+  const sendStreamPrompt = async (rawPrompt: string) => {
+    if (!rawPrompt.trim() || !isStreamingReadyRef.current) return;
+    try {
+      const res = await fetch('/api/reactor/enhance-prompt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userPrompt: rawPrompt.trim(),
+          characterName: activeCharacterName,
+          reactorModel: modelMode,
+        }),
+      });
+      const data = res.ok ? (await res.json() as { enhancedPrompt?: string }) : null;
+      handleInteractRef.current(data?.enhancedPrompt || rawPrompt.trim());
+    } catch {
+      handleInteractRef.current(rawPrompt.trim());
+    }
+  };
 
   const stopVoiceCapture = () => {
     // no-op: using SDK transcripts instead of browser speech
@@ -1978,7 +2106,11 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
       latencyMs: Date.now() - chatStartedAt,
       responseLength: trimmedReply.length,
     });
-    const action = String(chatData.action ?? '').trim() || 'nod thoughtfully and gesture gently';
+    // Strip [SCENE_ACTION: ...] tags — the character LLM may emit these as
+    // internal game-engine commands (especially Circus Lion) but Reactor only
+    // understands natural language.
+    const rawAction = String(chatData.action ?? '').trim();
+    const cleanAction = rawAction.replace(/\[SCENE_ACTION:[^\]]*\]/gi, '').replace(/\s{2,}/g, ' ').trim();
     const objects = Array.isArray(chatData.objects) ? chatData.objects.filter(Boolean).slice(0, 3) : [];
 
     setCharacterReply(trimmedReply);
@@ -1994,8 +2126,13 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
       }));
     }
 
-    const objectPrompt = objects.length ? ` Include ${objects.join(', ')} in the scene.` : '';
-    const streamPrompt = `${action}.${objectPrompt}`.trim();
+    // If the LLM only produced SCENE_ACTION tags, fall back to the user's own
+    // phrasing so Reactor still has something concrete to animate.
+    const actionText = cleanAction || userText;
+    const objectSuffix = objects.length ? `, holding ${objects.join(' and ')}` : '';
+    const streamPrompt = `${characterName} ${actionText}${objectSuffix}`.trim();
+    // Send directly — the character LLM already translated the user's intent;
+    // routing through enhance-prompt again adds latency and can strip details.
     handleInteractRef.current(streamPrompt);
     playCharacterTTS(trimmedReply, slideId);
   };
@@ -2006,6 +2143,17 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
       return;
     }
     setTextPrompt('');
+    if (lingbotDebounceRef.current) {
+      clearTimeout(lingbotDebounceRef.current);
+      lingbotDebounceRef.current = null;
+    }
+
+    if (modelMode === 'lingbot') {
+      sendStreamPrompt(prompt);
+      return;
+    }
+
+    // Helios: pass through the LLM layer so the character thinks and talks.
     if (!ttsAudioCtxRef.current) {
       ttsAudioCtxRef.current = new AudioContext();
     } else {
@@ -2228,6 +2376,7 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
               </button>
             </div>
             <div className="landing-actions">
+              {streamMeterControls}
               <a
                 className="btn ghost"
                 href="/about-us"
@@ -2450,6 +2599,25 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
           }}>
             Back
           </button>
+          <div className="model-toggle" role="group" aria-label="Stream model">
+            <button
+              type="button"
+              className={`model-toggle__btn${modelMode === 'helios' ? ' model-toggle__btn--active' : ''}`}
+              onClick={() => setModelMode('helios')}
+              title="Helios — interactive character stream"
+            >
+              Helios
+            </button>
+            <button
+              type="button"
+              className={`model-toggle__btn${modelMode === 'lingbot' ? ' model-toggle__btn--active' : ''}`}
+              onClick={() => setModelMode('lingbot')}
+              title="LingBot — interactive world navigation"
+            >
+              LingBot
+            </button>
+          </div>
+          {streamMeterControls}
         </header>
 
         <main className="slide-shell" />
@@ -2549,62 +2717,92 @@ function App({ initialCharacterId, dripCheck = false }: { initialCharacterId?: s
               className="chat-pill__input"
               type="text"
               value={textPrompt}
-              onChange={(event) => setTextPrompt(event.target.value)}
+              onChange={(event) => {
+                const val = event.target.value;
+                setTextPrompt(val);
+                if (isStreamingReadyRef.current) {
+                  if (lingbotDebounceRef.current) clearTimeout(lingbotDebounceRef.current);
+                  lingbotDebounceRef.current = setTimeout(() => {
+                    const trimmed = val.trim();
+                    if (trimmed) sendStreamPrompt(trimmed);
+                  }, 300);
+                }
+              }}
               onKeyDown={handleTextPromptKeyDown}
               placeholder={
                 streamState === 'error'
                   ? 'Reconnecting…'
                   : !isStreamingReady
-                    ? `Waking up ${activeCharacterName}…`
-                    : 'Type a wish…'
+                    ? `Waking up ${modelMode === 'lingbot' ? 'LingBot' : activeCharacterName}…`
+                    : modelMode === 'lingbot'
+                      ? 'Describe the scene…'
+                      : 'Type a wish…'
               }
               disabled={!isStreamingReady}
               aria-label="Type a message"
               aria-busy={!isStreamingReady}
             />
-            {/* WhatsApp-style toggle: send if there's text, mic otherwise.
-                Recording states still take precedence over both. */}
-            {isCharacterRecording ? (
-              <button
-                type="button"
-                className={[
-                  'chat-pill__action',
-                  'chat-pill__mic',
-                  'chat-pill__mic--recording',
-                  isCharacterThinking ? 'chat-pill__mic--thinking' : '',
-                  isCharacterSpeaking ? 'chat-pill__mic--speaking' : 'chat-pill__mic--listening',
-                ].filter(Boolean).join(' ')}
-                onClick={stopGeminiLiveSession}
-                aria-label={isCharacterSpeaking ? `${activeCharacterName} is speaking — click to end` : 'Listening — click to end'}
-              >
-                <span className="chat-pill__mic-pulse" aria-hidden />
-              </button>
-            ) : textPrompt.trim().length > 0 ? (
-              <button
-                type="button"
-                className="chat-pill__action chat-pill__send"
-                onClick={handleTextPromptSubmit}
-                disabled={!isStreamingReady}
-                aria-label="Send message"
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M22 2L11 13" />
-                  <path d="M22 2l-7 20-4-9-9-4 20-7z" />
-                </svg>
-              </button>
+            {/* LingBot: no voice session — only a send button when text is present. */}
+            {modelMode === 'lingbot' ? (
+              textPrompt.trim().length > 0 && (
+                <button
+                  type="button"
+                  className="chat-pill__action chat-pill__send"
+                  onClick={handleTextPromptSubmit}
+                  disabled={!isStreamingReady}
+                  aria-label="Send scene prompt"
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M22 2L11 13" />
+                    <path d="M22 2l-7 20-4-9-9-4 20-7z" />
+                  </svg>
+                </button>
+              )
             ) : (
-              <button
-                type="button"
-                className="chat-pill__action chat-pill__mic"
-                onClick={startGeminiLiveSession}
-                disabled={!isStreamingReady}
-                aria-label={`Talk to ${activeCharacterName}`}
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <rect x="9" y="3" width="6" height="12" rx="3" />
-                  <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" />
-                </svg>
-              </button>
+              /* Helios: WhatsApp-style toggle — send if text, mic otherwise.
+                 Recording states take precedence over both. */
+              isCharacterRecording ? (
+                <button
+                  type="button"
+                  className={[
+                    'chat-pill__action',
+                    'chat-pill__mic',
+                    'chat-pill__mic--recording',
+                    isCharacterThinking ? 'chat-pill__mic--thinking' : '',
+                    isCharacterSpeaking ? 'chat-pill__mic--speaking' : 'chat-pill__mic--listening',
+                  ].filter(Boolean).join(' ')}
+                  onClick={stopGeminiLiveSession}
+                  aria-label={isCharacterSpeaking ? `${activeCharacterName} is speaking — click to end` : 'Listening — click to end'}
+                >
+                  <span className="chat-pill__mic-pulse" aria-hidden />
+                </button>
+              ) : textPrompt.trim().length > 0 ? (
+                <button
+                  type="button"
+                  className="chat-pill__action chat-pill__send"
+                  onClick={handleTextPromptSubmit}
+                  disabled={!isStreamingReady}
+                  aria-label="Send message"
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M22 2L11 13" />
+                    <path d="M22 2l-7 20-4-9-9-4 20-7z" />
+                  </svg>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="chat-pill__action chat-pill__mic"
+                  onClick={startGeminiLiveSession}
+                  disabled={!isStreamingReady}
+                  aria-label={`Talk to ${activeCharacterName}`}
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <rect x="9" y="3" width="6" height="12" rx="3" />
+                    <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" />
+                  </svg>
+                </button>
+              )
             )}
           </div>
         </footer>

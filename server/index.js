@@ -1,5 +1,4 @@
 import express from 'express';
-import { Odyssey, credentialsToDict } from '@odysseyml/odyssey';
 import multer from 'multer';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -141,13 +140,13 @@ const parseOdysseyKeys = (raw) =>
     .map((key) => key.trim())
     .filter(Boolean);
 
-const odysseyApiKey = process.env.ODYSSEY_API_KEY || '';
-const odysseyApiKeys = parseOdysseyKeys(process.env.ODYSSEY_API_KEYS || '');
+const odysseyApiKey = process.env.REACTOR_API_KEY || process.env.ODYSSEY_API_KEY || '';
+const odysseyApiKeys = parseOdysseyKeys(process.env.REACTOR_API_KEYS || process.env.ODYSSEY_API_KEYS || '');
 if (odysseyApiKeys.length === 0 && odysseyApiKey) {
   odysseyApiKeys.push(odysseyApiKey);
 }
 if (odysseyApiKeys.length === 0) {
-  console.warn('[startup] Missing ODYSSEY_API_KEY(S)');
+  console.warn('[startup] Missing REACTOR_API_KEY(S)');
 }
 
 const smallestApiKey = process.env.SMALLEST_API_KEY || '';
@@ -515,11 +514,14 @@ app.get('/api/health/upstream', async (_req, res) => {
   res.json({ time: new Date().toISOString(), probes: out });
 });
 
-// Odyssey token endpoint — mints short-lived client credentials server-side (API key never leaves the server)
-app.get('/api/odyssey/status', async (_req, res) => {
+// Reactor token endpoint — mints short-lived Helios client JWTs server-side (API key never leaves the server).
+const reactorStatusHandler = async (_req, res) => {
   const capacity = await getOdysseyCapacity();
   return res.json(capacity);
-});
+};
+
+app.get('/api/reactor/status', reactorStatusHandler);
+app.get('/api/odyssey/status', reactorStatusHandler);
 
 const odysseyTokenLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -530,9 +532,9 @@ const odysseyTokenLimiter = rateLimit({
   message: { error: 'Too many token requests, please try again later.' },
 });
 
-app.get('/api/odyssey/token', odysseyTokenLimiter, async (_req, res) => {
+const reactorTokenHandler = async (_req, res) => {
   if (!runtimeConfig.odysseyApiKeys.length) {
-    return res.status(503).json({ error: 'Odyssey not configured.' });
+    return res.status(503).json({ error: 'Reactor not configured.' });
   }
   const lease = await allocateOdysseyLease();
   if (!lease) {
@@ -546,31 +548,64 @@ app.get('/api/odyssey/token', odysseyTokenLimiter, async (_req, res) => {
     });
   }
   try {
-    const serverClient = new Odyssey({ apiKey: lease.apiKey });
-    const credentials = await serverClient.createClientCredentials();
-    return res.json({ credentials: credentialsToDict(credentials), leaseId: lease.leaseId, keyIndex: lease.keyIndex });
+    const tokenRes = await fetch('https://api.reactor.inc/tokens', {
+      method: 'POST',
+      headers: {
+        'Reactor-API-Key': lease.apiKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ expires_after: 3600 }),
+    });
+    const body = await tokenRes.json().catch(() => ({}));
+    if (!tokenRes.ok || !body?.jwt) {
+      throw new Error(body?.error || body?.message || `Reactor token request failed: ${tokenRes.status}`);
+    }
+    return res.json({
+      credentials: { jwt: body.jwt },
+      leaseId: lease.leaseId,
+      keyIndex: lease.keyIndex,
+    });
   } catch (err) {
     await releaseOdysseyLease(lease.leaseId);
-    console.error('[odyssey] createClientCredentials failed:', err);
-    return res.status(503).json({ error: 'Failed to create Odyssey session. Please try again.' });
+    console.error('[reactor] token creation failed:', err);
+    return res.status(503).json({ error: 'Failed to create Reactor session. Please try again.' });
   }
-});
+};
 
-app.post('/api/odyssey/heartbeat', async (req, res) => {
+app.get('/api/reactor/token', odysseyTokenLimiter, reactorTokenHandler);
+app.get('/api/odyssey/token', odysseyTokenLimiter, reactorTokenHandler);
+
+const reactorHeartbeatHandler = async (req, res) => {
   const leaseId = String(req.body?.leaseId ?? '').trim();
   if (!leaseId) return res.status(400).json({ error: 'Missing leaseId.' });
   if (!await touchOdysseyLease(leaseId)) {
     return res.status(404).json({ error: 'Lease not found.' });
   }
   return res.json({ ok: true });
-});
+};
 
-app.post('/api/odyssey/release', async (req, res) => {
+app.post('/api/reactor/heartbeat', reactorHeartbeatHandler);
+app.post('/api/odyssey/heartbeat', reactorHeartbeatHandler);
+
+const reactorReleaseHandler = async (req, res) => {
   const leaseId = String(req.body?.leaseId ?? '').trim();
   if (!leaseId) return res.status(400).json({ error: 'Missing leaseId.' });
   await releaseOdysseyLease(leaseId);
   return res.json({ ok: true });
-});
+};
+
+app.post('/api/reactor/release', reactorReleaseHandler);
+app.post('/api/odyssey/release', reactorReleaseHandler);
+
+// Disconnect ALL active streams — clears every lease in the pool at once.
+const reactorResetHandler = async (_req, res) => {
+  await resetOdysseyPool(runtimeConfig.odysseyApiKeys);
+  const capacity = await getOdysseyCapacity();
+  return res.json({ ok: true, ...capacity });
+};
+
+app.post('/api/reactor/reset', reactorResetHandler);
+app.post('/api/odyssey/reset', reactorResetHandler);
 
 // ─── Animate Drawings — Experiment 1 ─────────────────────────────────────────
 
@@ -1215,6 +1250,59 @@ app.post('/api/extract-objects', aiLimiter, async (req, res) => {
   } catch (err) {
     console.warn('[extract-objects] failed:', err?.message);
     return res.json({ objects: [] });
+  }
+});
+
+// ─── Reactor prompt enhancer ──────────────────────────────────────────────────
+// Converts raw user input into a well-structured Reactor prompt that follows
+// the official prompting guide: camera direction, subject re-anchoring, single
+// character, no camera angle change, explicit exclusion of unwanted elements.
+app.post('/api/reactor/enhance-prompt', aiLimiter, async (req, res) => {
+  try {
+    const ai = getAiClient();
+    if (!ai) return res.status(503).json({ error: 'AI service not configured.' });
+
+    const userPrompt = String(req.body?.userPrompt ?? '').trim();
+    const characterName = String(req.body?.characterName ?? 'the character').trim();
+    const reactorModel = String(req.body?.reactorModel ?? 'helios').trim();
+    if (!userPrompt) return res.status(400).json({ error: 'Missing userPrompt.' });
+
+    const lingbotMovementBlock = reactorModel === 'lingbot' ? [
+      '',
+      'LINGBOT MOVEMENT LOCK — these rules override everything else for LingBot:',
+      'L1. The character MUST NOT walk, step, stride, run, jog, creep, shuffle, drift, or move their feet in any direction.',
+      'L2. The character MUST NOT turn around, rotate, spin, pivot, or face a different direction.',
+      'L3. If the user input requests any form of locomotion or positional movement (forward, backward, left, right, WASD-style navigation, "go to", "walk to", "move toward"), IGNORE the movement and instead describe only a stationary expressive gesture that conveys the same intent.',
+      'L4. The character is rooted to the spot. Only hands, arms, head, and facial expression may be described.',
+    ].join('\n') : '';
+
+    const systemInstruction = [
+      `You convert short user inputs into precise mid-stream prompts for the Reactor ${reactorModel === 'lingbot' ? 'LingBot' : 'Helios'} real-time video model.`,
+      '',
+      'STRICT RULES — every output must obey all of these:',
+      `1. Camera: always "static medium shot" — the camera NEVER moves, pans, tilts, or changes angle.`,
+      `2. Subject: re-anchor with "${characterName} [action]" at the start.`,
+      '3. Framing: explicitly include "centered in frame, fully in shot" — the character never leaves frame.',
+      '4. No extras: explicitly include "no other people, single character only".',
+      '5. No camera change: never suggest a cut, zoom, pan, tilt, or new angle.',
+      '6. One action per prompt — describe what the character does physically, through body language and behavior.',
+      '7. Under 60 words total.',
+      '8. Return ONLY the prompt text — no explanation, no quotes, no commentary.',
+      lingbotMovementBlock,
+    ].filter(Boolean).join('\n');
+
+    const result = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: `User input: "${userPrompt}"\n\nConvert to a Reactor prompt.`,
+      config: { systemInstruction, maxOutputTokens: 100, temperature: 0.2 },
+    });
+
+    let enhanced = '';
+    try { enhanced = result.text?.trim() || ''; } catch { /* safety */ }
+    return res.json({ enhancedPrompt: enhanced || userPrompt });
+  } catch (err) {
+    console.warn('[enhance-prompt] error:', err?.message);
+    return res.json({ enhancedPrompt: req.body?.userPrompt || '' });
   }
 });
 

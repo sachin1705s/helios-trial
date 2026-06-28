@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Odyssey, type SpectatorConnection } from '@odysseyml/odyssey';
-import type { BroadcastInfo } from '@odysseyml/odyssey';
 import { useOdysseyStream } from '../../hooks/useOdysseyStream';
 import { useBroadcastAudio } from '../../hooks/useBroadcastAudio';
-import { loadImageFile } from '../../lib/odyssey';
+import { loadImageFile, type BroadcastInfo } from '../../lib/helios';
 import { characters as ALL_CHARACTERS, type DemoCharacter } from '../../demo/shared/characters';
 
 const DEFAULT_CHARACTER_ID  = 'einstein';

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePostHog } from 'posthog-js/react';
 import { useOdysseyStream } from '../../hooks/useOdysseyStream';
-import { loadImageFile } from '../../lib/odyssey';
+import { loadImageFile } from '../../lib/helios';
 import { applySeo, SEO_PAGES } from '../../lib/seo';
 import { trackEvent } from '../../lib/analytics';
 import '../../demo/shared/tokens.css';

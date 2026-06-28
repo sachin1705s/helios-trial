@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { OdysseyService, credentialsFromDict, type StreamState } from '../../lib/odyssey';
+import { HeliosService, credentialsFromDict, type StreamState } from '../../lib/helios';
 import { AtriumNav } from '../../demo/atrium/Layout';
 import DrawCanvasModal from './DrawCanvasModal';
 import '../../demo/shared/tokens.css';
@@ -99,7 +99,7 @@ export default function DrawingExperiment() {
   const [skipStylize, setSkipStylize] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const serviceRef = useRef<OdysseyService | null>(null);
+  const serviceRef = useRef<HeliosService | null>(null);
   const leaseIdRef = useRef<string | null>(null);
   const heartbeatRef = useRef<number | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
@@ -117,9 +117,9 @@ export default function DrawingExperiment() {
     stopHeartbeat();
     const payload = JSON.stringify({ leaseId });
     if (navigator.sendBeacon) {
-      navigator.sendBeacon('/api/odyssey/release', new Blob([payload], { type: 'application/json' }));
+      navigator.sendBeacon('/api/reactor/release', new Blob([payload], { type: 'application/json' }));
     } else {
-      fetch('/api/odyssey/release', {
+      fetch('/api/reactor/release', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: payload,
@@ -227,7 +227,7 @@ export default function DrawingExperiment() {
       }
 
       setProcessingStep('Preparing animation…');
-      const credRes = await fetch('/api/odyssey/token');
+      const credRes = await fetch('/api/reactor/token');
       if (!credRes.ok) {
         const errData = await credRes.json().catch(() => ({ error: 'Service unavailable' }));
         throw new Error(errData.error || 'Failed to get session');
@@ -237,7 +237,7 @@ export default function DrawingExperiment() {
       leaseIdRef.current = credData.leaseId ?? null;
       if (credData.leaseId) {
         heartbeatRef.current = window.setInterval(() => {
-          fetch('/api/odyssey/heartbeat', {
+          fetch('/api/reactor/heartbeat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ leaseId: credData.leaseId }),
@@ -248,7 +248,7 @@ export default function DrawingExperiment() {
       const credentials = credentialsFromDict(credData.credentials);
 
       setProcessingStep('Bringing it to life…');
-      const service = new OdysseyService(credentials);
+      const service = new HeliosService(credentials);
       serviceRef.current = service;
 
       await new Promise<void>((resolve, reject) => {

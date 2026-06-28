@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useOdysseyStream } from '../../hooks/useOdysseyStream';
-import { loadImageFile } from '../../lib/odyssey';
+import { loadImageFile } from '../../lib/helios';
 import '../../demo/shared/tokens.css';
 import '../../demo/atrium/Atrium.css';
 
