@@ -10,6 +10,7 @@ import { HeliosService, credentialsFromDict, loadImageFile, type ClientCredentia
 import { SEO_PAGES, applySeo } from './lib/seo';
 import { supabase } from './lib/supabase';
 import { AuthModal } from './components/AuthModal';
+import { ApiKeysMenu } from './components/ApiKeysMenu';
 import './App.css';
 
 // Debug logger — silent by default in production.
@@ -2377,6 +2378,7 @@ useEffect(() => {
             </div>
             <div className="landing-actions">
               {streamMeterControls}
+              <ApiKeysMenu />
               <a
                 className="btn ghost"
                 href="/about-us"

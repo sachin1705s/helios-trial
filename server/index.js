@@ -607,6 +607,58 @@ const reactorResetHandler = async (_req, res) => {
 app.post('/api/reactor/reset', reactorResetHandler);
 app.post('/api/odyssey/reset', reactorResetHandler);
 
+// ─── Reactor key management (admin-only) ──────────────────────────────────────
+// Protected by ADMIN_SECRET env var when set. In local dev (no secret), open.
+
+const adminAuth = (req, res, next) => {
+  const adminSecret = process.env.ADMIN_SECRET;
+  if (!adminSecret) return next(); // no secret set — dev mode, allow all
+  const authHeader = req.headers['authorization'] || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  if (token !== adminSecret) return res.status(401).json({ error: 'Unauthorized.' });
+  return next();
+};
+
+const maskKey = (k) =>
+  k.length > 8 ? `${k.slice(0, 4)}...${k.slice(-4)}` : '****';
+
+app.get('/api/reactor/keys', adminAuth, (_req, res) => {
+  res.json({
+    keys: runtimeConfig.odysseyApiKeys.map((k, index) => ({ index, masked: maskKey(k) })),
+    limit: ODYSSEY_KEY_LIMIT,
+  });
+});
+
+app.post('/api/reactor/keys', adminAuth, (req, res) => {
+  const key = String(req.body?.key ?? '').trim();
+  if (!key) return res.status(400).json({ error: 'Missing key.' });
+  runtimeConfig.odysseyApiKeys.push(key);
+  memPool.inUse.push(0);
+  res.json({ ok: true, index: runtimeConfig.odysseyApiKeys.length - 1, masked: maskKey(key) });
+});
+
+app.put('/api/reactor/keys/:index', adminAuth, (req, res) => {
+  const idx = Number(req.params.index);
+  const key = String(req.body?.key ?? '').trim();
+  if (!key) return res.status(400).json({ error: 'Missing key.' });
+  if (idx < 0 || idx >= runtimeConfig.odysseyApiKeys.length) {
+    return res.status(404).json({ error: 'Key index out of range.' });
+  }
+  runtimeConfig.odysseyApiKeys[idx] = key;
+  res.json({ ok: true, masked: maskKey(key) });
+});
+
+app.delete('/api/reactor/keys/:index', adminAuth, async (req, res) => {
+  const idx = Number(req.params.index);
+  if (idx < 0 || idx >= runtimeConfig.odysseyApiKeys.length) {
+    return res.status(404).json({ error: 'Key index out of range.' });
+  }
+  runtimeConfig.odysseyApiKeys.splice(idx, 1);
+  memPool.inUse.splice(idx, 1);
+  await resetOdysseyPool(runtimeConfig.odysseyApiKeys);
+  res.json({ ok: true });
+});
+
 // ─── Animate Drawings — Experiment 1 ─────────────────────────────────────────
 
 const ANIMATE_STYLE_MAP = { realism: 'realism', comic: 'comic', manga: 'manga', 'ghibli-inspired': 'ghibli-inspired' };
